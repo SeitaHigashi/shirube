@@ -1,6 +1,7 @@
 mod alert;
 mod api;
 mod backtest;
+mod config;
 mod error;
 mod exchange;
 mod market;
@@ -16,10 +17,10 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
+use crate::config::TradingConfig;
 use crate::exchange::ExchangeClient;
 use crate::market::bus::MarketDataBus;
 use crate::risk::manager::RiskManager;
-use crate::risk::RiskParams;
 use crate::signal::engine::SignalEngine;
 use crate::signal::indicators::{
     bollinger::Bollinger, ema::Ema, macd::Macd, rsi::Rsi, sma::Sma,
@@ -48,6 +49,23 @@ async fn main() -> anyhow::Result<()> {
     let db = Database::open(&db_path).await?;
     info!("Database opened: {}", db_path);
 
+    // 取引設定を DB から読み込む（なければデフォルト値）
+    let trading_config_value = match db.config().load().await {
+        Ok(Some(cfg)) => {
+            info!("Loaded trading config from DB");
+            cfg
+        }
+        Ok(None) => {
+            info!("No trading config in DB, using defaults");
+            TradingConfig::default()
+        }
+        Err(e) => {
+            warn!("Failed to load trading config from DB: {}, using defaults", e);
+            TradingConfig::default()
+        }
+    };
+    let trading_config = Arc::new(RwLock::new(trading_config_value));
+
     let has_api_keys =
         std::env::var("BITFLYER_API_KEY").is_ok() && std::env::var("BITFLYER_API_SECRET").is_ok();
 
@@ -61,12 +79,12 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or_else(|_| "mock_exchange.db".to_string());
         let mock_db = storage::db::Database::open(&mock_db_path).await?;
         info!(
-            "No API keys found — using PublicBitFlyerClient + MockExchangeClient (DB: {})",
+            "No API keys found — using PublicBitFlyerClient (real ticker) + MockExchangeClient (DB: {})",
             mock_db_path
         );
-        let mock_client =
-            exchange::mock::MockExchangeClient::new_with_db(mock_db.mock_state(), 0.00015).await?;
-        Arc::new(mock_client)
+        let public_client =
+            exchange::PublicBitFlyerClient::new_with_db(mock_db.mock_state(), 0.00015).await?;
+        Arc::new(public_client)
     };
 
     // WS broadcast channel
@@ -98,28 +116,30 @@ async fn main() -> anyhow::Result<()> {
     )
     .await;
 
-    // インジケータ構築
+    // インジケータ構築（起動時の config から）
+    let init_cfg = trading_config.read().await.clone();
     let indicators: Vec<Box<dyn Indicator>> = vec![
-        Box::new(Sma::new(20)),
-        Box::new(Ema::new(20)),
-        Box::new(Rsi::new(14)),
-        Box::new(Macd::default()),
-        Box::new(Bollinger::default()),
+        Box::new(Sma::new(init_cfg.sma_period)),
+        Box::new(Ema::new(init_cfg.ema_period)),
+        Box::new(Rsi::new(init_cfg.rsi_period)),
+        Box::new(Macd::new(init_cfg.macd_fast, init_cfg.macd_slow, init_cfg.macd_signal)),
+        Box::new(Bollinger::new(init_cfg.bollinger_period, init_cfg.bollinger_std)),
     ];
+    let init_risk_params = init_cfg.to_risk_params();
 
     // SignalEngine: Candle → Signal
     let (signal_engine, signal_rx) = SignalEngine::new(indicators, market_bus.candle_rx());
     tokio::spawn(signal_engine.run());
 
     // TradingEngine: Signal → RiskManager → send_order
-    let risk_params = RiskParams::default();
     let trading_engine = TradingEngine::new(
         signal_rx,
         Arc::clone(&client),
-        RiskManager::new(risk_params),
+        RiskManager::new(init_risk_params),
         "BTC_JPY".to_string(),
     )
-    .with_alert(Arc::clone(&alert));
+    .with_alert(Arc::clone(&alert))
+    .with_config(Arc::clone(&trading_config));
     tokio::spawn(trading_engine.run());
 
     // News AI タスク起動（5分ごとにRSSフィードを取得、新規記事のみOllamaでセンチメント分析）
@@ -207,6 +227,7 @@ async fn main() -> anyhow::Result<()> {
         candle_tx: market_bus.candle_tx(),
         signal_tx: signal_tx.clone(),
         news_cache,
+        trading_config: Arc::clone(&trading_config),
     };
     tokio::spawn(api::server::run(api_state, addr));
 

@@ -121,6 +121,30 @@ pub async fn migrate(conn: &Connection) -> Result<()> {
             )?;
         }
 
+        if current_version < 5 {
+            c.execute_batch(
+                "CREATE TABLE IF NOT EXISTS mock_balances (
+                    currency_code   TEXT    PRIMARY KEY,
+                    amount          TEXT    NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS mock_state (
+                    key             TEXT    PRIMARY KEY,
+                    value           TEXT    NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS mock_filled_trades (
+                    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                    side    TEXT    NOT NULL CHECK(side IN ('BUY','SELL')),
+                    price   TEXT    NOT NULL,
+                    size    TEXT    NOT NULL,
+                    fee     TEXT    NOT NULL
+                );
+
+                INSERT INTO schema_version(version) VALUES(5);",
+            )?;
+        }
+
         Ok(())
     })
     .await?;

@@ -1,6 +1,7 @@
 pub mod backtest_runs;
 pub mod candles;
 pub mod db;
+pub mod mock_state;
 pub mod news_sentiments;
 pub mod orders;
 pub mod schema;

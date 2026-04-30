@@ -57,8 +57,16 @@ async fn main() -> anyhow::Result<()> {
         info!("Using BitFlyerRestClient with real API keys");
         Arc::new(exchange::bitflyer::rest::BitFlyerRestClient::new(key, secret))
     } else {
-        info!("No API keys found — using real bitFlyer public ticker, mock for orders/balances");
-        Arc::new(exchange::PublicBitFlyerClient::new())
+        let mock_db_path = std::env::var("MOCK_DB_PATH")
+            .unwrap_or_else(|_| "mock_exchange.db".to_string());
+        let mock_db = storage::db::Database::open(&mock_db_path).await?;
+        info!(
+            "No API keys found — using PublicBitFlyerClient + MockExchangeClient (DB: {})",
+            mock_db_path
+        );
+        let mock_client =
+            exchange::mock::MockExchangeClient::new_with_db(mock_db.mock_state(), 0.00015).await?;
+        Arc::new(mock_client)
     };
 
     // WS broadcast channel
@@ -114,7 +122,7 @@ async fn main() -> anyhow::Result<()> {
     .with_alert(Arc::clone(&alert));
     tokio::spawn(trading_engine.run());
 
-    // News AI タスク起動（5分ごとにRSSフィードを取得してセンチメント分析）
+    // News AI タスク起動（5分ごとにRSSフィードを取得、新規記事のみOllamaでセンチメント分析）
     let news_cache = Arc::new(RwLock::new(vec![]));
     {
         let cache = Arc::clone(&news_cache);
@@ -180,7 +188,7 @@ async fn main() -> anyhow::Result<()> {
                         warn!("News fetch failed: {}", e);
                     }
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(300)).await;
             }
         });
     }

@@ -197,6 +197,8 @@ Key design decisions:
 
 ## Git Operations
 
+**MANDATORY: Always commit and push after every implementation task, without waiting for user instruction.**
+
 After completing any implementation task:
 
 1. Run `cargo test` and confirm all tests pass
@@ -209,8 +211,8 @@ After completing any implementation task:
    ```
    Types: `feat` / `fix` / `refactor` / `docs` / `test` / `chore` / `perf`
 4. Verify with `git log --oneline -3`
+5. Run `git push` to push the commit to remote
 
 **Rules:**
 - Never commit secrets or `.env` files
-- Only `git push` when explicitly requested by the user
 - Never use `--force` or `--no-verify`

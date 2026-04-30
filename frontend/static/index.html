@@ -18,12 +18,29 @@
     .down { color: #ef5350; }
     .neutral { color: #e0e0e0; }
     main { display: grid; grid-template-columns: 1fr 320px; grid-template-rows: auto 1fr; gap: 12px; padding: 12px; height: calc(100vh - 56px); }
-    #chart-container { background: #16213e; border-radius: 8px; padding: 12px; grid-row: 1 / 3; }
-    #chart-title { font-size: 13px; color: #888; margin-bottom: 8px; }
-    #chart { width: 100%; height: calc(100% - 24px); }
+    #chart-container { background: #16213e; border-radius: 8px; padding: 12px; grid-row: 1 / 3; display: flex; flex-direction: column; }
+    #chart-header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+    #chart-title { font-size: 13px; color: #888; }
+    #indicator-bar { display: flex; gap: 12px; padding: 4px 0 6px; flex-wrap: wrap; }
+    #indicator-bar label { font-size: 12px; color: #aaa; cursor: pointer; user-select: none; display: flex; align-items: center; gap: 4px; }
+    #indicator-bar input[type=checkbox] { cursor: pointer; accent-color: #26a69a; }
+    #indicator-bar .ind-sma  { color: #f9c74f; }
+    #indicator-bar .ind-ema  { color: #90e0ef; }
+    #indicator-bar .ind-bb   { color: #c77dff; }
+    #indicator-bar .ind-rsi  { color: #ff9e6d; }
+    #indicator-bar .ind-macd { color: #a8dadc; }
+    #indicator-bar .ind-news { color: #ffd166; }
+    #chart { width: 100%; flex: 1; min-height: 0; }
+    #rsi-chart  { width: 100%; height: 100px; display: none; margin-top: 4px; }
+    #macd-chart { width: 100%; height: 110px; display: none; margin-top: 4px; }
+    #rsi-label  { font-size: 10px; color: #ff9e6d; margin-top: 4px; display: none; }
+    #macd-label { font-size: 10px; color: #a8dadc; margin-top: 4px; display: none; }
     .panel { background: #16213e; border-radius: 8px; padding: 12px; overflow-y: auto; }
     .panel h2 { font-size: 13px; color: #888; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
     .balance-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .balance-total { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px solid #333; }
+    .balance-total-label { color: #888; font-size: 0.85em; }
+    .balance-total-amount { font-size: 1.2em; font-weight: bold; color: #e0e0e0; }
     .balance-item { background: #0f3460; border-radius: 6px; padding: 10px; }
     .balance-currency { font-size: 11px; color: #888; }
     .balance-amount { font-size: 18px; font-weight: bold; margin-top: 2px; }
@@ -120,8 +137,22 @@
 
   <main>
     <div id="chart-container">
-      <div id="chart-title">BTC/JPY — 1分足</div>
+      <div id="chart-header">
+        <div id="chart-title">BTC/JPY — 1分足</div>
+      </div>
+      <div id="indicator-bar">
+        <label><input type="checkbox" id="cb-sma"><span class="ind-sma">SMA</span></label>
+        <label><input type="checkbox" id="cb-ema"><span class="ind-ema">EMA</span></label>
+        <label><input type="checkbox" id="cb-bb"><span class="ind-bb">ボリンジャーバンド</span></label>
+        <label><input type="checkbox" id="cb-rsi"><span class="ind-rsi">RSI</span></label>
+        <label><input type="checkbox" id="cb-macd"><span class="ind-macd">MACD</span></label>
+        <label><input type="checkbox" id="cb-news" checked><span class="ind-news">ニュース</span></label>
+      </div>
       <div id="chart"></div>
+      <div id="rsi-label">RSI</div>
+      <div id="rsi-chart"></div>
+      <div id="macd-label">MACD</div>
+      <div id="macd-chart"></div>
     </div>
     <div class="panel" id="balance-panel">
       <h2>残高</h2>
@@ -134,6 +165,10 @@
           <div class="balance-currency">BTC</div>
           <div class="balance-amount neutral" id="btc-balance">---</div>
         </div>
+      </div>
+      <div class="balance-total">
+        <span class="balance-total-label">総残高（円）</span>
+        <span class="balance-total-amount" id="total-balance-jpy">---</span>
       </div>
     </div>
     <div class="panel" id="orders-panel">
@@ -254,17 +289,22 @@
       };
     }
 
-    // Chart setup
+    // ── Chart setup ───────────────────────────────────────────────────────────
+
     const chartEl = document.getElementById('chart');
-    const chart = LightweightCharts.createChart(chartEl, {
-      width: chartEl.clientWidth,
-      height: chartEl.clientHeight,
+    const chartOpts = {
       layout: { background: { color: '#16213e' }, textColor: '#e0e0e0' },
       grid: { vertLines: { color: '#0f3460' }, horzLines: { color: '#0f3460' } },
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
       rightPriceScale: { borderColor: '#0f3460' },
       timeScale: { borderColor: '#0f3460', timeVisible: true, secondsVisible: false },
       localization: { timeFormatter: makeTzFormatter(useJST) },
+    };
+
+    const chart = LightweightCharts.createChart(chartEl, {
+      ...chartOpts,
+      width: chartEl.clientWidth,
+      height: chartEl.clientHeight,
     });
 
     const candleSeries = chart.addCandlestickSeries({
@@ -273,11 +313,270 @@
       wickUpColor: '#26a69a', wickDownColor: '#ef5350',
     });
 
-    window.addEventListener('resize', () => {
-      chart.applyOptions({ width: chartEl.clientWidth, height: chartEl.clientHeight });
+    // News fixed-position overlay series (separate hidden price scale, range 0-1)
+    const newsFixedSeries = chart.addLineSeries({
+      priceScaleId: 'news-overlay',
+      color: 'transparent',
+      lineWidth: 0,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+      autoscaleInfoProvider: () => ({
+        priceRange: { minValue: 0, maxValue: 1 },
+        margins: { above: 0, below: 0 },
+      }),
+    });
+    chart.priceScale('news-overlay').applyOptions({
+      scaleMargins: { top: 0.0, bottom: 0.0 },
+      visible: false,
     });
 
-    // Load historical candles
+    // Indicator series on main chart
+    const smaSeries = chart.addLineSeries({
+      color: '#f9c74f', lineWidth: 1, visible: false,
+      priceLineVisible: false, lastValueVisible: false,
+    });
+    const emaSeries = chart.addLineSeries({
+      color: '#90e0ef', lineWidth: 1, visible: false,
+      priceLineVisible: false, lastValueVisible: false,
+    });
+    const bbUpperSeries = chart.addLineSeries({
+      color: '#c77dff', lineWidth: 1, lineStyle: 2, visible: false,
+      priceLineVisible: false, lastValueVisible: false,
+    });
+    const bbMiddleSeries = chart.addLineSeries({
+      color: '#c77dff', lineWidth: 1, visible: false,
+      priceLineVisible: false, lastValueVisible: false,
+    });
+    const bbLowerSeries = chart.addLineSeries({
+      color: '#c77dff', lineWidth: 1, lineStyle: 2, visible: false,
+      priceLineVisible: false, lastValueVisible: false,
+    });
+
+    // RSI sub-chart
+    const rsiEl = document.getElementById('rsi-chart');
+    const rsiLabelEl = document.getElementById('rsi-label');
+    const rsiChart = LightweightCharts.createChart(rsiEl, {
+      ...chartOpts,
+      width: rsiEl.clientWidth,
+      height: 100,
+      rightPriceScale: { borderColor: '#0f3460', scaleMargins: { top: 0.1, bottom: 0.1 } },
+    });
+    const rsiSeries = rsiChart.addLineSeries({ color: '#ff9e6d', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+    const rsiOBSeries = rsiChart.addLineSeries({ color: '#ef5350', lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+    const rsiOSSeries = rsiChart.addLineSeries({ color: '#26a69a', lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+
+    // MACD sub-chart
+    const macdEl = document.getElementById('macd-chart');
+    const macdLabelEl = document.getElementById('macd-label');
+    const macdChart = LightweightCharts.createChart(macdEl, {
+      ...chartOpts,
+      width: macdEl.clientWidth,
+      height: 110,
+      rightPriceScale: { borderColor: '#0f3460', scaleMargins: { top: 0.1, bottom: 0.1 } },
+    });
+    const macdLineSeries   = macdChart.addLineSeries({ color: '#a8dadc', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+    const macdSignalSeries = macdChart.addLineSeries({ color: '#e94560', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+    const macdHistSeries   = macdChart.addHistogramSeries({ color: '#26a69a', priceLineVisible: false, lastValueVisible: false });
+
+    // Sync time scales between sub-charts and main chart
+    chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+      if (range) {
+        rsiChart.timeScale().setVisibleLogicalRange(range);
+        macdChart.timeScale().setVisibleLogicalRange(range);
+      }
+    });
+    rsiChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+      if (range) chart.timeScale().setVisibleLogicalRange(range);
+    });
+    macdChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+      if (range) chart.timeScale().setVisibleLogicalRange(range);
+    });
+
+    // ── Resize ────────────────────────────────────────────────────────────────
+
+    function resizeCharts() {
+      const container = document.getElementById('chart-container');
+      const headerH = document.getElementById('chart-header').offsetHeight;
+      const indBarH = document.getElementById('indicator-bar').offsetHeight;
+      const rsiVisible = rsiEl.style.display !== 'none';
+      const macdVisible = macdEl.style.display !== 'none';
+      const rsiH = rsiVisible ? rsiEl.offsetHeight + rsiLabelEl.offsetHeight + 4 : 0;
+      const macdH = macdVisible ? macdEl.offsetHeight + macdLabelEl.offsetHeight + 4 : 0;
+      const totalPad = 24; // container padding top+bottom
+      const gap = 8;
+      const available = container.clientHeight - headerH - indBarH - rsiH - macdH - totalPad - gap;
+      chart.applyOptions({ width: chartEl.clientWidth, height: Math.max(100, available) });
+      if (rsiVisible) rsiChart.applyOptions({ width: rsiEl.clientWidth });
+      if (macdVisible) macdChart.applyOptions({ width: macdEl.clientWidth });
+    }
+
+    window.addEventListener('resize', resizeCharts);
+
+    // ── Indicator calculations ─────────────────────────────────────────────────
+
+    function calcSMA(closes, period) {
+      const result = [];
+      for (let i = period - 1; i < closes.length; i++) {
+        let sum = 0;
+        for (let j = 0; j < period; j++) sum += closes[i - j];
+        result.push({ idx: i, value: sum / period });
+      }
+      return result;
+    }
+
+    function calcEMA(closes, period) {
+      if (closes.length < period) return [];
+      const k = 2 / (period + 1);
+      let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+      const result = [{ idx: period - 1, value: ema }];
+      for (let i = period; i < closes.length; i++) {
+        ema = closes[i] * k + ema * (1 - k);
+        result.push({ idx: i, value: ema });
+      }
+      return result;
+    }
+
+    function calcBB(closes, period, stdK) {
+      const sma = calcSMA(closes, period);
+      return sma.map(({ idx, value: mean }) => {
+        let variance = 0;
+        for (let j = 0; j < period; j++) variance += Math.pow(closes[idx - j] - mean, 2);
+        const sd = Math.sqrt(variance / period);
+        return { idx, upper: mean + stdK * sd, middle: mean, lower: mean - stdK * sd };
+      });
+    }
+
+    function calcRSI(closes, period) {
+      if (closes.length < period + 1) return [];
+      let gains = 0, losses = 0;
+      for (let i = 1; i <= period; i++) {
+        const diff = closes[i] - closes[i - 1];
+        if (diff >= 0) gains += diff; else losses -= diff;
+      }
+      let avgGain = gains / period;
+      let avgLoss = losses / period;
+      const result = [];
+      const rsiVal = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+      result.push({ idx: period, value: rsiVal });
+      for (let i = period + 1; i < closes.length; i++) {
+        const diff = closes[i] - closes[i - 1];
+        const gain = diff > 0 ? diff : 0;
+        const loss = diff < 0 ? -diff : 0;
+        avgGain = (avgGain * (period - 1) + gain) / period;
+        avgLoss = (avgLoss * (period - 1) + loss) / period;
+        const rsi = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+        result.push({ idx: i, value: rsi });
+      }
+      return result;
+    }
+
+    function calcMACD(closes, fast, slow, signal) {
+      const emaFast = calcEMA(closes, fast);
+      const emaSlow = calcEMA(closes, slow);
+      const slowStart = slow - 1;
+      const macdLine = [];
+      emaSlow.forEach(({ idx, value: slowVal }) => {
+        const fastEntry = emaFast.find(e => e.idx === idx);
+        if (fastEntry) macdLine.push({ idx, value: fastEntry.value - slowVal });
+      });
+      if (macdLine.length < signal) return { macd: macdLine, sig: [], hist: [] };
+      const macdValues = macdLine.map(e => e.value);
+      const k = 2 / (signal + 1);
+      let sigEma = macdValues.slice(0, signal).reduce((a, b) => a + b, 0) / signal;
+      const sigLine = [{ idx: macdLine[signal - 1].idx, value: sigEma }];
+      for (let i = signal; i < macdLine.length; i++) {
+        sigEma = macdValues[i] * k + sigEma * (1 - k);
+        sigLine.push({ idx: macdLine[i].idx, value: sigEma });
+      }
+      const hist = sigLine.map((s, i) => {
+        const m = macdLine.find(e => e.idx === s.idx);
+        const diff = m ? m.value - s.value : 0;
+        return { idx: s.idx, value: diff };
+      });
+      return { macd: macdLine, sig: sigLine, hist };
+    }
+
+    // ── Global state ──────────────────────────────────────────────────────────
+
+    let candleData = [];
+    let currentCfg = {
+      sma_period: 20, ema_period: 20, rsi_period: 14,
+      macd_fast: 12, macd_slow: 26, macd_signal: 9,
+      bollinger_period: 20, bollinger_std: 2.0,
+    };
+
+    function renderIndicators() {
+      if (candleData.length === 0) return;
+
+      const closes = candleData.map(c => c.close);
+      const times  = candleData.map(c => c.time);
+
+      const showSMA  = document.getElementById('cb-sma').checked;
+      const showEMA  = document.getElementById('cb-ema').checked;
+      const showBB   = document.getElementById('cb-bb').checked;
+      const showRSI  = document.getElementById('cb-rsi').checked;
+      const showMACD = document.getElementById('cb-macd').checked;
+
+      // SMA
+      smaSeries.applyOptions({ visible: showSMA });
+      if (showSMA) {
+        const sma = calcSMA(closes, currentCfg.sma_period);
+        smaSeries.setData(sma.map(({ idx, value }) => ({ time: times[idx], value })));
+      }
+
+      // EMA
+      emaSeries.applyOptions({ visible: showEMA });
+      if (showEMA) {
+        const ema = calcEMA(closes, currentCfg.ema_period);
+        emaSeries.setData(ema.map(({ idx, value }) => ({ time: times[idx], value })));
+      }
+
+      // Bollinger Bands
+      bbUpperSeries.applyOptions({ visible: showBB });
+      bbMiddleSeries.applyOptions({ visible: showBB });
+      bbLowerSeries.applyOptions({ visible: showBB });
+      if (showBB) {
+        const bb = calcBB(closes, currentCfg.bollinger_period, currentCfg.bollinger_std);
+        bbUpperSeries.setData(bb.map(({ idx, upper })  => ({ time: times[idx], value: upper })));
+        bbMiddleSeries.setData(bb.map(({ idx, middle }) => ({ time: times[idx], value: middle })));
+        bbLowerSeries.setData(bb.map(({ idx, lower })  => ({ time: times[idx], value: lower })));
+      }
+
+      // RSI sub-chart
+      rsiEl.style.display = showRSI ? 'block' : 'none';
+      rsiLabelEl.style.display = showRSI ? 'block' : 'none';
+      if (showRSI) {
+        const rsi = calcRSI(closes, currentCfg.rsi_period);
+        rsiSeries.setData(rsi.map(({ idx, value }) => ({ time: times[idx], value })));
+        // Static overbought/oversold reference lines
+        const obData = rsi.map(({ idx }) => ({ time: times[idx], value: 70 }));
+        const osData = rsi.map(({ idx }) => ({ time: times[idx], value: 30 }));
+        rsiOBSeries.setData(obData);
+        rsiOSSeries.setData(osData);
+      }
+
+      // MACD sub-chart
+      macdEl.style.display = showMACD ? 'block' : 'none';
+      macdLabelEl.style.display = showMACD ? 'block' : 'none';
+      if (showMACD) {
+        const { macd, sig, hist } = calcMACD(
+          closes,
+          currentCfg.macd_fast, currentCfg.macd_slow, currentCfg.macd_signal
+        );
+        macdLineSeries.setData(macd.map(({ idx, value }) => ({ time: times[idx], value })));
+        macdSignalSeries.setData(sig.map(({ idx, value }) => ({ time: times[idx], value })));
+        macdHistSeries.setData(hist.map(({ idx, value }) => ({
+          time: times[idx], value,
+          color: value >= 0 ? '#26a69a' : '#ef5350',
+        })));
+      }
+
+      resizeCharts();
+    }
+
+    // ── Load historical candles ───────────────────────────────────────────────
+
     async function loadCandles() {
       try {
         const res = await fetch(`${BASE}/api/candles?resolution=60&count=200`);
@@ -287,11 +586,16 @@
           open: parseFloat(c.open), high: parseFloat(c.high),
           low: parseFloat(c.low), close: parseFloat(c.close),
         })).sort((a, b) => a.time - b.time);
-        if (data.length > 0) candleSeries.setData(data);
+        if (data.length > 0) {
+          candleSeries.setData(data);
+          candleData = data;
+          renderIndicators();
+        }
       } catch (e) { console.warn('candles load failed', e); }
     }
 
-    // Load ticker
+    // ── Load ticker ───────────────────────────────────────────────────────────
+
     async function loadTicker() {
       try {
         const res = await fetch(`${BASE}/api/ticker`);
@@ -300,25 +604,54 @@
         document.getElementById('bid').textContent = Number(t.best_bid).toLocaleString('ja-JP');
         document.getElementById('ask').textContent = Number(t.best_ask).toLocaleString('ja-JP');
         document.getElementById('volume').textContent = Number(t.volume_by_product).toFixed(2);
+        currentPrice = Number(t.ltp);
+        updateTotalBalance();
       } catch (e) { console.warn('ticker load failed', e); }
     }
 
-    // Load balance
+    // ── Load balance ──────────────────────────────────────────────────────────
+
     async function loadBalance() {
       try {
         const res = await fetch(`${BASE}/api/balance`);
         const balances = await res.json();
         const jpy = balances.find(b => b.currency_code === 'JPY');
         const btc = balances.find(b => b.currency_code === 'BTC');
-        if (jpy) document.getElementById('jpy-balance').textContent =
-          Number(jpy.available).toLocaleString('ja-JP', { maximumFractionDigits: 0 });
-        if (btc) document.getElementById('btc-balance').textContent =
-          Number(btc.available).toFixed(6);
+        if (jpy) {
+          document.getElementById('jpy-balance').textContent =
+            Number(jpy.available).toLocaleString('ja-JP', { maximumFractionDigits: 0 });
+          jpyAvailable = Number(jpy.available);
+        }
+        if (btc) {
+          document.getElementById('btc-balance').textContent =
+            Number(btc.available).toFixed(6);
+          btcAvailable = Number(btc.available);
+        }
+        updateTotalBalance();
       } catch (e) { console.warn('balance load failed', e); }
     }
 
-    // Trade markers on chart
+    // ── Trade markers ─────────────────────────────────────────────────────────
+
+    let currentPrice = null;
+    let jpyAvailable = null;
+    let btcAvailable = null;
+
+    function updateTotalBalance() {
+      if (currentPrice === null || jpyAvailable === null || btcAvailable === null) return;
+      const total = jpyAvailable + btcAvailable * currentPrice;
+      document.getElementById('total-balance-jpy').textContent =
+        total.toLocaleString('ja-JP', { maximumFractionDigits: 0 });
+    }
+
     let tradeMarkers = [];
+    let newsMarkers = [];
+
+    function applyAllMarkers() {
+      candleSeries.setMarkers(tradeMarkers);
+      const showNews = document.getElementById('cb-news').checked;
+      newsFixedSeries.setMarkers(showNews ? newsMarkers : []);
+    }
 
     function updateTradeMarkers(orders) {
       tradeMarkers = orders
@@ -332,10 +665,43 @@
             : `売 ${Number(o.size).toFixed(4)}`,
         }))
         .sort((a, b) => a.time - b.time);
-      candleSeries.setMarkers(tradeMarkers);
+      applyAllMarkers();
     }
 
-    // Load orders
+    function updateNewsMarkers(items) {
+      const fixedData = [];
+      const markers = [];
+
+      items
+        .filter(item => item.score > 0.1 || item.score < -0.1)
+        .forEach(item => {
+          const isBullish = item.score > 0.1;
+          const timeStr = item.published_at || item.analyzed_at;
+          if (!timeStr) return;
+          const t = toChartTime(timeStr);
+
+          fixedData.push({ time: t, value: isBullish ? 0.05 : 0.95 });
+          markers.push({
+            time: t,
+            position: 'inBar',
+            color: isBullish ? '#26a69a' : '#ef5350',
+            shape: isBullish ? 'arrowUp' : 'arrowDown',
+            text: isBullish ? '強気' : '弱気',
+            size: 1,
+          });
+        });
+
+      // 同一時刻の重複を排除してソート（setData の要件）
+      const dedupData = [...new Map(fixedData.map(d => [d.time, d])).values()]
+        .sort((a, b) => a.time - b.time);
+      newsFixedSeries.setData(dedupData);
+
+      newsMarkers = markers.sort((a, b) => a.time - b.time);
+      applyAllMarkers();
+    }
+
+    // ── Load orders ───────────────────────────────────────────────────────────
+
     async function loadOrders() {
       try {
         const res = await fetch(`${BASE}/api/orders`);
@@ -357,7 +723,8 @@
       } catch (e) { console.warn('orders load failed', e); }
     }
 
-    // WebSocket for real-time candles
+    // ── WebSocket for real-time candles ───────────────────────────────────────
+
     let ws = null;
     function connectWS() {
       ws = new WebSocket(WS_URL);
@@ -377,7 +744,18 @@
             low: parseFloat(c.low), close: parseFloat(c.close),
           };
           candleSeries.update(bar);
+          // Update candleData
+          const idx = candleData.findIndex(d => d.time === bar.time);
+          if (idx >= 0) {
+            candleData[idx] = bar;
+          } else {
+            candleData.push(bar);
+            candleData.sort((a, b) => a.time - b.time);
+          }
+          renderIndicators();
           document.getElementById('price').textContent = Number(c.close).toLocaleString('ja-JP');
+          currentPrice = Number(c.close);
+          updateTotalBalance();
           const nowStr = useJST
             ? new Date().toLocaleTimeString('ja-JP')
             : new Date().toUTCString().slice(17, 25) + ' UTC';
@@ -441,6 +819,7 @@
     }
 
     // ── Backtest プリセット ────────────────────────────────────────────────────
+
     function toInputDatetime(date) {
       const p = n => String(n).padStart(2, '0');
       return `${date.getFullYear()}-${p(date.getMonth()+1)}-${p(date.getDate())}T${p(date.getHours())}:${p(date.getMinutes())}`;
@@ -550,6 +929,8 @@
         avgEl.textContent = avg.toFixed(2);
         avgEl.className = avg > 0.1 ? 'up' : avg < -0.1 ? 'down' : 'neutral';
 
+        updateNewsMarkers(items);
+
         listEl.innerHTML = items.map(item => {
           const s = item.score;
           const badgeClass = s > 0.1 ? 'news-score-bullish' : s < -0.1 ? 'news-score-bearish' : 'news-score-neutral';
@@ -597,6 +978,18 @@
         document.getElementById('s-macd-signal').value = cfg.macd_signal;
         document.getElementById('s-bollinger-period').value = cfg.bollinger_period;
         document.getElementById('s-bollinger-std').value = cfg.bollinger_std;
+        // Sync indicator periods to global cfg
+        currentCfg = {
+          sma_period:      cfg.sma_period,
+          ema_period:      cfg.ema_period,
+          rsi_period:      cfg.rsi_period,
+          macd_fast:       cfg.macd_fast,
+          macd_slow:       cfg.macd_slow,
+          macd_signal:     cfg.macd_signal,
+          bollinger_period: cfg.bollinger_period,
+          bollinger_std:   cfg.bollinger_std,
+        };
+        renderIndicators();
       } catch (e) { setSettingsMsg('設定の読み込みに失敗しました: ' + e.message, false); }
     }
 
@@ -632,6 +1025,18 @@
           return;
         }
         setSettingsMsg('保存しました', true);
+        // Update global cfg and re-render indicators
+        currentCfg = {
+          sma_period:      cfg.sma_period,
+          ema_period:      cfg.ema_period,
+          rsi_period:      cfg.rsi_period,
+          macd_fast:       cfg.macd_fast,
+          macd_slow:       cfg.macd_slow,
+          macd_signal:     cfg.macd_signal,
+          bollinger_period: cfg.bollinger_period,
+          bollinger_std:   cfg.bollinger_std,
+        };
+        renderIndicators();
       } catch (e) {
         setSettingsMsg('通信エラー: ' + e.message, false);
       } finally {
@@ -642,26 +1047,42 @@
     document.getElementById('settings-save-btn').addEventListener('click', saveSettings);
     loadSettings();
 
-    // Timezone toggle
+    // ── Indicator checkbox listeners ──────────────────────────────────────────
+
+    ['cb-sma', 'cb-ema', 'cb-bb', 'cb-rsi', 'cb-macd'].forEach(id => {
+      document.getElementById(id).addEventListener('change', renderIndicators);
+    });
+
+    document.getElementById('cb-news').addEventListener('change', applyAllMarkers);
+
+    // ── Timezone toggle ───────────────────────────────────────────────────────
+
     document.getElementById('tz-toggle').addEventListener('click', () => {
       useJST = !useJST;
       document.getElementById('tz-toggle').textContent = useJST ? 'JST' : 'UTC';
-      chart.applyOptions({ localization: { timeFormatter: makeTzFormatter(useJST) } });
+      const tzFmt = makeTzFormatter(useJST);
+      chart.applyOptions({ localization: { timeFormatter: tzFmt } });
+      rsiChart.applyOptions({ localization: { timeFormatter: tzFmt } });
+      macdChart.applyOptions({ localization: { timeFormatter: tzFmt } });
       loadCandles();
       loadOrders();
+      loadNews();
     });
 
-    // Init
+    // ── Init ──────────────────────────────────────────────────────────────────
+
     loadCandles();
     loadTicker();
     loadBalance();
     loadOrders();
     connectWS();
 
-    // Periodic refresh
     setInterval(loadTicker, 5000);
     setInterval(loadBalance, 15000);
     setInterval(loadOrders, 10000);
+
+    // Initial resize after layout settles
+    setTimeout(resizeCharts, 100);
   </script>
 </body>
 </html>

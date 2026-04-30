@@ -193,3 +193,23 @@ src/
 - Build: `cargo build`
 - Test: `cargo test`
 - bitFlyer API keys via environment variables. Never hardcode secrets.
+
+## Git Operations
+
+実装完了時は必ず以下の手順で git commit すること：
+
+1. `cargo test` を実行してテストが全パスすることを確認する
+2. 変更したファイルのみ `git add` でステージング（`git add -A` は使わない）
+3. conventional commits 形式でコミット：
+   ```
+   <type>: <日本語の説明>
+
+   - 変更点の箇条書き
+   ```
+   type: `feat` / `fix` / `refactor` / `docs` / `test` / `chore` / `perf`
+4. コミット後に `git log --oneline -3` で確認する
+
+**注意事項：**
+- secrets・`.env` ファイルは絶対にコミットしない
+- ユーザーから明示的に指示された場合のみ `git push` する
+- force push / `--no-verify` は使用しない

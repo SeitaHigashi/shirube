@@ -380,17 +380,28 @@
     const macdHistSeries   = macdChart.addHistogramSeries({ color: '#26a69a', priceLineVisible: false, lastValueVisible: false });
 
     // Sync time scales between sub-charts and main chart
+    // syncingRange flag prevents circular re-entrancy during setData() calls
+    let syncingRange = false;
     chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-      if (range) {
-        rsiChart.timeScale().setVisibleLogicalRange(range);
-        macdChart.timeScale().setVisibleLogicalRange(range);
-      }
+      if (syncingRange || !range) return;
+      syncingRange = true;
+      rsiChart.timeScale().setVisibleLogicalRange(range);
+      macdChart.timeScale().setVisibleLogicalRange(range);
+      syncingRange = false;
     });
     rsiChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-      if (range) chart.timeScale().setVisibleLogicalRange(range);
+      if (syncingRange || !range) return;
+      syncingRange = true;
+      chart.timeScale().setVisibleLogicalRange(range);
+      macdChart.timeScale().setVisibleLogicalRange(range);
+      syncingRange = false;
     });
     macdChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-      if (range) chart.timeScale().setVisibleLogicalRange(range);
+      if (syncingRange || !range) return;
+      syncingRange = true;
+      chart.timeScale().setVisibleLogicalRange(range);
+      rsiChart.timeScale().setVisibleLogicalRange(range);
+      syncingRange = false;
     });
 
     // ── Resize ────────────────────────────────────────────────────────────────
@@ -509,6 +520,11 @@
     function renderIndicators() {
       if (candleData.length === 0) return;
 
+      // Capture current visible range BEFORE setData() calls, and block subscriptions
+      // to prevent circular range corruption while data is being updated.
+      const savedRange = chart.timeScale().getVisibleLogicalRange();
+      syncingRange = true;
+
       const closes = candleData.map(c => c.close);
       const times  = candleData.map(c => c.time);
 
@@ -576,11 +592,14 @@
         }))]);
       }
 
-      // setData() 後にメインチャートの表示範囲をサブチャートへ強制同期
-      const mainRange = chart.timeScale().getVisibleLogicalRange();
-      if (mainRange) {
-        if (showRSI)  rsiChart.timeScale().setVisibleLogicalRange(mainRange);
-        if (showMACD) macdChart.timeScale().setVisibleLogicalRange(mainRange);
+      // Restore blocked subscriptions and apply the saved range to all charts
+      syncingRange = false;
+      if (savedRange) {
+        syncingRange = true;
+        chart.timeScale().setVisibleLogicalRange(savedRange);
+        if (showRSI)  rsiChart.timeScale().setVisibleLogicalRange(savedRange);
+        if (showMACD) macdChart.timeScale().setVisibleLogicalRange(savedRange);
+        syncingRange = false;
       }
       resizeCharts();
     }

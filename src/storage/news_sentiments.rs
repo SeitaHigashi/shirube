@@ -20,18 +20,20 @@ impl NewsSentimentRepository {
         let item_map: std::collections::HashMap<&str, &NewsItem> =
             items.iter().map(|i| (i.headline.as_str(), i)).collect();
 
-        let rows: Vec<(String, String, Option<String>, f64, String)> = scores
+        let rows: Vec<(String, String, Option<String>, f64, String, Option<String>)> = scores
             .iter()
             .map(|s| {
                 let item = item_map.get(s.headline.as_str());
                 let url = item.map(|i| i.url.clone()).unwrap_or_default();
                 let body = item.and_then(|i| i.body.clone());
+                let published_at = s.published_at.map(|dt| dt.to_rfc3339());
                 (
                     s.headline.clone(),
                     url,
                     body,
                     s.score,
                     s.analyzed_at.to_rfc3339(),
+                    published_at,
                 )
             })
             .collect();
@@ -42,12 +44,12 @@ impl NewsSentimentRepository {
                 {
                     let mut stmt = tx.prepare(
                         "INSERT OR IGNORE INTO news_sentiments
-                             (headline, url, body, score, analyzed_at)
-                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                             (headline, url, body, score, analyzed_at, published_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     )?;
-                    for (headline, url, body, score, analyzed_at) in &rows {
+                    for (headline, url, body, score, analyzed_at, published_at) in &rows {
                         stmt.execute(rusqlite::params![
-                            headline, url, body, score, analyzed_at
+                            headline, url, body, score, analyzed_at, published_at
                         ])?;
                     }
                 }
@@ -77,7 +79,7 @@ impl NewsSentimentRepository {
             .conn
             .call(move |c| {
                 let mut stmt = c.prepare(
-                    "SELECT headline, score, analyzed_at
+                    "SELECT headline, score, analyzed_at, published_at
                      FROM news_sentiments
                      ORDER BY analyzed_at DESC
                      LIMIT ?1",
@@ -86,7 +88,8 @@ impl NewsSentimentRepository {
                     let headline: String = row.get(0)?;
                     let score: f64 = row.get(1)?;
                     let analyzed_at_str: String = row.get(2)?;
-                    Ok((headline, score, analyzed_at_str))
+                    let published_at_str: Option<String> = row.get(3)?;
+                    Ok((headline, score, analyzed_at_str, published_at_str))
                 })?;
                 Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
             })
@@ -94,11 +97,14 @@ impl NewsSentimentRepository {
 
         let scores = rows
             .into_iter()
-            .map(|(headline, score, analyzed_at_str)| {
+            .map(|(headline, score, analyzed_at_str, published_at_str)| {
                 let analyzed_at = DateTime::parse_from_rfc3339(&analyzed_at_str)
                     .map(|dt| dt.with_timezone(&Utc))
                     .unwrap_or_else(|_| Utc::now());
-                SentimentScore { headline, score, analyzed_at }
+                let published_at = published_at_str.and_then(|s| {
+                    DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))
+                });
+                SentimentScore { headline, score, analyzed_at, published_at }
             })
             .collect();
         Ok(scores)
@@ -124,6 +130,7 @@ mod tests {
             headline: headline.into(),
             score,
             analyzed_at: Utc::now(),
+            published_at: None,
         }
     }
 

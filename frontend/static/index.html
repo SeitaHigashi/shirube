@@ -73,6 +73,11 @@
     .news-score-bearish { background: rgba(239,83,80,0.2); color: #ef5350; }
     .news-score-neutral { background: rgba(255,255,255,0.05); color: #888; }
     .news-headline { font-size: 12px; color: #ccc; flex: 1; }
+    #news-list { max-height: 300px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #0f3460 transparent; }
+    #news-list::-webkit-scrollbar { width: 4px; }
+    #news-list::-webkit-scrollbar-track { background: transparent; }
+    #news-list::-webkit-scrollbar-thumb { background: #0f3460; border-radius: 2px; }
+    .news-time { font-size: 10px; color: #555; white-space: nowrap; }
   </style>
 </head>
 <body>
@@ -265,6 +270,24 @@
       } catch (e) { console.warn('balance load failed', e); }
     }
 
+    // Trade markers on chart
+    let tradeMarkers = [];
+
+    function updateTradeMarkers(orders) {
+      tradeMarkers = orders
+        .map(o => ({
+          time: toChartTime(o.created_at),
+          position: o.side === 'BUY' ? 'belowBar' : 'aboveBar',
+          color: o.side === 'BUY' ? '#26a69a' : '#ef5350',
+          shape: o.side === 'BUY' ? 'arrowUp' : 'arrowDown',
+          text: o.side === 'BUY'
+            ? `買 ${Number(o.size).toFixed(4)}`
+            : `売 ${Number(o.size).toFixed(4)}`,
+        }))
+        .sort((a, b) => a.time - b.time);
+      candleSeries.setMarkers(tradeMarkers);
+    }
+
     // Load orders
     async function loadOrders() {
       try {
@@ -273,6 +296,7 @@
         const tbody = document.getElementById('orders-body');
         if (orders.length === 0) {
           tbody.innerHTML = '<tr><td colspan="4" style="color:#888;text-align:center">データなし</td></tr>';
+          updateTradeMarkers([]);
           return;
         }
         tbody.innerHTML = orders.slice(0, 20).map(o => `
@@ -282,6 +306,7 @@
             <td>${o.price ? Number(o.price).toLocaleString('ja-JP') : 'MARKET'}</td>
             <td style="color:#888;font-size:11px">${o.status}</td>
           </tr>`).join('');
+        updateTradeMarkers(orders);
       } catch (e) { console.warn('orders load failed', e); }
     }
 
@@ -478,13 +503,16 @@
         avgEl.textContent = avg.toFixed(2);
         avgEl.className = avg > 0.1 ? 'up' : avg < -0.1 ? 'down' : 'neutral';
 
-        listEl.innerHTML = items.slice(0, 10).map(item => {
+        listEl.innerHTML = items.map(item => {
           const s = item.score;
           const badgeClass = s > 0.1 ? 'news-score-bullish' : s < -0.1 ? 'news-score-bearish' : 'news-score-neutral';
           const label = s > 0.1 ? '強気' : s < -0.1 ? '弱気' : '中立';
+          const t = new Date(item.published_at || item.analyzed_at);
+          const timeStr = `${t.getMonth()+1}/${t.getDate()} ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}`;
           return `<div class="news-item">
             <span class="news-score-badge ${badgeClass}">${label}</span>
             <span class="news-headline">${item.headline}</span>
+            <span class="news-time">${timeStr}</span>
           </div>`;
         }).join('');
       } catch (e) { console.warn('news load failed', e); }
@@ -499,6 +527,7 @@
       document.getElementById('tz-toggle').textContent = useJST ? 'JST' : 'UTC';
       chart.applyOptions({ localization: { timeFormatter: makeTzFormatter(useJST) } });
       loadCandles();
+      loadOrders();
     });
 
     // Init

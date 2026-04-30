@@ -58,7 +58,7 @@ mod tests {
     use rust_decimal_macros::dec;
 
     fn score(s: f64) -> SentimentScore {
-        SentimentScore { headline: "test".into(), score: s, analyzed_at: Utc::now() }
+        SentimentScore { headline: "test".into(), score: s, analyzed_at: Utc::now(), published_at: None }
     }
 
     #[test]

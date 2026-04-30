@@ -114,6 +114,13 @@ pub async fn migrate(conn: &Connection) -> Result<()> {
             )?;
         }
 
+        if current_version < 4 {
+            c.execute_batch(
+                "ALTER TABLE news_sentiments ADD COLUMN published_at TEXT;
+                 INSERT INTO schema_version(version) VALUES(4);",
+            )?;
+        }
+
         Ok(())
     })
     .await?;

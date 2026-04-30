@@ -9,6 +9,9 @@ pub struct SentimentScore {
     /// センチメントスコア: -1.0（強い売り）〜 +1.0（強い買い）
     pub score: f64,
     pub analyzed_at: DateTime<Utc>,
+    /// 記事の投稿時刻（RSSから取得）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_at: Option<DateTime<Utc>>,
 }
 
 /// Ollamaへのリクエスト本文
@@ -94,6 +97,7 @@ impl NewsAnalyzer {
                 headline: item.headline.clone(),
                 score,
                 analyzed_at: Utc::now(),
+                published_at: Some(item.published_at),
             });
         }
         scores
@@ -146,6 +150,7 @@ mod tests {
             headline: "BTC hits ATH".into(),
             score: 1.0,
             analyzed_at: Utc::now(),
+            published_at: None,
         };
         let json = serde_json::to_string(&score).unwrap();
         assert!(json.contains("BTC hits ATH"));

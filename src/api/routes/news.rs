@@ -60,6 +60,7 @@ mod tests {
             headline: "BTC bullish".into(),
             score: 1.0,
             analyzed_at: Utc::now(),
+            published_at: None,
         }];
         let state = make_state_with_scores(scores).await;
         let app = crate::api::server::build_router(state);

@@ -52,6 +52,7 @@ mod tests {
             exchange: mock,
             candle_tx,
             signal_tx,
+            news_cache: std::sync::Arc::new(tokio::sync::RwLock::new(vec![])),
         };
         Router::new()
             .route("/api/ticker", axum::routing::get(get_ticker))

@@ -243,6 +243,7 @@ impl Simulator {
                                 let _ = exchange.send_order(&r).await;
                             }
                             crate::risk::RiskDecision::Reject(_) => {}
+                            crate::risk::RiskDecision::CircuitBreaker { .. } => {}
                         }
                     }
                 }

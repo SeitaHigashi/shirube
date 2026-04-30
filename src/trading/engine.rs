@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
+use chrono::{NaiveDate, Utc};
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
 use rust_decimal::Decimal;
 
+use crate::alert::AlertManager;
 use crate::exchange::ExchangeClient;
 use crate::risk::manager::RiskManager;
 use crate::risk::{RiskDecision, RiskParams};
@@ -16,6 +18,9 @@ pub struct TradingEngine {
     exchange: Arc<dyn ExchangeClient>,
     risk_manager: RiskManager,
     product_code: String,
+    alert: Arc<AlertManager>,
+    /// 最後に日次リセットした UTC 日付
+    last_reset_date: Option<NaiveDate>,
 }
 
 impl TradingEngine {
@@ -25,7 +30,19 @@ impl TradingEngine {
         risk_manager: RiskManager,
         product_code: String,
     ) -> Self {
-        Self { signal_rx, exchange, risk_manager, product_code }
+        Self {
+            signal_rx,
+            exchange,
+            risk_manager,
+            product_code,
+            alert: Arc::new(AlertManager::new()),
+            last_reset_date: None,
+        }
+    }
+
+    pub fn with_alert(mut self, alert: Arc<AlertManager>) -> Self {
+        self.alert = alert;
+        self
     }
 
     pub async fn run(mut self) {
@@ -34,6 +51,7 @@ impl TradingEngine {
                 Ok(signal) => {
                     if let Err(e) = self.handle_signal(signal).await {
                         warn!("TradingEngine error: {}", e);
+                        self.alert.order_error(&e.to_string()).await;
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -60,6 +78,14 @@ impl TradingEngine {
             .map(|b| b.available)
             .unwrap_or(Decimal::ZERO);
 
+        // 日次リセット（UTC 00:00 をまたいだ場合）
+        let today = Utc::now().date_naive();
+        if self.last_reset_date != Some(today) {
+            self.risk_manager.reset_daily(jpy_balance);
+            self.last_reset_date = Some(today);
+            info!("RiskManager daily reset: baseline_jpy={}", jpy_balance);
+        }
+
         let positions = self.exchange.get_positions(&self.product_code).await?;
         let btc_position: Decimal = positions.iter().map(|p| p.size).sum();
 
@@ -81,6 +107,10 @@ impl TradingEngine {
             }
             RiskDecision::Reject(reason) => {
                 warn!(reason, "Order rejected by risk manager");
+            }
+            RiskDecision::CircuitBreaker { drawdown_pct } => {
+                warn!(drawdown_pct, "Circuit breaker triggered");
+                self.alert.circuit_breaker_triggered(drawdown_pct).await;
             }
         }
 

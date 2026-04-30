@@ -68,6 +68,7 @@ mod tests {
             exchange: mock,
             candle_tx,
             signal_tx,
+            news_cache: std::sync::Arc::new(tokio::sync::RwLock::new(vec![])),
         };
         let app = Router::new()
             .route("/api/candles", axum::routing::get(get_candles))

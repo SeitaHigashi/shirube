@@ -35,12 +35,51 @@
     #status-bar { position: fixed; bottom: 0; left: 0; right: 0; background: #0f3460; padding: 4px 16px; font-size: 11px; color: #888; display: flex; gap: 16px; }
     #ws-status { color: #ef5350; }
     #ws-status.connected { color: #26a69a; }
+    #tz-toggle { background: #0f3460; color: #e0e0e0; border: 1px solid #26a69a; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+    #tz-toggle:hover { background: #1a4a80; }
+    body { padding-bottom: 32px; }
+    #backtest-section { background: #16213e; margin: 12px; padding: 16px; border-radius: 8px; }
+    #backtest-section h2 { font-size: 13px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+    #backtest-section h3 { font-size: 12px; color: #888; margin: 12px 0 8px; }
+    .bt-field-group { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+    .bt-field-group label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #888; }
+    .bt-field-group input { background: #0f3460; border: 1px solid #26a69a; color: #e0e0e0; padding: 4px 8px; border-radius: 4px; width: 180px; }
+    #bt-run-btn { background: #e94560; color: #fff; border: none; padding: 8px 20px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+    #bt-run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    #bt-loading { color: #26a69a; font-size: 12px; margin-left: 12px; }
+    .bt-result-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 8px 0 12px; }
+    .bt-metric { background: #0f3460; border-radius: 6px; padding: 10px; text-align: center; }
+    .bt-metric-label { font-size: 10px; color: #888; }
+    .bt-metric-value { font-size: 18px; font-weight: bold; margin-top: 4px; }
+    .bt-positive { color: #26a69a; }
+    .bt-negative { color: #ef5350; }
+    .bt-neutral { color: #e0e0e0; }
+    .bt-preset-group { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+    .bt-preset-btn { background: #0f3460; color: #e0e0e0; border: 1px solid #1a4a7a; border-radius: 4px; padding: 4px 12px; font-size: 12px; cursor: pointer; transition: background 0.15s; }
+    .bt-preset-btn:hover { background: #1a4a7a; }
+    .bt-preset-btn.active { background: #e94560; border-color: #e94560; color: #fff; }
+    #bt-custom-range { display: none; }
+    #bt-range-label { font-size: 11px; color: #888; margin-left: 8px; }
+    /* News panel */
+    #news-section { background: #16213e; margin: 12px; padding: 16px; border-radius: 8px; }
+    #news-section h2 { font-size: 13px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+    #news-avg-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+    #news-avg-label { font-size: 12px; color: #888; }
+    #news-avg-score { font-size: 22px; font-weight: bold; }
+    .news-item { padding: 8px 0; border-bottom: 1px solid #0f3460; display: flex; align-items: center; gap: 10px; }
+    .news-item:last-child { border-bottom: none; }
+    .news-score-badge { min-width: 48px; text-align: center; font-weight: bold; font-size: 13px; padding: 2px 6px; border-radius: 4px; }
+    .news-score-bullish { background: rgba(38,166,154,0.2); color: #26a69a; }
+    .news-score-bearish { background: rgba(239,83,80,0.2); color: #ef5350; }
+    .news-score-neutral { background: rgba(255,255,255,0.05); color: #888; }
+    .news-headline { font-size: 12px; color: #ccc; flex: 1; }
   </style>
 </head>
 <body>
   <header>
     <h1>trader2</h1>
     <span style="color:#888; font-size:12px;">BTC/JPY</span>
+    <button id="tz-toggle">JST</button>
     <div id="ticker-info">
       <div class="stat">
         <div class="stat-label">最終価格</div>
@@ -88,6 +127,57 @@
     </div>
   </main>
 
+  <section id="news-section">
+    <h2>ニュースセンチメント (AI分析)</h2>
+    <div id="news-avg-bar">
+      <span class="news-avg-label">平均スコア:</span>
+      <span id="news-avg-score" class="neutral">---</span>
+    </div>
+    <div id="news-list"><span style="color:#888;font-size:12px">データなし</span></div>
+  </section>
+
+  <section id="backtest-section">
+    <h2>バックテスト</h2>
+    <form id="backtest-form">
+      <div class="bt-preset-group">
+        <button type="button" class="bt-preset-btn" data-days="7">直近7日</button>
+        <button type="button" class="bt-preset-btn" data-days="30">直近30日</button>
+        <button type="button" class="bt-preset-btn" data-days="90">直近90日</button>
+        <button type="button" class="bt-preset-btn" data-days="0">カスタム範囲</button>
+      </div>
+      <div id="bt-custom-range" class="bt-field-group">
+        <label>開始日時<input type="datetime-local" id="bt-from"></label>
+        <label>終了日時<input type="datetime-local" id="bt-to"></label>
+      </div>
+      <div class="bt-field-group">
+        <label>解像度(秒)<input type="number" id="bt-resolution" value="60" min="1"></label>
+        <label>スリッページ<input type="number" id="bt-slippage" value="0.001" step="0.0001" min="0"></label>
+        <label>手数料<input type="number" id="bt-fee" value="0.0015" step="0.0001" min="0"></label>
+        <label>初期資金(JPY)<input type="number" id="bt-initial-jpy" value="1000000" min="1"></label>
+      </div>
+      <button type="submit" id="bt-run-btn" disabled>実行</button>
+      <span id="bt-loading" style="display:none">実行中...</span>
+      <span id="bt-range-label"></span>
+    </form>
+
+    <div id="bt-result" style="display:none">
+      <h3>最新結果</h3>
+      <div class="bt-result-grid" id="bt-result-grid"></div>
+    </div>
+
+    <div id="bt-history">
+      <h3>実行履歴</h3>
+      <table>
+        <thead>
+          <tr><th>ID</th><th>リターン%</th><th>シャープ</th><th>最大DD%</th><th>勝率</th><th>取引数</th></tr>
+        </thead>
+        <tbody id="bt-history-body">
+          <tr><td colspan="6" style="color:#888;text-align:center">データなし</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
   <div id="status-bar">
     <span>WebSocket: <span id="ws-status">切断</span></span>
     <span id="last-update"></span>
@@ -96,6 +186,21 @@
   <script>
     const BASE = `${location.protocol}//${location.host}`;
     const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/candles`;
+    const JST_OFFSET = 9 * 3600;
+    let useJST = true;
+
+    function toChartTime(isoStr) {
+      const ts = Math.floor(new Date(isoStr).getTime() / 1000);
+      return useJST ? ts + JST_OFFSET : ts;
+    }
+
+    function makeTzFormatter(jst) {
+      const offset = jst ? JST_OFFSET : 0;
+      return (ts) => {
+        const d = new Date((ts + offset) * 1000);
+        return d.toISOString().slice(11, 16);
+      };
+    }
 
     // Chart setup
     const chartEl = document.getElementById('chart');
@@ -107,6 +212,7 @@
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
       rightPriceScale: { borderColor: '#0f3460' },
       timeScale: { borderColor: '#0f3460', timeVisible: true, secondsVisible: false },
+      localization: { timeFormatter: makeTzFormatter(useJST) },
     });
 
     const candleSeries = chart.addCandlestickSeries({
@@ -125,7 +231,7 @@
         const res = await fetch(`${BASE}/api/candles?resolution=60&count=200`);
         const candles = await res.json();
         const data = candles.map(c => ({
-          time: Math.floor(new Date(c.open_time).getTime() / 1000),
+          time: toChartTime(c.open_time),
           open: parseFloat(c.open), high: parseFloat(c.high),
           low: parseFloat(c.low), close: parseFloat(c.close),
         })).sort((a, b) => a.time - b.time);
@@ -194,14 +300,16 @@
         try {
           const c = JSON.parse(evt.data);
           const bar = {
-            time: Math.floor(new Date(c.open_time).getTime() / 1000),
+            time: toChartTime(c.open_time),
             open: parseFloat(c.open), high: parseFloat(c.high),
             low: parseFloat(c.low), close: parseFloat(c.close),
           };
           candleSeries.update(bar);
           document.getElementById('price').textContent = Number(c.close).toLocaleString('ja-JP');
-          document.getElementById('last-update').textContent =
-            '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
+          const nowStr = useJST
+            ? new Date().toLocaleTimeString('ja-JP')
+            : new Date().toUTCString().slice(17, 25) + ' UTC';
+          document.getElementById('last-update').textContent = '最終更新: ' + nowStr;
         } catch (e) { console.warn('ws parse error', e); }
       };
 
@@ -213,6 +321,185 @@
 
       ws.onerror = () => ws.close();
     }
+
+    // ── Backtest ──────────────────────────────────────────────────────────────
+
+    function renderBacktestResult(report) {
+      const grid = document.getElementById('bt-result-grid');
+      const pct = (v, digits = 2) => `${v >= 0 ? '+' : ''}${v.toFixed(digits)}%`;
+      const colorClass = v => v > 0 ? 'bt-positive' : v < 0 ? 'bt-negative' : 'bt-neutral';
+      const metrics = [
+        { label: 'リターン', value: pct(report.total_return_pct), cls: colorClass(report.total_return_pct) },
+        { label: 'シャープ', value: report.sharpe_ratio.toFixed(3), cls: colorClass(report.sharpe_ratio) },
+        { label: '最大DD', value: pct(report.max_drawdown_pct), cls: 'bt-negative' },
+        { label: '勝率', value: `${(report.win_rate * 100).toFixed(1)}%`, cls: 'bt-neutral' },
+        { label: '取引数', value: report.total_trades, cls: 'bt-neutral' },
+      ];
+      grid.innerHTML = metrics.map(m =>
+        `<div class="bt-metric">
+          <div class="bt-metric-label">${m.label}</div>
+          <div class="bt-metric-value ${m.cls}">${m.value}</div>
+        </div>`
+      ).join('');
+      document.getElementById('bt-result').style.display = '';
+    }
+
+    async function loadBacktestHistory() {
+      try {
+        const res = await fetch(`${BASE}/api/backtest`);
+        const runs = await res.json();
+        const tbody = document.getElementById('bt-history-body');
+        if (!runs.length) {
+          tbody.innerHTML = '<tr><td colspan="6" style="color:#888;text-align:center">データなし</td></tr>';
+          return;
+        }
+        tbody.innerHTML = runs.map(r => {
+          const rp = r.report;
+          const sign = v => v >= 0 ? '+' : '';
+          return `<tr>
+            <td style="color:#888">${r.id}</td>
+            <td class="${rp.total_return_pct >= 0 ? 'buy' : 'sell'}">${sign(rp.total_return_pct)}${rp.total_return_pct.toFixed(2)}%</td>
+            <td class="${rp.sharpe_ratio >= 0 ? 'buy' : 'sell'}">${rp.sharpe_ratio.toFixed(3)}</td>
+            <td class="sell">${rp.max_drawdown_pct.toFixed(2)}%</td>
+            <td>${(rp.win_rate * 100).toFixed(1)}%</td>
+            <td>${rp.total_trades}</td>
+          </tr>`;
+        }).join('');
+      } catch (e) { console.warn('backtest history load failed', e); }
+    }
+
+    // ── Backtest プリセット ────────────────────────────────────────────────────
+    function toInputDatetime(date) {
+      const p = n => String(n).padStart(2, '0');
+      return `${date.getFullYear()}-${p(date.getMonth()+1)}-${p(date.getDate())}T${p(date.getHours())}:${p(date.getMinutes())}`;
+    }
+
+    function applyPreset(btn) {
+      document.querySelectorAll('.bt-preset-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const days = parseInt(btn.dataset.days);
+      const customDiv = document.getElementById('bt-custom-range');
+      const label = document.getElementById('bt-range-label');
+      if (days === 0) {
+        customDiv.style.display = '';
+        label.textContent = '';
+        document.getElementById('bt-run-btn').disabled = !(
+          document.getElementById('bt-from').value && document.getElementById('bt-to').value
+        );
+      } else {
+        customDiv.style.display = 'none';
+        const to   = new Date();
+        const from = new Date(to.getTime() - days * 86400 * 1000);
+        document.getElementById('bt-from').value = toInputDatetime(from);
+        document.getElementById('bt-to').value   = toInputDatetime(to);
+        const fmt = d => d.toLocaleDateString('ja-JP', { month: 'short', day: 'numeric' });
+        label.textContent = `${fmt(from)} 〜 ${fmt(to)}`;
+        document.getElementById('bt-run-btn').disabled = false;
+      }
+    }
+
+    document.querySelectorAll('.bt-preset-btn').forEach(btn =>
+      btn.addEventListener('click', () => applyPreset(btn))
+    );
+
+    ['bt-from', 'bt-to'].forEach(id =>
+      document.getElementById(id).addEventListener('change', () => {
+        const f = document.getElementById('bt-from').value;
+        const t = document.getElementById('bt-to').value;
+        document.getElementById('bt-run-btn').disabled = !(f && t);
+      })
+    );
+
+    async function runBacktest(e) {
+      e.preventDefault();
+      const btn = document.getElementById('bt-run-btn');
+      const loading = document.getElementById('bt-loading');
+      btn.disabled = true;
+      loading.style.display = 'inline';
+
+      const fromVal = document.getElementById('bt-from').value;
+      const toVal = document.getElementById('bt-to').value;
+      if (!fromVal || !toVal) {
+        alert('日時範囲を選択してください');
+        btn.disabled = false;
+        loading.style.display = 'none';
+        return;
+      }
+      const body = {
+        from: new Date(fromVal).toISOString(),
+        to: new Date(toVal).toISOString(),
+        resolution_secs: parseInt(document.getElementById('bt-resolution').value),
+        slippage_pct: parseFloat(document.getElementById('bt-slippage').value),
+        fee_pct: parseFloat(document.getElementById('bt-fee').value),
+        initial_jpy: document.getElementById('bt-initial-jpy').value,
+      };
+
+      try {
+        const res = await fetch(`${BASE}/api/backtest`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert(`エラー: ${err.error || res.status}`);
+          return;
+        }
+        const data = await res.json();
+        renderBacktestResult(data.report);
+        await loadBacktestHistory();
+      } catch (err) {
+        alert('通信エラー: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        loading.style.display = 'none';
+      }
+    }
+
+    document.getElementById('backtest-form').addEventListener('submit', runBacktest);
+    loadBacktestHistory();
+
+    // ── News Sentiment ────────────────────────────────────────────────────────
+
+    async function loadNews() {
+      try {
+        const res = await fetch(`${BASE}/api/news/latest`);
+        const items = await res.json();
+        const listEl = document.getElementById('news-list');
+        const avgEl = document.getElementById('news-avg-score');
+
+        if (!items.length) {
+          listEl.innerHTML = '<span style="color:#888;font-size:12px">データなし (Ollamaが未起動の場合はスコア0で表示されます)</span>';
+          avgEl.textContent = '---';
+          return;
+        }
+
+        const avg = items.reduce((s, i) => s + i.score, 0) / items.length;
+        avgEl.textContent = avg.toFixed(2);
+        avgEl.className = avg > 0.1 ? 'up' : avg < -0.1 ? 'down' : 'neutral';
+
+        listEl.innerHTML = items.slice(0, 10).map(item => {
+          const s = item.score;
+          const badgeClass = s > 0.1 ? 'news-score-bullish' : s < -0.1 ? 'news-score-bearish' : 'news-score-neutral';
+          const label = s > 0.1 ? '強気' : s < -0.1 ? '弱気' : '中立';
+          return `<div class="news-item">
+            <span class="news-score-badge ${badgeClass}">${label}</span>
+            <span class="news-headline">${item.headline}</span>
+          </div>`;
+        }).join('');
+      } catch (e) { console.warn('news load failed', e); }
+    }
+
+    loadNews();
+    setInterval(loadNews, 30000);
+
+    // Timezone toggle
+    document.getElementById('tz-toggle').addEventListener('click', () => {
+      useJST = !useJST;
+      document.getElementById('tz-toggle').textContent = useJST ? 'JST' : 'UTC';
+      chart.applyOptions({ localization: { timeFormatter: makeTzFormatter(useJST) } });
+      loadCandles();
+    });
 
     // Init
     loadCandles();

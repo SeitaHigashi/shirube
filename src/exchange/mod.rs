@@ -1,5 +1,6 @@
 pub mod bitflyer;
 pub mod mock;
+pub mod rate_limiter;
 
 use async_trait::async_trait;
 

@@ -1,14 +1,21 @@
 use axum::{
-    extract::{Path, State},
+    extract::State,
     http::StatusCode,
     Json,
 };
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::api::AppState;
 use crate::backtest::{BacktestConfig, BacktestReport};
+use crate::backtest::simulator::Simulator;
+use crate::risk::RiskParams;
+use crate::signal::indicators::{
+    bollinger::Bollinger, ema::Ema, macd::Macd, rsi::Rsi, sma::Sma,
+};
+use crate::signal::Indicator;
 use crate::storage::backtest_runs::BacktestRunRecord;
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +71,77 @@ impl From<&BacktestRunRecord> for BacktestRunResponse {
     }
 }
 
+pub async fn run_backtest(
+    State(state): State<AppState>,
+    Json(req): Json<RunBacktestRequest>,
+) -> Result<Json<BacktestRunResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let config = BacktestConfig {
+        product_code: "BTC_JPY".to_string(),
+        from: req.from,
+        to: req.to,
+        resolution_secs: req.resolution_secs,
+        slippage_pct: req.slippage_pct,
+        fee_pct: req.fee_pct,
+        initial_jpy: req.initial_jpy,
+    };
+
+    let candles = state
+        .db
+        .candles()
+        .get_range("BTC_JPY", req.resolution_secs, req.from, req.to, None)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+        })?;
+
+    if candles.is_empty() {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "error": "指定期間にローソク足データがありません" })),
+        ));
+    }
+
+    let indicators: Vec<Box<dyn Indicator>> = vec![
+        Box::new(Sma::new(20)),
+        Box::new(Ema::new(20)),
+        Box::new(Rsi::new(14)),
+        Box::new(Macd::new(12, 26, 9)),
+        Box::new(Bollinger::new(20, 2.0)),
+    ];
+
+    let simulator = Simulator::new(config, state.db.clone());
+    let report = simulator
+        .run(candles, indicators, RiskParams::default())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+        })?;
+
+    let runs = state
+        .db
+        .backtest_runs()
+        .list(1)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+        })?;
+
+    let id = runs.first().map(|r| r.id).unwrap_or(0);
+    Ok(Json(BacktestRunResponse {
+        id,
+        report: (&report).into(),
+    }))
+}
+
 pub async fn list_backtests(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<BacktestRunResponse>>, StatusCode> {
@@ -82,9 +160,11 @@ mod tests {
     use crate::api::AppState;
     use crate::exchange::mock::MockExchangeClient;
     use crate::storage::db::Database;
+    use crate::types::market::Candle;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;
+    use chrono::TimeZone;
     use rust_decimal_macros::dec;
     use std::sync::Arc;
     use tokio::sync::broadcast;
@@ -95,9 +175,18 @@ mod tests {
         let mock = Arc::new(MockExchangeClient::new());
         let (candle_tx, _) = broadcast::channel(16);
         let (signal_tx, _) = broadcast::channel(16);
-        let state = AppState { db: db.clone(), exchange: mock, candle_tx, signal_tx };
+        let state = AppState {
+            db: db.clone(),
+            exchange: mock,
+            candle_tx,
+            signal_tx,
+            news_cache: std::sync::Arc::new(tokio::sync::RwLock::new(vec![])),
+        };
         let app = Router::new()
-            .route("/api/backtest", axum::routing::get(list_backtests))
+            .route(
+                "/api/backtest",
+                axum::routing::get(list_backtests).post(run_backtest),
+            )
             .with_state(state);
         (app, db)
     }
@@ -140,5 +229,65 @@ mod tests {
         let v: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
         assert_eq!(v.len(), 1);
         assert_eq!(v[0]["report"]["total_trades"], 10);
+    }
+
+    #[tokio::test]
+    async fn post_backtest_returns_422_when_no_candles() {
+        let (app, _) = make_app().await;
+        let body = serde_json::json!({
+            "from": "2024-01-01T00:00:00Z",
+            "to": "2024-01-02T00:00:00Z",
+            "initial_jpy": "1000000"
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/backtest")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn post_backtest_returns_200_with_report() {
+        let (app, db) = make_app().await;
+
+        // candle を事前挿入
+        let t1 = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let t2 = Utc.with_ymd_and_hms(2024, 1, 1, 0, 1, 0).unwrap();
+        for t in [t1, t2] {
+            db.candles()
+                .upsert(&Candle {
+                    product_code: "BTC_JPY".into(),
+                    open_time: t,
+                    resolution_secs: 60,
+                    open: dec!(9_000_000),
+                    high: dec!(9_010_000),
+                    low: dec!(8_990_000),
+                    close: dec!(9_005_000),
+                    volume: dec!(1),
+                })
+                .await
+                .unwrap();
+        }
+
+        let body = serde_json::json!({
+            "from": "2024-01-01T00:00:00Z",
+            "to": "2024-01-01T00:02:00Z",
+            "initial_jpy": "1000000"
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/backtest")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 64).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(v["id"].as_i64().unwrap() > 0);
+        assert!(v["report"]["total_trades"].as_u64().is_some());
     }
 }

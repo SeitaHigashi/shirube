@@ -8,6 +8,7 @@ use super::models::{
     SendOrderRequest, SendOrderResponse,
 };
 use crate::error::{Error, Result};
+use crate::exchange::rate_limiter::RateLimiter;
 use crate::exchange::ExchangeClient;
 use crate::types::{
     balance::{Balance, Position},
@@ -22,6 +23,7 @@ pub struct BitFlyerRestClient {
     base_url: String,
     api_key: String,
     api_secret: String,
+    rate_limiter: RateLimiter,
 }
 
 impl BitFlyerRestClient {
@@ -39,10 +41,13 @@ impl BitFlyerRestClient {
             base_url,
             api_key,
             api_secret,
+            // bitFlyer: 200 req/min (公開・認証共通)
+            rate_limiter: RateLimiter::new(200),
         }
     }
 
     async fn get_public<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        self.rate_limiter.acquire().await;
         let url = format!("{}{}", self.base_url, path);
         debug!("GET {}", url);
         let resp = self.http.get(&url).send().await?;
@@ -50,6 +55,7 @@ impl BitFlyerRestClient {
     }
 
     async fn get_authenticated<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        self.rate_limiter.acquire().await;
         let headers = build_auth_headers(&self.api_key, &self.api_secret, "GET", path, "");
         let url = format!("{}{}", self.base_url, path);
         debug!("GET (auth) {}", url);
@@ -70,6 +76,7 @@ impl BitFlyerRestClient {
         path: &str,
         body: &B,
     ) -> Result<T> {
+        self.rate_limiter.acquire().await;
         let body_str = serde_json::to_string(body)?;
         let headers =
             build_auth_headers(&self.api_key, &self.api_secret, "POST", path, &body_str);
@@ -89,6 +96,7 @@ impl BitFlyerRestClient {
     }
 
     async fn delete_authenticated<B: Serialize>(&self, path: &str, body: &B) -> Result<()> {
+        self.rate_limiter.acquire().await;
         let body_str = serde_json::to_string(body)?;
         let headers =
             build_auth_headers(&self.api_key, &self.api_secret, "DELETE", path, &body_str);

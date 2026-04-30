@@ -38,7 +38,13 @@ mod tests {
         ]);
         let (candle_tx, _) = broadcast::channel(16);
         let (signal_tx, _) = broadcast::channel(16);
-        let state = AppState { db, exchange: mock, candle_tx, signal_tx };
+        let state = AppState {
+            db,
+            exchange: mock,
+            candle_tx,
+            signal_tx,
+            news_cache: std::sync::Arc::new(tokio::sync::RwLock::new(vec![])),
+        };
         Router::new()
             .route("/api/balance", axum::routing::get(get_balance))
             .with_state(state)

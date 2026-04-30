@@ -70,7 +70,13 @@ mod tests {
         let mock = Arc::new(MockExchangeClient::new());
         let (candle_tx, _) = broadcast::channel(16);
         let (signal_tx, _) = broadcast::channel(16);
-        let state = AppState { db, exchange: mock, candle_tx, signal_tx };
+        let state = AppState {
+            db,
+            exchange: mock,
+            candle_tx,
+            signal_tx,
+            news_cache: std::sync::Arc::new(tokio::sync::RwLock::new(vec![])),
+        };
         Router::new()
             .route("/api/orders", axum::routing::get(get_orders).post(post_order))
             .with_state(state)

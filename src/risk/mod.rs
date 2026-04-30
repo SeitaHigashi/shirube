@@ -38,4 +38,6 @@ impl Default for RiskParams {
 pub enum RiskDecision {
     Allow(OrderRequest),
     Reject(String),
+    /// サーキットブレーカー発動（日次損失上限超過）
+    CircuitBreaker { drawdown_pct: f64 },
 }

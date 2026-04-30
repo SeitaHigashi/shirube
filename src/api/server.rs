@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use axum::{
-    routing::{get, post},
+    routing::get,
     Router,
 };
 use tower_http::cors::{Any, CorsLayer};
@@ -9,7 +9,7 @@ use tower_http::services::ServeDir;
 use tracing::info;
 
 use super::{
-    routes::{balance, backtest, candles, orders, ticker},
+    routes::{balance, backtest, candles, news, orders, ticker},
     ws_handler, AppState,
 };
 
@@ -25,7 +25,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/candles", get(candles::get_candles))
         .route("/api/balance", get(balance::get_balance))
         .route("/api/orders", get(orders::get_orders).post(orders::post_order))
-        .route("/api/backtest", get(backtest::list_backtests))
+        .route("/api/backtest", get(backtest::list_backtests).post(backtest::run_backtest))
+        .route("/api/news/latest", get(news::get_latest_news))
         // WebSocket endpoint
         .route("/ws/candles", get(ws_handler::ws_candles))
         .layer(cors)
@@ -51,7 +52,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use std::sync::Arc;
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, RwLock};
     use tower::ServiceExt;
 
     async fn make_state() -> AppState {
@@ -59,7 +60,13 @@ mod tests {
         let mock = Arc::new(MockExchangeClient::new());
         let (candle_tx, _) = broadcast::channel(16);
         let (signal_tx, _) = broadcast::channel(16);
-        AppState { db, exchange: mock, candle_tx, signal_tx }
+        AppState {
+            db,
+            exchange: mock,
+            candle_tx,
+            signal_tx,
+            news_cache: Arc::new(RwLock::new(vec![])),
+        }
     }
 
     #[tokio::test]
@@ -101,6 +108,24 @@ mod tests {
         let req = Request::builder().uri("/api/backtest").body(Body::empty()).unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn router_post_backtest_returns_422_on_empty_db() {
+        let app = build_router(make_state().await);
+        let body = serde_json::json!({
+            "from": "2024-01-01T00:00:00Z",
+            "to": "2024-01-02T00:00:00Z",
+            "initial_jpy": "1000000"
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/backtest")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[tokio::test]

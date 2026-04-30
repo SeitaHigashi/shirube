@@ -65,6 +65,47 @@ impl BitFlyerWsClient {
         }
     }
 
+    /// 指数バックオフで自動再接続しながら WS を維持する。
+    /// 正常終了（`tx` が全て drop）した場合のみ return する。
+    pub async fn run_with_reconnect(
+        self,
+        channels: Vec<String>,
+        tx: broadcast::Sender<WsMessage>,
+    ) {
+        let mut backoff = std::time::Duration::from_secs(1);
+        let max_backoff = std::time::Duration::from_secs(60);
+        let endpoint = self.endpoint.clone();
+        let api_key = self.api_key.clone();
+        let api_secret = self.api_secret.clone();
+
+        loop {
+            // 受信者がいなければ終了（全コンシューマが drop された）
+            if tx.receiver_count() == 0 {
+                info!("WebSocket: no receivers, shutting down");
+                break;
+            }
+
+            let client = BitFlyerWsClient::new_with_endpoint(
+                api_key.clone(),
+                api_secret.clone(),
+                endpoint.clone(),
+            );
+            match client.run(channels.clone(), tx.clone()).await {
+                Ok(()) => {
+                    // サーバー側からの Close も再接続する
+                    warn!("WebSocket closed by server. Reconnecting in {:?}", backoff);
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(max_backoff);
+                }
+                Err(e) => {
+                    warn!("WebSocket error: {}. Reconnecting in {:?}", e, backoff);
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(max_backoff);
+                }
+            }
+        }
+    }
+
     pub async fn run(
         self,
         channels: Vec<String>,
@@ -173,6 +214,75 @@ mod tests {
             }
         });
         format!("ws://{}", addr)
+    }
+
+    async fn make_ws_server_that_closes() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            // immediately close after subscribe
+            ws.next().await;
+            ws.close(None).await.ok();
+        });
+        format!("ws://{}", addr)
+    }
+
+    #[tokio::test]
+    async fn run_with_reconnect_reconnects_after_close() {
+        // 1回目: すぐ閉じるサーバー → 2回目: メッセージを送るサーバー
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, mut rx) = broadcast::channel(16);
+
+        let ticker_json = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "channelMessage",
+            "params": {
+                "channel": "lightning_ticker_BTC_JPY",
+                "message": {
+                    "product_code": "BTC_JPY",
+                    "timestamp": "2024-01-01T00:00:00.000Z",
+                    "best_bid": "9000000",
+                    "best_ask": "9001000",
+                    "best_bid_size": "0.1",
+                    "best_ask_size": "0.2",
+                    "ltp": "9000500",
+                    "volume": "1234.5",
+                    "volume_by_product": "1234.5"
+                }
+            }
+        }).to_string();
+
+        tokio::spawn(async move {
+            // 1st connection: close immediately
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            ws.next().await; // consume subscribe
+            ws.close(None).await.ok();
+
+            // 2nd connection: send ticker then close
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            ws.next().await; // consume subscribe
+            ws.send(Message::Text(ticker_json)).await.ok();
+        });
+
+        let endpoint = format!("ws://{}", addr);
+        let client = BitFlyerWsClient::new_with_endpoint(
+            String::new(), String::new(), endpoint,
+        );
+
+        tokio::spawn(client.run_with_reconnect(
+            vec!["lightning_ticker_BTC_JPY".to_string()], tx,
+        ));
+
+        let msg = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            async { rx.recv().await.unwrap() }
+        ).await.expect("timeout waiting for reconnect + message");
+        assert!(matches!(msg, WsMessage::Ticker(_)));
     }
 
     #[tokio::test]

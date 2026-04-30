@@ -72,11 +72,9 @@ impl RiskManager {
             let drawdown = self.daily_drawdown_pct(current_jpy);
             if drawdown > self.params.max_daily_drawdown {
                 self.circuit_broken = true;
-                return RiskDecision::Reject(format!(
-                    "daily drawdown {:.2}% exceeds limit {:.2}%",
-                    drawdown * 100.0,
-                    self.params.max_daily_drawdown * 100.0
-                ));
+                return RiskDecision::CircuitBreaker {
+                    drawdown_pct: drawdown,
+                };
             }
         }
 
@@ -169,7 +167,7 @@ mod tests {
         // ベースライン 1,000,000 JPY → 現在 940,000 JPY = 6% 損失 > 5%
         rm.reset_daily(dec!(1_000_000));
         let result = rm.evaluate(make_buy(dec!(0.001)), dec!(0), dec!(940_000));
-        assert!(matches!(result, RiskDecision::Reject(_)));
+        assert!(matches!(result, RiskDecision::CircuitBreaker { .. }));
         assert!(rm.is_circuit_broken());
     }
 

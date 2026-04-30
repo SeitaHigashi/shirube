@@ -16,8 +16,7 @@
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs { inherit system overlays; };
 
-        # Cargo.toml の rust-version = "1.75" に合わせて固定
-        rustToolchain = pkgs.rust-bin.stable."1.75.0".default.override {
+        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [ "rust-src" "rust-analyzer" "clippy" "rustfmt" ];
         };
       in
@@ -46,6 +45,9 @@
           # openssl-sys クレートが参照する環境変数
           PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
           OPENSSL_NO_VENDOR = "1";
+
+          # Ollama モデル設定
+          OLLAMA_MODEL = "gemma4:e4b";
 
           shellHook = ''
             echo "trader2 dev environment ready"

@@ -41,10 +41,10 @@ impl NewsAnalyzer {
         Self { ollama_url: ollama_url.into(), model: model.into(), client }
     }
 
-    /// ヘッドラインのセンチメントスコアを返す。
+    /// ヘッドラインと任意の本文からセンチメントスコアを返す。
     /// Ollamaが不在の場合は 0.0 にフォールバックする。
-    pub async fn analyze(&self, headline: &str) -> f64 {
-        match self.call_ollama(headline).await {
+    pub async fn analyze(&self, headline: &str, body: Option<&str>) -> f64 {
+        match self.call_ollama(headline, body).await {
             Ok(score) => score,
             Err(e) => {
                 warn!("Ollama unavailable ({}), falling back to score=0.0", e);
@@ -53,12 +53,20 @@ impl NewsAnalyzer {
         }
     }
 
-    async fn call_ollama(&self, headline: &str) -> anyhow::Result<f64> {
+    async fn call_ollama(&self, headline: &str, body: Option<&str>) -> anyhow::Result<f64> {
+        let body_section = body
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                // 長すぎる本文はトークン節約のため500文字に切り詰める
+                let trimmed = if s.len() > 500 { &s[..500] } else { s };
+                format!("\nArticle summary: {}", trimmed)
+            })
+            .unwrap_or_default();
         let prompt = format!(
-            "Analyze the sentiment of this crypto news headline. \
+            "Analyze the sentiment of this crypto news.\
              Respond with ONLY one of: BULLISH, BEARISH, or NEUTRAL.\n\
-             Headline: {}",
-            headline
+             Headline: {}{}",
+            headline, body_section
         );
 
         let url = format!("{}/api/generate", self.ollama_url);
@@ -77,11 +85,11 @@ impl NewsAnalyzer {
         Ok(score)
     }
 
-    /// 複数ヘッドラインをバッチ分析してスコアリストを返す。
+    /// 複数記事をバッチ分析してスコアリストを返す。
     pub async fn analyze_batch(&self, items: &[crate::news::fetcher::NewsItem]) -> Vec<SentimentScore> {
         let mut scores = Vec::with_capacity(items.len());
         for item in items {
-            let score = self.analyze(&item.headline).await;
+            let score = self.analyze(&item.headline, item.body.as_deref()).await;
             scores.push(SentimentScore {
                 headline: item.headline.clone(),
                 score,
@@ -147,7 +155,7 @@ mod tests {
     #[tokio::test]
     async fn analyze_falls_back_when_ollama_absent() {
         let analyzer = NewsAnalyzer::new("http://localhost:11999", "llama3");
-        let score = analyzer.analyze("Bitcoin jumps 10%").await;
+        let score = analyzer.analyze("Bitcoin jumps 10%", None).await;
         assert_eq!(score, 0.0);
     }
 }

@@ -3,6 +3,7 @@ use tokio_rusqlite::Connection;
 use super::{
     backtest_runs::BacktestRunRepository,
     candles::CandleRepository,
+    news_sentiments::NewsSentimentRepository,
     orders::OrderRepository,
     schema::migrate,
     trades::TradeRepository,
@@ -41,5 +42,9 @@ impl Database {
 
     pub fn backtest_runs(&self) -> BacktestRunRepository {
         BacktestRunRepository::new(self.conn.clone())
+    }
+
+    pub fn news_sentiments(&self) -> NewsSentimentRepository {
+        NewsSentimentRepository::new(self.conn.clone())
     }
 }

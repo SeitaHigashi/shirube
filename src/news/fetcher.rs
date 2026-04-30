@@ -7,6 +7,8 @@ pub struct NewsItem {
     pub headline: String,
     pub url: String,
     pub published_at: DateTime<Utc>,
+    /// RSSフィードのsummaryまたはcontentから取得した記事本文（任意）
+    pub body: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -62,7 +64,13 @@ impl NewsFetcher {
                     .published
                     .or(entry.updated)
                     .unwrap_or_else(Utc::now);
-                Some(NewsItem { headline, url: entry_url, published_at })
+                // content → summary の優先順位で本文を取得
+                let body = entry
+                    .content
+                    .and_then(|c| c.body)
+                    .or_else(|| entry.summary.map(|s| s.content))
+                    .filter(|s| !s.is_empty());
+                Some(NewsItem { headline, url: entry_url, published_at, body })
             })
             .collect();
 
@@ -100,6 +108,7 @@ mod tests {
             headline: "Bitcoin surges to new high".into(),
             url: "https://example.com/news/1".into(),
             published_at: Utc::now(),
+            body: None,
         };
         let json = serde_json::to_string(&item).unwrap();
         assert!(json.contains("Bitcoin surges"));

@@ -96,6 +96,24 @@ pub async fn migrate(conn: &Connection) -> Result<()> {
             )?;
         }
 
+        if current_version < 3 {
+            c.execute_batch(
+                "CREATE TABLE IF NOT EXISTS news_sentiments (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    headline    TEXT    NOT NULL,
+                    url         TEXT    NOT NULL DEFAULT '',
+                    body        TEXT,
+                    score       REAL    NOT NULL,
+                    analyzed_at TEXT    NOT NULL,
+                    UNIQUE(headline, analyzed_at)
+                );
+                CREATE INDEX IF NOT EXISTS idx_news_sentiments_analyzed_at
+                    ON news_sentiments(analyzed_at DESC);
+
+                INSERT INTO schema_version(version) VALUES(3);",
+            )?;
+        }
+
         Ok(())
     })
     .await?;

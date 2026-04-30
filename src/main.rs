@@ -118,6 +118,7 @@ async fn main() -> anyhow::Result<()> {
     let news_cache = Arc::new(RwLock::new(vec![]));
     {
         let cache = Arc::clone(&news_cache);
+        let news_repo = db.news_sentiments();
         let ollama_url = std::env::var("OLLAMA_URL")
             .unwrap_or_else(|_| "http://localhost:11434".to_string());
         let ollama_model = std::env::var("OLLAMA_MODEL")
@@ -140,13 +141,16 @@ async fn main() -> anyhow::Result<()> {
                         let scores = analyzer.analyze_batch(&items).await;
                         let avg = scorer.average_score(&scores);
                         info!("News sentiment: avg_score={:.2}, items={}", avg, scores.len());
+                        if let Err(e) = news_repo.insert_batch(&items, &scores).await {
+                            warn!("Failed to save news sentiments to DB: {}", e);
+                        }
                         *cache.write().await = scores;
                     }
                     Err(e) => {
                         warn!("News fetch failed: {}", e);
                     }
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
             }
         });
     }

@@ -58,6 +58,19 @@ impl NewsSentimentRepository {
         Ok(())
     }
 
+    /// DB に保存済みの URL 一覧を返す（重複フィルタリング用）。
+    pub async fn get_existing_urls(&self) -> Result<std::collections::HashSet<String>> {
+        let urls = self
+            .conn
+            .call(|c| {
+                let mut stmt = c.prepare("SELECT url FROM news_sentiments WHERE url != ''")?;
+                let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+                Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+            })
+            .await?;
+        Ok(urls.into_iter().collect())
+    }
+
     /// 新しい順に最大 `limit` 件取得する。
     pub async fn get_latest(&self, limit: u32) -> Result<Vec<SentimentScore>> {
         let rows = self

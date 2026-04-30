@@ -134,17 +134,47 @@ async fn main() -> anyhow::Result<()> {
         let fetcher = news::fetcher::NewsFetcher::new(feed_urls);
         let analyzer = news::analyzer::NewsAnalyzer::new(ollama_url, ollama_model);
         let scorer = news::scorer::NewsScorer::default();
+        // 起動時にDBから既存スコアをキャッシュに読み込む
+        match news_repo.get_latest(50).await {
+            Ok(existing) if !existing.is_empty() => {
+                info!("Loaded {} news scores from DB into cache", existing.len());
+                *cache.write().await = existing;
+            }
+            Ok(_) => {}
+            Err(e) => warn!("Failed to load news from DB on startup: {}", e),
+        }
+
         tokio::spawn(async move {
             loop {
                 match news::fetcher::FeedSource::fetch_latest(&fetcher).await {
                     Ok(items) => {
-                        let scores = analyzer.analyze_batch(&items).await;
-                        let avg = scorer.average_score(&scores);
-                        info!("News sentiment: avg_score={:.2}, items={}", avg, scores.len());
-                        if let Err(e) = news_repo.insert_batch(&items, &scores).await {
-                            warn!("Failed to save news sentiments to DB: {}", e);
+                        // 既存URL取得して重複除外
+                        let existing_urls = news_repo.get_existing_urls().await.unwrap_or_default();
+                        let new_items: Vec<_> = items
+                            .into_iter()
+                            .filter(|item| !item.url.is_empty() && !existing_urls.contains(&item.url))
+                            .collect();
+
+                        if new_items.is_empty() {
+                            info!("No new news items (all duplicates in DB)");
+                        } else {
+                            let scores = analyzer.analyze_batch(&new_items).await;
+                            let avg = scorer.average_score(&scores);
+                            info!(
+                                "News sentiment: avg_score={:.2}, new_items={}",
+                                avg,
+                                scores.len()
+                            );
+                            if let Err(e) = news_repo.insert_batch(&new_items, &scores).await {
+                                warn!("Failed to save news sentiments to DB: {}", e);
+                            }
                         }
-                        *cache.write().await = scores;
+
+                        // 常にDBから最新スコアをキャッシュに反映
+                        match news_repo.get_latest(50).await {
+                            Ok(latest) => *cache.write().await = latest,
+                            Err(e) => warn!("Failed to refresh news cache from DB: {}", e),
+                        }
                     }
                     Err(e) => {
                         warn!("News fetch failed: {}", e);

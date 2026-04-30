@@ -576,6 +576,12 @@
         }))]);
       }
 
+      // setData() 後にメインチャートの表示範囲をサブチャートへ強制同期
+      const mainRange = chart.timeScale().getVisibleLogicalRange();
+      if (mainRange) {
+        if (showRSI)  rsiChart.timeScale().setVisibleLogicalRange(mainRange);
+        if (showMACD) macdChart.timeScale().setVisibleLogicalRange(mainRange);
+      }
       resizeCharts();
     }
 

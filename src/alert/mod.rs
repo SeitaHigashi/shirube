@@ -51,7 +51,7 @@ impl AlertManager {
 
         // Slack Webhook 送信
         if let Some(url) = &self.slack_webhook_url {
-            let text = format!("{} *trader2* {}", level.emoji(), message);
+            let text = format!("{} *導* {}", level.emoji(), message);
             let payload = serde_json::json!({ "text": text });
             if let Err(e) = self.client.post(url).json(&payload).send().await {
                 warn!("Failed to send Slack alert: {}", e);

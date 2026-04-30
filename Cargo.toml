@@ -1,11 +1,11 @@
 [package]
-name = "trader2"
+name = "shirube"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
 
 [[bin]]
-name = "trader2"
+name = "shirube"
 path = "src/main.rs"
 
 [dependencies]

@@ -40,12 +40,12 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    info!("trader2 starting");
+    info!("導 starting");
 
     // アラートマネージャー初期化（SLACK_WEBHOOK_URL があれば Slack 通知）
     let alert = std::sync::Arc::new(alert::AlertManager::new());
 
-    let db_path = std::env::var("DATABASE_PATH").unwrap_or_else(|_| "trader2.db".to_string());
+    let db_path = std::env::var("DATABASE_PATH").unwrap_or_else(|_| "shirube.db".to_string());
     let db = Database::open(&db_path).await?;
     info!("Database opened: {}", db_path);
 

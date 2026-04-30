@@ -1,4 +1,4 @@
-# trader2 - bitFlyer BTC/JPY Automated Trading Bot
+# 導 (shirube) - bitFlyer BTC/JPY Automated Trading Bot
 
 ## Overview
 
@@ -180,7 +180,7 @@ Key design decisions:
 |----------|---------|---------|
 | `BITFLYER_API_KEY` | — | BitFlyer API key (uses mock if absent) |
 | `BITFLYER_API_SECRET` | — | BitFlyer API secret |
-| `DATABASE_PATH` | `trader2.db` | SQLite file path |
+| `DATABASE_PATH` | `shirube.db` | SQLite file path |
 | `API_PORT` | `3000` | API server port |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama LLM server |
 | `OLLAMA_MODEL` | `llama3` | Model to use |

@@ -1,5 +1,5 @@
 {
-  description = "trader2 - bitFlyer BTC/JPY Automated Trading Bot";
+  description = "導 (shirube) - bitFlyer BTC/JPY Automated Trading Bot";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -50,7 +50,7 @@
           OLLAMA_MODEL = "gemma4:latest";
 
           shellHook = ''
-            echo "trader2 dev environment ready"
+            echo "導 (shirube) dev environment ready"
             echo "  rust: $(rustc --version)"
             echo "  cargo: $(cargo --version)"
 

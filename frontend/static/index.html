@@ -380,17 +380,27 @@
     const macdHistSeries   = macdChart.addHistogramSeries({ color: '#26a69a', priceLineVisible: false, lastValueVisible: false });
 
     // Sync time scales between sub-charts and main chart
+    let _syncingTimeRange = false;
     chart.timeScale().subscribeVisibleTimeRangeChange(range => {
-      if (range) {
-        rsiChart.timeScale().setVisibleRange(range);
-        macdChart.timeScale().setVisibleRange(range);
-      }
+      if (_syncingTimeRange || !range) return;
+      _syncingTimeRange = true;
+      rsiChart.timeScale().setVisibleRange(range);
+      macdChart.timeScale().setVisibleRange(range);
+      _syncingTimeRange = false;
     });
     rsiChart.timeScale().subscribeVisibleTimeRangeChange(range => {
-      if (range) chart.timeScale().setVisibleRange(range);
+      if (_syncingTimeRange || !range) return;
+      _syncingTimeRange = true;
+      chart.timeScale().setVisibleRange(range);
+      macdChart.timeScale().setVisibleRange(range);
+      _syncingTimeRange = false;
     });
     macdChart.timeScale().subscribeVisibleTimeRangeChange(range => {
-      if (range) chart.timeScale().setVisibleRange(range);
+      if (_syncingTimeRange || !range) return;
+      _syncingTimeRange = true;
+      chart.timeScale().setVisibleRange(range);
+      rsiChart.timeScale().setVisibleRange(range);
+      _syncingTimeRange = false;
     });
 
     // ── Resize ────────────────────────────────────────────────────────────────

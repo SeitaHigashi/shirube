@@ -235,13 +235,19 @@ impl ExchangeClient for MockExchangeClient {
         };
         self.orders.write().unwrap().push(order);
 
-        // DB が設定されている場合は状態を永続化する
+        // DB が設定されている場合は状態を永続化する（失敗しても注文自体は成功扱い）
         if let Some(db) = &self.db {
             let balances = self.balances.read().unwrap().clone();
             let next_counter = id + 1;
-            db.save_balances(&balances).await?;
-            db.save_order_counter(next_counter).await?;
-            db.insert_filled_trade(&trade).await?;
+            if let Err(e) = db.save_balances(&balances).await {
+                tracing::warn!("MockExchangeClient: failed to save balances to DB: {}", e);
+            }
+            if let Err(e) = db.save_order_counter(next_counter).await {
+                tracing::warn!("MockExchangeClient: failed to save order counter to DB: {}", e);
+            }
+            if let Err(e) = db.insert_filled_trade(&trade).await {
+                tracing::warn!("MockExchangeClient: failed to save filled trade to DB: {}", e);
+            }
         }
 
         Ok(acceptance_id)

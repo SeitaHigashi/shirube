@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>trader2 Dashboard</title>
+  <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; font-size: 14px; }
+    header { background: #16213e; padding: 12px 20px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid #0f3460; }
+    header h1 { font-size: 18px; color: #e94560; }
+    #ticker-info { margin-left: auto; display: flex; gap: 24px; }
+    .stat { text-align: right; }
+    .stat-label { color: #888; font-size: 11px; }
+    .stat-value { font-size: 16px; font-weight: bold; }
+    .up { color: #26a69a; }
+    .down { color: #ef5350; }
+    .neutral { color: #e0e0e0; }
+    main { display: grid; grid-template-columns: 1fr 320px; grid-template-rows: auto 1fr; gap: 12px; padding: 12px; height: calc(100vh - 56px); }
+    #chart-container { background: #16213e; border-radius: 8px; padding: 12px; grid-row: 1 / 3; }
+    #chart-title { font-size: 13px; color: #888; margin-bottom: 8px; }
+    #chart { width: 100%; height: calc(100% - 24px); }
+    .panel { background: #16213e; border-radius: 8px; padding: 12px; overflow-y: auto; }
+    .panel h2 { font-size: 13px; color: #888; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .balance-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .balance-item { background: #0f3460; border-radius: 6px; padding: 10px; }
+    .balance-currency { font-size: 11px; color: #888; }
+    .balance-amount { font-size: 18px; font-weight: bold; margin-top: 2px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th { color: #888; font-weight: normal; text-align: left; padding: 4px 6px; border-bottom: 1px solid #0f3460; }
+    td { padding: 4px 6px; border-bottom: 1px solid #1a1a2e; }
+    .buy { color: #26a69a; }
+    .sell { color: #ef5350; }
+    #status-bar { position: fixed; bottom: 0; left: 0; right: 0; background: #0f3460; padding: 4px 16px; font-size: 11px; color: #888; display: flex; gap: 16px; }
+    #ws-status { color: #ef5350; }
+    #ws-status.connected { color: #26a69a; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>trader2</h1>
+    <span style="color:#888; font-size:12px;">BTC/JPY</span>
+    <div id="ticker-info">
+      <div class="stat">
+        <div class="stat-label">最終価格</div>
+        <div class="stat-value neutral" id="price">---</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">BID</div>
+        <div class="stat-value up" id="bid">---</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">ASK</div>
+        <div class="stat-value down" id="ask">---</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">出来高</div>
+        <div class="stat-value neutral" id="volume">---</div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div id="chart-container">
+      <div id="chart-title">BTC/JPY — 1分足</div>
+      <div id="chart"></div>
+    </div>
+    <div class="panel" id="balance-panel">
+      <h2>残高</h2>
+      <div class="balance-grid">
+        <div class="balance-item">
+          <div class="balance-currency">JPY</div>
+          <div class="balance-amount neutral" id="jpy-balance">---</div>
+        </div>
+        <div class="balance-item">
+          <div class="balance-currency">BTC</div>
+          <div class="balance-amount neutral" id="btc-balance">---</div>
+        </div>
+      </div>
+    </div>
+    <div class="panel" id="orders-panel">
+      <h2>最近の注文</h2>
+      <table>
+        <thead><tr><th>方向</th><th>サイズ</th><th>価格</th><th>状態</th></tr></thead>
+        <tbody id="orders-body"><tr><td colspan="4" style="color:#888;text-align:center">データなし</td></tr></tbody>
+      </table>
+    </div>
+  </main>
+
+  <div id="status-bar">
+    <span>WebSocket: <span id="ws-status">切断</span></span>
+    <span id="last-update"></span>
+  </div>
+
+  <script>
+    const BASE = `${location.protocol}//${location.host}`;
+    const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/candles`;
+
+    // Chart setup
+    const chartEl = document.getElementById('chart');
+    const chart = LightweightCharts.createChart(chartEl, {
+      width: chartEl.clientWidth,
+      height: chartEl.clientHeight,
+      layout: { background: { color: '#16213e' }, textColor: '#e0e0e0' },
+      grid: { vertLines: { color: '#0f3460' }, horzLines: { color: '#0f3460' } },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+      rightPriceScale: { borderColor: '#0f3460' },
+      timeScale: { borderColor: '#0f3460', timeVisible: true, secondsVisible: false },
+    });
+
+    const candleSeries = chart.addCandlestickSeries({
+      upColor: '#26a69a', downColor: '#ef5350',
+      borderUpColor: '#26a69a', borderDownColor: '#ef5350',
+      wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+    });
+
+    window.addEventListener('resize', () => {
+      chart.applyOptions({ width: chartEl.clientWidth, height: chartEl.clientHeight });
+    });
+
+    // Load historical candles
+    async function loadCandles() {
+      try {
+        const res = await fetch(`${BASE}/api/candles?resolution=60&count=200`);
+        const candles = await res.json();
+        const data = candles.map(c => ({
+          time: Math.floor(new Date(c.open_time).getTime() / 1000),
+          open: parseFloat(c.open), high: parseFloat(c.high),
+          low: parseFloat(c.low), close: parseFloat(c.close),
+        })).sort((a, b) => a.time - b.time);
+        if (data.length > 0) candleSeries.setData(data);
+      } catch (e) { console.warn('candles load failed', e); }
+    }
+
+    // Load ticker
+    async function loadTicker() {
+      try {
+        const res = await fetch(`${BASE}/api/ticker`);
+        const t = await res.json();
+        document.getElementById('price').textContent = Number(t.ltp).toLocaleString('ja-JP');
+        document.getElementById('bid').textContent = Number(t.best_bid).toLocaleString('ja-JP');
+        document.getElementById('ask').textContent = Number(t.best_ask).toLocaleString('ja-JP');
+        document.getElementById('volume').textContent = Number(t.volume_by_product).toFixed(2);
+      } catch (e) { console.warn('ticker load failed', e); }
+    }
+
+    // Load balance
+    async function loadBalance() {
+      try {
+        const res = await fetch(`${BASE}/api/balance`);
+        const balances = await res.json();
+        const jpy = balances.find(b => b.currency_code === 'JPY');
+        const btc = balances.find(b => b.currency_code === 'BTC');
+        if (jpy) document.getElementById('jpy-balance').textContent =
+          Number(jpy.available).toLocaleString('ja-JP', { maximumFractionDigits: 0 });
+        if (btc) document.getElementById('btc-balance').textContent =
+          Number(btc.available).toFixed(6);
+      } catch (e) { console.warn('balance load failed', e); }
+    }
+
+    // Load orders
+    async function loadOrders() {
+      try {
+        const res = await fetch(`${BASE}/api/orders`);
+        const orders = await res.json();
+        const tbody = document.getElementById('orders-body');
+        if (orders.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="4" style="color:#888;text-align:center">データなし</td></tr>';
+          return;
+        }
+        tbody.innerHTML = orders.slice(0, 20).map(o => `
+          <tr>
+            <td class="${o.side.toLowerCase()}">${o.side === 'BUY' ? '買' : '売'}</td>
+            <td>${Number(o.size).toFixed(4)}</td>
+            <td>${o.price ? Number(o.price).toLocaleString('ja-JP') : 'MARKET'}</td>
+            <td style="color:#888;font-size:11px">${o.status}</td>
+          </tr>`).join('');
+      } catch (e) { console.warn('orders load failed', e); }
+    }
+
+    // WebSocket for real-time candles
+    let ws = null;
+    function connectWS() {
+      ws = new WebSocket(WS_URL);
+      const statusEl = document.getElementById('ws-status');
+
+      ws.onopen = () => {
+        statusEl.textContent = '接続中';
+        statusEl.className = 'connected';
+      };
+
+      ws.onmessage = (evt) => {
+        try {
+          const c = JSON.parse(evt.data);
+          const bar = {
+            time: Math.floor(new Date(c.open_time).getTime() / 1000),
+            open: parseFloat(c.open), high: parseFloat(c.high),
+            low: parseFloat(c.low), close: parseFloat(c.close),
+          };
+          candleSeries.update(bar);
+          document.getElementById('price').textContent = Number(c.close).toLocaleString('ja-JP');
+          document.getElementById('last-update').textContent =
+            '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
+        } catch (e) { console.warn('ws parse error', e); }
+      };
+
+      ws.onclose = () => {
+        statusEl.textContent = '切断';
+        statusEl.className = '';
+        setTimeout(connectWS, 3000);
+      };
+
+      ws.onerror = () => ws.close();
+    }
+
+    // Init
+    loadCandles();
+    loadTicker();
+    loadBalance();
+    loadOrders();
+    connectWS();
+
+    // Periodic refresh
+    setInterval(loadTicker, 5000);
+    setInterval(loadBalance, 15000);
+    setInterval(loadOrders, 10000);
+  </script>
+</body>
+</html>

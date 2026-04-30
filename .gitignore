@@ -1,0 +1,14 @@
+/target
+*.db
+*.db-shm
+*.db-wal
+
+# 秘密情報
+.env
+
+# direnv キャッシュ
+.direnv/
+
+# Nix ビルド成果物
+result
+result-*

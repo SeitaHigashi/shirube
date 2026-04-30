@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
 use chrono::{NaiveDate, Utc};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, RwLock};
 use tracing::{info, warn};
 
 use rust_decimal::Decimal;
 
 use crate::alert::AlertManager;
+use crate::config::TradingConfig;
 use crate::exchange::ExchangeClient;
 use crate::risk::manager::RiskManager;
 use crate::risk::{RiskDecision, RiskParams};
@@ -21,6 +22,8 @@ pub struct TradingEngine {
     alert: Arc<AlertManager>,
     /// 最後に日次リセットした UTC 日付
     last_reset_date: Option<NaiveDate>,
+    /// 取引設定（UIから動的変更可能）
+    config: Arc<RwLock<TradingConfig>>,
 }
 
 impl TradingEngine {
@@ -37,7 +40,13 @@ impl TradingEngine {
             product_code,
             alert: Arc::new(AlertManager::new()),
             last_reset_date: None,
+            config: Arc::new(RwLock::new(TradingConfig::default())),
         }
+    }
+
+    pub fn with_config(mut self, config: Arc<RwLock<TradingConfig>>) -> Self {
+        self.config = config;
+        self
     }
 
     pub fn with_alert(mut self, alert: Arc<AlertManager>) -> Self {
@@ -69,6 +78,12 @@ impl TradingEngine {
         match signal {
             Signal::Hold => return Ok(()),
             Signal::Buy { .. } | Signal::Sell { .. } => {}
+        }
+
+        // 最新の設定を risk_manager に反映
+        {
+            let cfg = self.config.read().await;
+            self.risk_manager.update_params(cfg.to_risk_params());
         }
 
         // 現在の残高・ポジションを取得
@@ -214,6 +229,19 @@ mod tests {
     #[tokio::test]
     async fn sell_signal_places_order() {
         let mock_exchange = Arc::new(MockExchangeClient::new());
+        // Sell注文が通るようにBTC残高を事前に設定
+        mock_exchange.set_balances(vec![
+            crate::types::balance::Balance {
+                currency_code: "JPY".to_string(),
+                amount: dec!(1_000_000),
+                available: dec!(1_000_000),
+            },
+            crate::types::balance::Balance {
+                currency_code: "BTC".to_string(),
+                amount: dec!(0.1),
+                available: dec!(0.1),
+            },
+        ]);
         let (tx, _) = broadcast::channel::<Signal>(16);
         let params = RiskParams::default();
         let mut engine = TradingEngine::new(

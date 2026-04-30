@@ -36,6 +36,7 @@ mod tests {
             candle_tx,
             signal_tx,
             news_cache: Arc::new(RwLock::new(scores)),
+            trading_config: Arc::new(RwLock::new(crate::config::TradingConfig::default())),
         }
     }
 

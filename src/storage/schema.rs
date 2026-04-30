@@ -145,6 +145,17 @@ pub async fn migrate(conn: &Connection) -> Result<()> {
             )?;
         }
 
+        if current_version < 6 {
+            c.execute_batch(
+                "CREATE TABLE IF NOT EXISTS app_config (
+                    key     TEXT PRIMARY KEY,
+                    value   TEXT NOT NULL
+                );
+
+                INSERT INTO schema_version(version) VALUES(6);",
+            )?;
+        }
+
         Ok(())
     })
     .await?;

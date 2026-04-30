@@ -34,6 +34,10 @@ impl RiskManager {
         &self.params
     }
 
+    pub fn update_params(&mut self, params: RiskParams) {
+        self.params = params;
+    }
+
     /// Signal から生成した OrderRequest を検証する。
     ///
     /// - `current_btc`: 現在の BTC 保有量（正 = ロング）

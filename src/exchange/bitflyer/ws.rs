@@ -8,7 +8,7 @@ use super::models::{RawExecution, RawTicker};
 use crate::error::{Error, Result};
 use crate::types::{market::Trade, market::Ticker};
 
-const DEFAULT_WS_ENDPOINT: &str = "wss://ws.bitflyer.com/v1";
+const DEFAULT_WS_ENDPOINT: &str = "wss://ws.lightstream.bitflyer.com/json-rpc";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]

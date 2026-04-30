@@ -4,8 +4,6 @@ use tracing::{debug, warn};
 use super::{Indicator, Signal};
 use crate::types::market::Candle;
 
-const SIGNAL_THRESHOLD: f64 = 0.3;
-
 pub struct SignalEngine {
     indicators: Vec<Box<dyn Indicator>>,
     candle_rx: broadcast::Receiver<Candle>,
@@ -34,7 +32,7 @@ impl SignalEngine {
                         .iter_mut()
                         .map(|ind| ind.update(&candle))
                         .collect();
-                    let aggregated = Self::aggregate(&signals);
+                    let aggregated = Self::aggregate(&signals, 0.3);
                     debug!(signal = ?aggregated, "SignalEngine aggregated");
                     let _ = self.signal_tx.send(aggregated);
                 }
@@ -51,7 +49,7 @@ impl SignalEngine {
     /// 複数インジケータのシグナルを合成する（純粋関数）。
     /// - None (ウォームアップ中) は集計から除外
     /// - Buy/Sell の confidence を合算し、閾値を超えた方を採用
-    pub fn aggregate(signals: &[Option<Signal>]) -> Signal {
+    pub fn aggregate(signals: &[Option<Signal>], threshold: f64) -> Signal {
         let mut buy_score = 0.0f64;
         let mut sell_score = 0.0f64;
         let mut active = 0usize;
@@ -82,9 +80,9 @@ impl SignalEngine {
         // Hold カウントは threshold 計算から除外し、Buy/Sell のみで判定
         let scored = signals.iter().flatten().filter(|s| !matches!(s, Signal::Hold)).count();
         let denom = scored.max(1) as f64;
-        if buy_score > sell_score && buy_score / denom >= SIGNAL_THRESHOLD {
+        if buy_score > sell_score && buy_score / denom >= threshold {
             Signal::Buy { price: Decimal::ZERO, confidence: buy_score / denom }
-        } else if sell_score > buy_score && sell_score / denom >= SIGNAL_THRESHOLD {
+        } else if sell_score > buy_score && sell_score / denom >= threshold {
             Signal::Sell { price: Decimal::ZERO, confidence: sell_score / denom }
         } else {
             Signal::Hold
@@ -107,25 +105,25 @@ mod tests {
 
     #[test]
     fn empty_signals_returns_hold() {
-        assert_eq!(SignalEngine::aggregate(&[]), Signal::Hold);
+        assert_eq!(SignalEngine::aggregate(&[], 0.3), Signal::Hold);
     }
 
     #[test]
     fn all_none_returns_hold() {
-        assert_eq!(SignalEngine::aggregate(&[None, None, None]), Signal::Hold);
+        assert_eq!(SignalEngine::aggregate(&[None, None, None], 0.3), Signal::Hold);
     }
 
     #[test]
     fn buy_dominates() {
         let signals = vec![buy(0.8), sell(0.3), Some(Signal::Hold)];
-        let result = SignalEngine::aggregate(&signals);
+        let result = SignalEngine::aggregate(&signals, 0.3);
         assert!(matches!(result, Signal::Buy { .. }));
     }
 
     #[test]
     fn sell_dominates() {
         let signals = vec![buy(0.2), sell(0.9)];
-        let result = SignalEngine::aggregate(&signals);
+        let result = SignalEngine::aggregate(&signals, 0.3);
         assert!(matches!(result, Signal::Sell { .. }));
     }
 
@@ -133,21 +131,21 @@ mod tests {
     fn below_threshold_returns_hold() {
         // buy_score=0.1/3=0.033 < 0.3
         let signals = vec![buy(0.1), Some(Signal::Hold), Some(Signal::Hold)];
-        let result = SignalEngine::aggregate(&signals);
+        let result = SignalEngine::aggregate(&signals, 0.3);
         assert_eq!(result, Signal::Hold);
     }
 
     #[test]
     fn tied_returns_hold() {
         let signals = vec![buy(0.5), sell(0.5)];
-        let result = SignalEngine::aggregate(&signals);
+        let result = SignalEngine::aggregate(&signals, 0.3);
         assert_eq!(result, Signal::Hold);
     }
 
     #[test]
     fn single_strong_buy() {
         let signals = vec![buy(0.9)];
-        let result = SignalEngine::aggregate(&signals);
+        let result = SignalEngine::aggregate(&signals, 0.3);
         assert!(matches!(result, Signal::Buy { .. }));
     }
 

@@ -47,7 +47,7 @@
           OPENSSL_NO_VENDOR = "1";
 
           # Ollama モデル設定
-          OLLAMA_MODEL = "gemma4:e4b";
+          OLLAMA_MODEL = "gemma4:latest";
 
           shellHook = ''
             echo "trader2 dev environment ready"

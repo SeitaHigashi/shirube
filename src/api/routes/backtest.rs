@@ -104,17 +104,19 @@ pub async fn run_backtest(
         ));
     }
 
+    let tc = state.trading_config.read().await.clone();
     let indicators: Vec<Box<dyn Indicator>> = vec![
-        Box::new(Sma::new(20)),
-        Box::new(Ema::new(20)),
-        Box::new(Rsi::new(14)),
-        Box::new(Macd::new(12, 26, 9)),
-        Box::new(Bollinger::new(20, 2.0)),
+        Box::new(Sma::new(tc.sma_period)),
+        Box::new(Ema::new(tc.ema_period)),
+        Box::new(Rsi::new(tc.rsi_period)),
+        Box::new(Macd::new(tc.macd_fast, tc.macd_slow, tc.macd_signal)),
+        Box::new(Bollinger::new(tc.bollinger_period, tc.bollinger_std)),
     ];
+    let risk_params = tc.to_risk_params();
 
     let simulator = Simulator::new(config, state.db.clone());
     let report = simulator
-        .run(candles, indicators, RiskParams::default())
+        .run(candles, indicators, risk_params)
         .await
         .map_err(|e| {
             (
@@ -181,6 +183,9 @@ mod tests {
             candle_tx,
             signal_tx,
             news_cache: std::sync::Arc::new(tokio::sync::RwLock::new(vec![])),
+            trading_config: std::sync::Arc::new(tokio::sync::RwLock::new(
+                crate::config::TradingConfig::default(),
+            )),
         };
         let app = Router::new()
             .route(

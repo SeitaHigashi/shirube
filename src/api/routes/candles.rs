@@ -69,6 +69,9 @@ mod tests {
             candle_tx,
             signal_tx,
             news_cache: std::sync::Arc::new(tokio::sync::RwLock::new(vec![])),
+            trading_config: std::sync::Arc::new(tokio::sync::RwLock::new(
+                crate::config::TradingConfig::default(),
+            )),
         };
         let app = Router::new()
             .route("/api/candles", axum::routing::get(get_candles))

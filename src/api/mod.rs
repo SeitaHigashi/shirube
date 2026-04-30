@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use tokio::sync::{broadcast, RwLock};
 
+use crate::config::TradingConfig;
 use crate::exchange::ExchangeClient;
 use crate::news::analyzer::SentimentScore;
 use crate::signal::Signal;
@@ -20,4 +21,6 @@ pub struct AppState {
     pub signal_tx: broadcast::Sender<Signal>,
     /// 最新のニュースセンチメントスコアキャッシュ
     pub news_cache: Arc<RwLock<Vec<SentimentScore>>>,
+    /// 取引設定（UIから変更可能）
+    pub trading_config: Arc<RwLock<TradingConfig>>,
 }

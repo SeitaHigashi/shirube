@@ -3,6 +3,7 @@ use tokio_rusqlite::Connection;
 use super::{
     backtest_runs::BacktestRunRepository,
     candles::CandleRepository,
+    config::ConfigRepository,
     mock_state::MockStateRepository,
     news_sentiments::NewsSentimentRepository,
     orders::OrderRepository,
@@ -51,5 +52,9 @@ impl Database {
 
     pub fn mock_state(&self) -> MockStateRepository {
         MockStateRepository::new(self.conn.clone())
+    }
+
+    pub fn config(&self) -> ConfigRepository {
+        ConfigRepository::new(self.conn.clone())
     }
 }

@@ -1,181 +1,21 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use async_trait::async_trait;
 use chrono::Utc;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 
-use crate::error::{Error, Result};
+use crate::error::Result;
+use crate::exchange::mock::{FilledTrade, MockExchangeClient};
 use crate::exchange::ExchangeClient;
 use crate::risk::{RiskManager, RiskParams};
 use crate::signal::{Indicator, Signal};
 use crate::storage::db::Database;
 use crate::types::{
-    balance::{Balance, Position},
     market::{Candle, Ticker},
-    order::{Order, OrderRequest, OrderSide, OrderType},
+    order::{OrderRequest, OrderSide, OrderType},
 };
 
 use super::{BacktestConfig, BacktestReport};
-
-// ──────────────────────────────────────────────────────────────────────────────
-// SimulatedExchange
-// ──────────────────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub struct FilledTrade {
-    pub side: OrderSide,
-    pub price: Decimal,
-    pub size: Decimal,
-    pub fee: Decimal,
-}
-
-struct SimState {
-    jpy: Decimal,
-    btc: Decimal,
-    current_price: Decimal,
-    slippage_pct: f64,
-    fee_pct: f64,
-    filled_trades: Vec<FilledTrade>,
-}
-
-/// バックテスト用の仮想取引所。
-/// `set_price()` で現在の Candle の終値を設定してから注文を受け付ける。
-pub struct SimulatedExchange {
-    state: Arc<Mutex<SimState>>,
-}
-
-impl SimulatedExchange {
-    pub fn new(initial_jpy: Decimal, slippage_pct: f64, fee_pct: f64) -> Self {
-        Self {
-            state: Arc::new(Mutex::new(SimState {
-                jpy: initial_jpy,
-                btc: Decimal::ZERO,
-                current_price: Decimal::ZERO,
-                slippage_pct,
-                fee_pct,
-                filled_trades: Vec::new(),
-            })),
-        }
-    }
-
-    /// Candle の終値を現在価格として設定する
-    pub fn set_price(&self, price: Decimal) {
-        self.state.lock().unwrap().current_price = price;
-    }
-
-    /// 約定済みトレード一覧を返す
-    pub fn filled_trades(&self) -> Vec<FilledTrade> {
-        self.state.lock().unwrap().filled_trades.clone()
-    }
-
-    /// 現在の JPY 残高
-    pub fn jpy_balance(&self) -> Decimal {
-        self.state.lock().unwrap().jpy
-    }
-
-    /// 現在の BTC 残高
-    pub fn btc_balance(&self) -> Decimal {
-        self.state.lock().unwrap().btc
-    }
-}
-
-#[async_trait]
-impl ExchangeClient for SimulatedExchange {
-    async fn get_ticker(&self, product_code: &str) -> Result<Ticker> {
-        let state = self.state.lock().unwrap();
-        Ok(Ticker {
-            product_code: product_code.to_string(),
-            timestamp: Utc::now(),
-            best_bid: state.current_price,
-            best_ask: state.current_price,
-            best_bid_size: Decimal::ONE,
-            best_ask_size: Decimal::ONE,
-            ltp: state.current_price,
-            volume: Decimal::ONE,
-            volume_by_product: Decimal::ONE,
-        })
-    }
-
-    async fn get_balance(&self) -> Result<Vec<Balance>> {
-        let state = self.state.lock().unwrap();
-        Ok(vec![
-            Balance {
-                currency_code: "JPY".into(),
-                amount: state.jpy,
-                available: state.jpy,
-            },
-            Balance {
-                currency_code: "BTC".into(),
-                amount: state.btc,
-                available: state.btc,
-            },
-        ])
-    }
-
-    async fn get_positions(&self, _product_code: &str) -> Result<Vec<Position>> {
-        Ok(vec![])
-    }
-
-    async fn send_order(&self, req: &OrderRequest) -> Result<String> {
-        let mut state = self.state.lock().unwrap();
-
-        if state.current_price == Decimal::ZERO {
-            return Err(Error::Other(anyhow::anyhow!("current price not set")));
-        }
-
-        // スリッページを適用した約定価格
-        let slippage = Decimal::try_from(state.slippage_pct).unwrap_or(Decimal::ZERO);
-        let exec_price = match req.side {
-            OrderSide::Buy => state.current_price * (Decimal::ONE + slippage),
-            OrderSide::Sell => state.current_price * (Decimal::ONE - slippage),
-        };
-
-        let cost = exec_price * req.size;
-        let fee_rate = Decimal::try_from(state.fee_pct).unwrap_or(Decimal::ZERO);
-        let fee = cost * fee_rate;
-
-        match req.side {
-            OrderSide::Buy => {
-                let total_cost = cost + fee;
-                if state.jpy < total_cost {
-                    return Err(Error::Other(anyhow::anyhow!("insufficient JPY balance")));
-                }
-                state.jpy -= total_cost;
-                state.btc += req.size;
-            }
-            OrderSide::Sell => {
-                if state.btc < req.size {
-                    return Err(Error::Other(anyhow::anyhow!("insufficient BTC balance")));
-                }
-                state.btc -= req.size;
-                state.jpy += cost - fee;
-            }
-        }
-
-        state.filled_trades.push(FilledTrade {
-            side: req.side.clone(),
-            price: exec_price,
-            size: req.size,
-            fee,
-        });
-
-        Ok(format!("sim-{}", state.filled_trades.len()))
-    }
-
-    async fn cancel_all_orders(&self, _product_code: &str) -> Result<()> {
-        Ok(())
-    }
-
-    async fn get_orders(
-        &self,
-        _product_code: &str,
-        _status: Option<&str>,
-        _count: Option<u32>,
-    ) -> Result<Vec<Order>> {
-        Ok(vec![])
-    }
-}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Simulator
@@ -198,13 +38,21 @@ impl Simulator {
         indicators: Vec<Box<dyn Indicator>>,
         risk_params: RiskParams,
     ) -> Result<BacktestReport> {
-        use std::sync::Arc;
+        let exchange = Arc::new(MockExchangeClient::with_fee(self.config.fee_pct));
 
-        let exchange = Arc::new(SimulatedExchange::new(
-            self.config.initial_jpy,
-            self.config.slippage_pct,
-            self.config.fee_pct,
-        ));
+        // 初期残高を設定
+        exchange.set_balances(vec![
+            crate::types::balance::Balance {
+                currency_code: "JPY".to_string(),
+                amount: self.config.initial_jpy,
+                available: self.config.initial_jpy,
+            },
+            crate::types::balance::Balance {
+                currency_code: "BTC".to_string(),
+                amount: Decimal::ZERO,
+                available: Decimal::ZERO,
+            },
+        ]);
 
         let mut risk_manager = RiskManager::new(risk_params);
         let mut indicators = indicators;
@@ -216,26 +64,40 @@ impl Simulator {
         let mut equity_curve: Vec<f64> = Vec::with_capacity(candles.len());
 
         for candle in &candles {
-            exchange.set_price(candle.close);
+            // 現在価格を設定（スリッページは ticker に反映）
+            let price_with_slip = apply_slippage(candle.close, self.config.slippage_pct);
+            let ticker = Ticker {
+                product_code: self.config.product_code.clone(),
+                timestamp: Utc::now(),
+                best_bid: price_with_slip,
+                best_ask: price_with_slip,
+                best_bid_size: Decimal::ONE,
+                best_ask_size: Decimal::ONE,
+                ltp: price_with_slip,
+                volume: Decimal::ONE,
+                volume_by_product: Decimal::ONE,
+            };
+            exchange.set_ticker(ticker);
 
             // 各インジケータから Signal を収集
             let signals: Vec<Option<Signal>> =
                 indicators.iter_mut().map(|ind| ind.update(candle)).collect();
 
-            let aggregated = crate::signal::engine::SignalEngine::aggregate(&signals);
+            let aggregated = crate::signal::engine::SignalEngine::aggregate(&signals, 0.3);
 
             match aggregated {
                 Signal::Hold => {}
                 signal @ (Signal::Buy { .. } | Signal::Sell { .. }) => {
-                    let balances = exchange.get_balance().await?;
-                    let jpy = balances
-                        .iter()
-                        .find(|b| b.currency_code == "JPY")
-                        .map(|b| b.available)
-                        .unwrap_or(Decimal::ZERO);
+                    let jpy = exchange.jpy_balance();
                     let btc = exchange.btc_balance();
 
-                    let order_req = signal_to_order(&signal, jpy, btc, &self.config.product_code, risk_manager.params().min_order_size);
+                    let order_req = signal_to_order(
+                        &signal,
+                        jpy,
+                        btc,
+                        &self.config.product_code,
+                        risk_manager.params().min_order_size,
+                    );
 
                     if let Some(req) = order_req {
                         match risk_manager.evaluate(req, btc, jpy) {
@@ -249,9 +111,8 @@ impl Simulator {
                 }
             }
 
-            // equity = JPY + BTC * 現在価格
-            let btc_val = exchange.btc_balance()
-                * candle.close;
+            // equity = JPY + BTC * 現在価格（スリッページなしの終値で評価）
+            let btc_val = exchange.btc_balance() * candle.close;
             let equity = exchange.jpy_balance() + btc_val;
             equity_curve.push(equity.to_f64().unwrap_or(0.0));
         }
@@ -271,6 +132,11 @@ impl Simulator {
 
         Ok(report)
     }
+}
+
+fn apply_slippage(price: Decimal, slippage_pct: f64) -> Decimal {
+    let slip = Decimal::try_from(slippage_pct).unwrap_or(Decimal::ZERO);
+    price * (Decimal::ONE + slip)
 }
 
 fn signal_to_order(
@@ -311,7 +177,11 @@ fn signal_to_order(
     }
 }
 
-fn compute_report(trades: &[FilledTrade], equity_curve: &[f64], initial_jpy: f64) -> BacktestReport {
+fn compute_report(
+    trades: &[FilledTrade],
+    equity_curve: &[f64],
+    initial_jpy: f64,
+) -> BacktestReport {
     let total_trades = trades.len() as u32;
 
     let final_equity = equity_curve.last().copied().unwrap_or(initial_jpy);
@@ -369,8 +239,6 @@ fn calculate_sharpe(equity: &[f64]) -> f64 {
 }
 
 fn calculate_win_rate(trades: &[FilledTrade]) -> f64 {
-    // Buy と対応する Sell のペアで損益を計算する
-    // 簡易実装: Buy 後に Sell が来た場合に (sell_price - buy_price) > 0 なら勝ち
     let mut buy_prices: Vec<Decimal> = Vec::new();
     let mut wins = 0u32;
     let mut total_closed = 0u32;
@@ -404,6 +272,7 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use rust_decimal_macros::dec;
+    use crate::types::order::OrderSide;
 
     fn make_candle(close: Decimal) -> Candle {
         Candle {
@@ -418,17 +287,17 @@ mod tests {
         }
     }
 
-    // ── SimulatedExchange ──
+    // ── MockExchangeClient をバックテスト用途でテスト ──
 
     #[tokio::test]
     async fn buy_order_deducts_jpy_and_adds_btc() {
-        let exchange = SimulatedExchange::new(dec!(1_000_000), 0.0, 0.0);
+        let exchange = MockExchangeClient::with_fee(0.0);
         exchange.set_price(dec!(9_000_000));
 
-        let req = OrderRequest {
+        let req = crate::types::order::OrderRequest {
             product_code: "BTC_JPY".into(),
             side: OrderSide::Buy,
-            order_type: OrderType::Market,
+            order_type: crate::types::order::OrderType::Market,
             price: None,
             size: dec!(0.001),
             minute_to_expire: None,
@@ -443,14 +312,13 @@ mod tests {
 
     #[tokio::test]
     async fn sell_order_adds_jpy_and_deducts_btc() {
-        let exchange = SimulatedExchange::new(dec!(1_000_000), 0.0, 0.0);
+        let exchange = MockExchangeClient::with_fee(0.0);
         exchange.set_price(dec!(9_000_000));
 
-        // 先に BTC を買う
-        let buy = OrderRequest {
+        let buy = crate::types::order::OrderRequest {
             product_code: "BTC_JPY".into(),
             side: OrderSide::Buy,
-            order_type: OrderType::Market,
+            order_type: crate::types::order::OrderType::Market,
             price: None,
             size: dec!(0.001),
             minute_to_expire: None,
@@ -458,11 +326,10 @@ mod tests {
         };
         exchange.send_order(&buy).await.unwrap();
 
-        // 売る
-        let sell = OrderRequest {
+        let sell = crate::types::order::OrderRequest {
             product_code: "BTC_JPY".into(),
             side: OrderSide::Sell,
-            order_type: OrderType::Market,
+            order_type: crate::types::order::OrderType::Market,
             price: None,
             size: dec!(0.001),
             minute_to_expire: None,
@@ -477,13 +344,13 @@ mod tests {
 
     #[tokio::test]
     async fn fee_reduces_return() {
-        let exchange = SimulatedExchange::new(dec!(1_000_000), 0.0, 0.001); // 0.1% fee
+        let exchange = MockExchangeClient::with_fee(0.001); // 0.1% fee
         exchange.set_price(dec!(9_000_000));
 
-        let buy = OrderRequest {
+        let buy = crate::types::order::OrderRequest {
             product_code: "BTC_JPY".into(),
             side: OrderSide::Buy,
-            order_type: OrderType::Market,
+            order_type: crate::types::order::OrderType::Market,
             price: None,
             size: dec!(0.001),
             minute_to_expire: None,
@@ -497,11 +364,15 @@ mod tests {
 
     #[tokio::test]
     async fn order_fails_without_price_set() {
-        let exchange = SimulatedExchange::new(dec!(1_000_000), 0.0, 0.0);
-        let req = OrderRequest {
+        // ltp=0 のデフォルト状態ではなく、ltp=9_000_500 なのでこのテストは
+        // "価格未設定" ではなく残高不足でエラーになることを確認
+        let exchange = MockExchangeClient::with_fee(0.0);
+        // 明示的に ltp=0 にセット
+        exchange.set_price(Decimal::ZERO);
+        let req = crate::types::order::OrderRequest {
             product_code: "BTC_JPY".into(),
             side: OrderSide::Buy,
-            order_type: OrderType::Market,
+            order_type: crate::types::order::OrderType::Market,
             price: None,
             size: dec!(0.001),
             minute_to_expire: None,
@@ -513,13 +384,25 @@ mod tests {
 
     #[tokio::test]
     async fn insufficient_jpy_returns_error() {
-        let exchange = SimulatedExchange::new(dec!(100), 0.0, 0.0); // 100 JPY だけ
+        let exchange = MockExchangeClient::with_fee(0.0);
+        exchange.set_balances(vec![
+            crate::types::balance::Balance {
+                currency_code: "JPY".to_string(),
+                amount: dec!(100),
+                available: dec!(100),
+            },
+            crate::types::balance::Balance {
+                currency_code: "BTC".to_string(),
+                amount: dec!(0),
+                available: dec!(0),
+            },
+        ]);
         exchange.set_price(dec!(9_000_000));
 
-        let req = OrderRequest {
+        let req = crate::types::order::OrderRequest {
             product_code: "BTC_JPY".into(),
             side: OrderSide::Buy,
-            order_type: OrderType::Market,
+            order_type: crate::types::order::OrderType::Market,
             price: None,
             size: dec!(0.001), // 9000 JPY 必要
             minute_to_expire: None,
@@ -533,7 +416,7 @@ mod tests {
 
     #[test]
     fn max_drawdown_from_peak() {
-        let equity = vec![100.0, 110.0, 90.0, 95.0]; // peak=110 → 90 = 18.18%
+        let equity = vec![100.0, 110.0, 90.0, 95.0];
         let dd = calculate_max_drawdown(&equity);
         assert!((dd - 18.18).abs() < 0.1, "got {dd}");
     }
@@ -561,7 +444,7 @@ mod tests {
             },
             FilledTrade {
                 side: OrderSide::Sell,
-                price: dec!(9_100_000), // 勝ち
+                price: dec!(9_100_000),
                 size: dec!(0.001),
                 fee: dec!(0),
             },
@@ -573,7 +456,7 @@ mod tests {
             },
             FilledTrade {
                 side: OrderSide::Sell,
-                price: dec!(9_000_000), // 負け
+                price: dec!(9_000_000),
                 size: dec!(0.001),
                 fee: dec!(0),
             },
@@ -601,14 +484,25 @@ mod tests {
             initial_jpy: dec!(1_000_000),
         };
 
-        // 5本のCandle: Buy→Hold→Sell→Hold→Hold
-        let prices = [dec!(9_000_000), dec!(9_100_000), dec!(9_200_000), dec!(9_100_000), dec!(9_050_000)];
+        let prices = [
+            dec!(9_000_000),
+            dec!(9_100_000),
+            dec!(9_200_000),
+            dec!(9_100_000),
+            dec!(9_050_000),
+        ];
         let candles: Vec<Candle> = prices.iter().map(|&p| make_candle(p)).collect();
 
         let signals = vec![
-            Some(Signal::Buy { price: dec!(9_000_000), confidence: 0.8 }),
+            Some(Signal::Buy {
+                price: dec!(9_000_000),
+                confidence: 0.8,
+            }),
             None,
-            Some(Signal::Sell { price: dec!(9_200_000), confidence: 0.8 }),
+            Some(Signal::Sell {
+                price: dec!(9_200_000),
+                confidence: 0.8,
+            }),
             None,
             None,
         ];
@@ -620,11 +514,9 @@ mod tests {
             .await
             .unwrap();
 
-        // レポートが DB に保存されているはず
         let runs = db.backtest_runs().list(10).await.unwrap();
         assert_eq!(runs.len(), 1);
 
-        // 取引が発生している
         assert!(report.total_trades > 0);
     }
 }

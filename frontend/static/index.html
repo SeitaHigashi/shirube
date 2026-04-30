@@ -78,6 +78,19 @@
     #news-list::-webkit-scrollbar-track { background: transparent; }
     #news-list::-webkit-scrollbar-thumb { background: #0f3460; border-radius: 2px; }
     .news-time { font-size: 10px; color: #555; white-space: nowrap; }
+    /* Settings panel */
+    #settings-section { background: #16213e; margin: 12px; padding: 16px; border-radius: 8px; }
+    #settings-section h2 { font-size: 13px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+    #settings-section h3 { font-size: 12px; color: #888; margin: 12px 0 8px; }
+    .settings-grid { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+    .settings-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #888; }
+    .settings-field input { background: #0f3460; border: 1px solid #26a69a; color: #e0e0e0; padding: 4px 8px; border-radius: 4px; width: 160px; }
+    #settings-save-btn { background: #26a69a; color: #fff; border: none; padding: 8px 20px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+    #settings-save-btn:hover { background: #1e8a7e; }
+    #settings-save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    #settings-msg { font-size: 12px; margin-left: 12px; }
+    #settings-msg.ok { color: #26a69a; }
+    #settings-msg.err { color: #ef5350; }
   </style>
 </head>
 <body>
@@ -139,6 +152,40 @@
       <span id="news-avg-score" class="neutral">---</span>
     </div>
     <div id="news-list"><span style="color:#888;font-size:12px">データなし</span></div>
+  </section>
+
+  <section id="settings-section">
+    <h2>取引設定</h2>
+
+    <h3>リスク管理</h3>
+    <div class="settings-grid">
+      <label class="settings-field">最大BTC保有量<input type="number" id="s-max-position-btc" step="0.001" min="0.001"></label>
+      <label class="settings-field">日次最大損失率<input type="number" id="s-max-daily-drawdown" step="0.01" min="0" max="1"></label>
+      <label class="settings-field">ストップロス率<input type="number" id="s-stop-loss-pct" step="0.01" min="0" max="1"></label>
+      <label class="settings-field">最小注文サイズ(BTC)<input type="number" id="s-min-order-size" step="0.001" min="0.001"></label>
+    </div>
+
+    <h3>シグナル</h3>
+    <div class="settings-grid">
+      <label class="settings-field">シグナル閾値<input type="number" id="s-signal-threshold" step="0.05" min="0" max="1"></label>
+      <label class="settings-field">TA重み<input type="number" id="s-ta-weight" step="0.05" min="0" max="1"></label>
+      <label class="settings-field">センチメント重み<input type="number" id="s-sentiment-weight" step="0.05" min="0" max="1"></label>
+    </div>
+
+    <h3>インジケータ</h3>
+    <div class="settings-grid">
+      <label class="settings-field">SMA期間<input type="number" id="s-sma-period" min="2" step="1"></label>
+      <label class="settings-field">EMA期間<input type="number" id="s-ema-period" min="2" step="1"></label>
+      <label class="settings-field">RSI期間<input type="number" id="s-rsi-period" min="2" step="1"></label>
+      <label class="settings-field">MACD Fast<input type="number" id="s-macd-fast" min="2" step="1"></label>
+      <label class="settings-field">MACD Slow<input type="number" id="s-macd-slow" min="3" step="1"></label>
+      <label class="settings-field">MACDシグナル<input type="number" id="s-macd-signal" min="2" step="1"></label>
+      <label class="settings-field">ボリンジャー期間<input type="number" id="s-bollinger-period" min="2" step="1"></label>
+      <label class="settings-field">ボリンジャー標準偏差<input type="number" id="s-bollinger-std" step="0.1" min="0.1"></label>
+    </div>
+
+    <button id="settings-save-btn">保存</button>
+    <span id="settings-msg"></span>
   </section>
 
   <section id="backtest-section">
@@ -520,6 +567,80 @@
 
     loadNews();
     setInterval(loadNews, 30000);
+
+    // ── Settings ──────────────────────────────────────────────────────────────
+
+    function setSettingsMsg(text, isOk) {
+      const el = document.getElementById('settings-msg');
+      el.textContent = text;
+      el.className = isOk ? 'ok' : 'err';
+      if (isOk) setTimeout(() => { el.textContent = ''; }, 3000);
+    }
+
+    async function loadSettings() {
+      try {
+        const res = await fetch(`${BASE}/api/config`);
+        if (!res.ok) { setSettingsMsg('設定の読み込みに失敗しました', false); return; }
+        const cfg = await res.json();
+        document.getElementById('s-max-position-btc').value = cfg.max_position_btc;
+        document.getElementById('s-max-daily-drawdown').value = cfg.max_daily_drawdown;
+        document.getElementById('s-stop-loss-pct').value = cfg.stop_loss_pct;
+        document.getElementById('s-min-order-size').value = cfg.min_order_size;
+        document.getElementById('s-signal-threshold').value = cfg.signal_threshold;
+        document.getElementById('s-ta-weight').value = cfg.ta_weight;
+        document.getElementById('s-sentiment-weight').value = cfg.sentiment_weight;
+        document.getElementById('s-sma-period').value = cfg.sma_period;
+        document.getElementById('s-ema-period').value = cfg.ema_period;
+        document.getElementById('s-rsi-period').value = cfg.rsi_period;
+        document.getElementById('s-macd-fast').value = cfg.macd_fast;
+        document.getElementById('s-macd-slow').value = cfg.macd_slow;
+        document.getElementById('s-macd-signal').value = cfg.macd_signal;
+        document.getElementById('s-bollinger-period').value = cfg.bollinger_period;
+        document.getElementById('s-bollinger-std').value = cfg.bollinger_std;
+      } catch (e) { setSettingsMsg('設定の読み込みに失敗しました: ' + e.message, false); }
+    }
+
+    async function saveSettings() {
+      const btn = document.getElementById('settings-save-btn');
+      btn.disabled = true;
+      const cfg = {
+        max_position_btc: parseFloat(document.getElementById('s-max-position-btc').value),
+        max_daily_drawdown: parseFloat(document.getElementById('s-max-daily-drawdown').value),
+        stop_loss_pct: parseFloat(document.getElementById('s-stop-loss-pct').value),
+        min_order_size: parseFloat(document.getElementById('s-min-order-size').value),
+        signal_threshold: parseFloat(document.getElementById('s-signal-threshold').value),
+        ta_weight: parseFloat(document.getElementById('s-ta-weight').value),
+        sentiment_weight: parseFloat(document.getElementById('s-sentiment-weight').value),
+        sma_period: parseInt(document.getElementById('s-sma-period').value),
+        ema_period: parseInt(document.getElementById('s-ema-period').value),
+        rsi_period: parseInt(document.getElementById('s-rsi-period').value),
+        macd_fast: parseInt(document.getElementById('s-macd-fast').value),
+        macd_slow: parseInt(document.getElementById('s-macd-slow').value),
+        macd_signal: parseInt(document.getElementById('s-macd-signal').value),
+        bollinger_period: parseInt(document.getElementById('s-bollinger-period').value),
+        bollinger_std: parseFloat(document.getElementById('s-bollinger-std').value),
+      };
+      try {
+        const res = await fetch(`${BASE}/api/config`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(cfg),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          setSettingsMsg('エラー: ' + (err.error || res.status), false);
+          return;
+        }
+        setSettingsMsg('保存しました', true);
+      } catch (e) {
+        setSettingsMsg('通信エラー: ' + e.message, false);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    document.getElementById('settings-save-btn').addEventListener('click', saveSettings);
+    loadSettings();
 
     // Timezone toggle
     document.getElementById('tz-toggle').addEventListener('click', () => {

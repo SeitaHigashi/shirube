@@ -380,27 +380,17 @@
     const macdHistSeries   = macdChart.addHistogramSeries({ color: '#26a69a', priceLineVisible: false, lastValueVisible: false });
 
     // Sync time scales between sub-charts and main chart
-    let _syncingTimeRange = false;
-    chart.timeScale().subscribeVisibleTimeRangeChange(range => {
-      if (_syncingTimeRange || !range) return;
-      _syncingTimeRange = true;
-      rsiChart.timeScale().setVisibleRange(range);
-      macdChart.timeScale().setVisibleRange(range);
-      _syncingTimeRange = false;
+    chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+      if (range) {
+        rsiChart.timeScale().setVisibleLogicalRange(range);
+        macdChart.timeScale().setVisibleLogicalRange(range);
+      }
     });
-    rsiChart.timeScale().subscribeVisibleTimeRangeChange(range => {
-      if (_syncingTimeRange || !range) return;
-      _syncingTimeRange = true;
-      chart.timeScale().setVisibleRange(range);
-      macdChart.timeScale().setVisibleRange(range);
-      _syncingTimeRange = false;
+    rsiChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+      if (range) chart.timeScale().setVisibleLogicalRange(range);
     });
-    macdChart.timeScale().subscribeVisibleTimeRangeChange(range => {
-      if (_syncingTimeRange || !range) return;
-      _syncingTimeRange = true;
-      chart.timeScale().setVisibleRange(range);
-      rsiChart.timeScale().setVisibleRange(range);
-      _syncingTimeRange = false;
+    macdChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+      if (range) chart.timeScale().setVisibleLogicalRange(range);
     });
 
     // ── Resize ────────────────────────────────────────────────────────────────
@@ -558,12 +548,14 @@
       rsiLabelEl.style.display = showRSI ? 'block' : 'none';
       if (showRSI) {
         const rsi = calcRSI(closes, currentCfg.rsi_period);
-        rsiSeries.setData(rsi.map(({ idx, value }) => ({ time: times[idx], value })));
-        // Static overbought/oversold reference lines
+        // Pad with null for missing initial periods so logical indices align with main chart
+        const rsiPad = times.slice(0, times.length - rsi.length).map(t => ({ time: t, value: null }));
+        rsiSeries.setData([...rsiPad, ...rsi.map(({ idx, value }) => ({ time: times[idx], value }))]);
+        const obPad = rsiPad.map(({ time }) => ({ time, value: null }));
         const obData = rsi.map(({ idx }) => ({ time: times[idx], value: 70 }));
         const osData = rsi.map(({ idx }) => ({ time: times[idx], value: 30 }));
-        rsiOBSeries.setData(obData);
-        rsiOSSeries.setData(osData);
+        rsiOBSeries.setData([...obPad, ...obData]);
+        rsiOSSeries.setData([...obPad, ...osData]);
       }
 
       // MACD sub-chart
@@ -574,12 +566,14 @@
           closes,
           currentCfg.macd_fast, currentCfg.macd_slow, currentCfg.macd_signal
         );
-        macdLineSeries.setData(macd.map(({ idx, value }) => ({ time: times[idx], value })));
-        macdSignalSeries.setData(sig.map(({ idx, value }) => ({ time: times[idx], value })));
-        macdHistSeries.setData(hist.map(({ idx, value }) => ({
+        const macdPad = times.slice(0, times.length - macd.length).map(t => ({ time: t, value: null }));
+        const sigPad  = times.slice(0, times.length - sig.length).map(t => ({ time: t, value: null }));
+        macdLineSeries.setData([...macdPad, ...macd.map(({ idx, value }) => ({ time: times[idx], value }))]);
+        macdSignalSeries.setData([...sigPad, ...sig.map(({ idx, value }) => ({ time: times[idx], value }))]);
+        macdHistSeries.setData([...sigPad, ...hist.map(({ idx, value }) => ({
           time: times[idx], value,
           color: value >= 0 ? '#26a69a' : '#ef5350',
-        })));
+        }))]);
       }
 
       resizeCharts();

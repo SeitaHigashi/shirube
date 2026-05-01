@@ -740,6 +740,8 @@
     // ── Load historical candles ───────────────────────────────────────────────
 
     async function loadCandles() {
+      isLoadingHistory = false;
+      hasMoreHistory = true;
       try {
         const res = await fetch(`${BASE}/api/candles?resolution=60&count=200`);
         const candles = await res.json();

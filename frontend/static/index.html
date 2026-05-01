@@ -566,14 +566,23 @@
         : price > bbLast.upper ? 'SELL'
         : 'HOLD';
 
-      const signals = [smaSignal, emaSignal, rsiSignal, macdSignal, bbSignal].filter(s => s != null);
-      const scores = signals.map(s => s === 'BUY' ? 1 : s === 'SELL' ? -1 : 0);
-      const avg = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
-      const composite = avg > 0.2 ? 'BUY' : avg < -0.2 ? 'SELL' : 'HOLD';
-      const confidence = Math.abs(avg);
+      const taSignals = [smaSignal, emaSignal, rsiSignal, macdSignal, bbSignal].filter(s => s != null);
+      const taScores = taSignals.map(s => s === 'BUY' ? 1 : s === 'SELL' ? -1 : 0);
+      const taAvg = taScores.length > 0 ? taScores.reduce((a, b) => a + b, 0) / taScores.length : 0;
+
+      // AI sentiment: -1.0〜+1.0 をそのまま使用
+      const sentScore = latestSentimentAvg ?? 0;
+      const sentSignal = sentScore > 0.1 ? 'BUY' : sentScore < -0.1 ? 'SELL' : 'HOLD';
+
+      // 重み付き合成: TA 0.8 + sentiment 0.2
+      const combined = taAvg * 0.8 + sentScore * 0.2;
+      const composite = combined > 0.2 ? 'BUY' : combined < -0.2 ? 'SELL' : 'HOLD';
+      const confidence = Math.abs(combined);
 
       return { smaSignal, smaVal, emaSignal, emaVal, rsiVal, rsiSignal,
-               macdHistVal, macdSignal, bbLast, bbSignal, composite, confidence, price };
+               macdHistVal, macdSignal, bbLast, bbSignal,
+               sentScore, sentSignal,
+               composite, confidence, price };
     }
 
     function signalClass(s) {
@@ -631,6 +640,11 @@
           detail: st.bbLast != null ? (st.price < st.bbLast.lower ? '下限割れ' : st.price > st.bbLast.upper ? '上限突破' : '中間帯') : '---',
           signal: st.bbSignal,
         },
+        {
+          name: 'AI',
+          detail: latestSentimentAvg != null ? `センチメント ${st.sentScore > 0 ? '+' : ''}${st.sentScore.toFixed(2)}` : 'データなし',
+          signal: latestSentimentAvg != null ? st.sentSignal : null,
+        },
       ];
 
       rowsEl.innerHTML = rows.map(r => `
@@ -644,6 +658,7 @@
     // ── Global state ──────────────────────────────────────────────────────────
 
     let candleData = [];
+    let latestSentimentAvg = null; // AI news sentiment average (-1.0 to +1.0)
     let currentCfg = {
       sma_period: 20, ema_period: 20, rsi_period: 14,
       macd_fast: 12, macd_slow: 26, macd_signal: 9,
@@ -1105,6 +1120,9 @@
         const avg = items.reduce((s, i) => s + i.score, 0) / items.length;
         avgEl.textContent = avg.toFixed(2);
         avgEl.className = avg > 0.1 ? 'up' : avg < -0.1 ? 'down' : 'neutral';
+
+        latestSentimentAvg = avg;
+        updateSignalPanel();
 
         updateNewsMarkers(items);
 

@@ -117,7 +117,7 @@ async fn main() -> anyhow::Result<()> {
 
     // インジケータ構築（起動時の config から）
     let init_cfg = trading_config.read().await.clone();
-    let indicators: Vec<Box<dyn Indicator>> = vec![
+    let mut indicators: Vec<Box<dyn Indicator>> = vec![
         Box::new(Sma::new(init_cfg.sma_period)),
         Box::new(Ema::new(init_cfg.ema_period)),
         Box::new(Rsi::new(init_cfg.rsi_period)),
@@ -126,13 +126,41 @@ async fn main() -> anyhow::Result<()> {
     ];
     let init_risk_params = init_cfg.to_risk_params();
 
+    // インジケータのウォームアップ: 起動前にDBの過去Candleを流し込む
+    {
+        let warmup_count = indicators.iter().map(|i| i.min_periods()).max().unwrap_or(0);
+        // 余裕を持って2倍のCandleを取得（クロス検出等に前後の値が必要なため）
+        let fetch_count = (warmup_count * 2).max(1) as u32;
+        match db.candles().get_latest("BTC_JPY", 60, fetch_count).await {
+            Ok(hist) if !hist.is_empty() => {
+                info!(
+                    "Warming up {} indicators with {} historical candles (need={})",
+                    indicators.len(),
+                    hist.len(),
+                    warmup_count
+                );
+                for candle in &hist {
+                    for ind in &mut indicators {
+                        ind.update(candle);
+                    }
+                }
+            }
+            Ok(_) => {
+                info!("No historical candles in DB for warmup — indicators start cold");
+            }
+            Err(e) => {
+                warn!("Failed to load historical candles for warmup: {}", e);
+            }
+        }
+    }
+
     // SignalEngine: Candle → Signal
     let (signal_engine, signal_engine_tx, signal_rx) =
         SignalEngine::new(indicators, market_bus.candle_rx());
     tokio::spawn(signal_engine.run());
 
     // 最新シグナルをキャッシュするタスク（API配信用）
-    let latest_signal: Arc<RwLock<Option<crate::signal::Signal>>> =
+    let latest_signal: Arc<RwLock<Option<crate::signal::SignalDetail>>> =
         Arc::new(RwLock::new(None));
     {
         let cache = Arc::clone(&latest_signal);

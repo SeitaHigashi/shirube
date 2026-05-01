@@ -17,8 +17,8 @@
     .up { color: #26a69a; }
     .down { color: #ef5350; }
     .neutral { color: #e0e0e0; }
-    main { display: grid; grid-template-columns: 1fr 320px; grid-template-rows: auto 1fr; gap: 12px; padding: 12px; height: calc(100vh - 56px); }
-    #chart-container { background: #16213e; border-radius: 8px; padding: 12px; grid-row: 1 / 3; display: flex; flex-direction: column; }
+    main { display: grid; grid-template-columns: 1fr 320px; grid-template-rows: auto auto 1fr; gap: 12px; padding: 12px; height: calc(100vh - 56px); }
+    #chart-container { background: #16213e; border-radius: 8px; padding: 12px; grid-row: 1 / 4; display: flex; flex-direction: column; }
     #chart-header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
     #chart-title { font-size: 13px; color: #888; }
     #indicator-bar { display: flex; gap: 12px; padding: 4px 0 6px; flex-wrap: wrap; }
@@ -108,6 +108,19 @@
     #settings-msg { font-size: 12px; margin-left: 12px; }
     #settings-msg.ok { color: #26a69a; }
     #settings-msg.err { color: #ef5350; }
+    /* Signal panel */
+    #signal-composite { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #0f3460; }
+    #signal-composite-label { font-size: 11px; color: #888; }
+    #signal-composite-value { font-size: 20px; font-weight: bold; }
+    #signal-confidence { font-size: 12px; color: #888; }
+    .signal-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid #1a1a2e; font-size: 12px; }
+    .signal-row:last-child { border-bottom: none; }
+    .signal-name { color: #888; min-width: 40px; }
+    .signal-detail { color: #ccc; flex: 1; margin: 0 8px; font-size: 11px; }
+    .signal-badge { font-weight: bold; font-size: 12px; min-width: 36px; text-align: right; }
+    .signal-buy { color: #26a69a; }
+    .signal-sell { color: #ef5350; }
+    .signal-hold { color: #888; }
   </style>
 </head>
 <body>
@@ -153,6 +166,15 @@
       <div id="rsi-chart"></div>
       <div id="macd-label">MACD</div>
       <div id="macd-chart"></div>
+    </div>
+    <div class="panel" id="signal-panel">
+      <h2>シグナル状態</h2>
+      <div id="signal-composite">
+        <span class="signal-composite-label">総合</span>
+        <span id="signal-composite-value" class="signal-hold">---</span>
+        <span id="signal-confidence"></span>
+      </div>
+      <div id="signal-rows"></div>
     </div>
     <div class="panel" id="balance-panel">
       <h2>残高</h2>
@@ -511,6 +533,114 @@
       return { macd: macdLine, sig: sigLine, hist };
     }
 
+    // ── Signal status ─────────────────────────────────────────────────────────
+
+    function computeSignalStatus() {
+      if (candleData.length < Math.max(currentCfg.sma_period, currentCfg.ema_period,
+          currentCfg.rsi_period + 1, currentCfg.macd_slow + currentCfg.macd_signal,
+          currentCfg.bollinger_period)) return null;
+
+      const closes = candleData.map(c => c.close);
+      const price = closes.at(-1);
+
+      const smaArr = calcSMA(closes, currentCfg.sma_period);
+      const smaVal = smaArr.at(-1)?.value;
+      const smaSignal = smaVal != null ? (price > smaVal ? 'BUY' : 'SELL') : null;
+
+      const emaArr = calcEMA(closes, currentCfg.ema_period);
+      const emaVal = emaArr.at(-1)?.value;
+      const emaSignal = emaVal != null ? (price > emaVal ? 'BUY' : 'SELL') : null;
+
+      const rsiArr = calcRSI(closes, currentCfg.rsi_period);
+      const rsiVal = rsiArr.at(-1)?.value;
+      const rsiSignal = rsiVal == null ? null : rsiVal < 30 ? 'BUY' : rsiVal > 70 ? 'SELL' : 'HOLD';
+
+      const { hist } = calcMACD(closes, currentCfg.macd_fast, currentCfg.macd_slow, currentCfg.macd_signal);
+      const macdHistVal = hist.at(-1)?.value;
+      const macdSignal = macdHistVal == null ? null : (macdHistVal > 0 ? 'BUY' : 'SELL');
+
+      const bbArr = calcBB(closes, currentCfg.bollinger_period, currentCfg.bollinger_std);
+      const bbLast = bbArr.at(-1);
+      const bbSignal = bbLast == null ? null
+        : price < bbLast.lower ? 'BUY'
+        : price > bbLast.upper ? 'SELL'
+        : 'HOLD';
+
+      const signals = [smaSignal, emaSignal, rsiSignal, macdSignal, bbSignal].filter(s => s != null);
+      const scores = signals.map(s => s === 'BUY' ? 1 : s === 'SELL' ? -1 : 0);
+      const avg = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
+      const composite = avg > 0.2 ? 'BUY' : avg < -0.2 ? 'SELL' : 'HOLD';
+      const confidence = Math.abs(avg);
+
+      return { smaSignal, smaVal, emaSignal, emaVal, rsiVal, rsiSignal,
+               macdHistVal, macdSignal, bbLast, bbSignal, composite, confidence, price };
+    }
+
+    function signalClass(s) {
+      return s === 'BUY' ? 'signal-buy' : s === 'SELL' ? 'signal-sell' : 'signal-hold';
+    }
+
+    function signalLabel(s) {
+      return s === 'BUY' ? '買↑' : s === 'SELL' ? '売↓' : '中立→';
+    }
+
+    function updateSignalPanel() {
+      const st = computeSignalStatus();
+      const compEl = document.getElementById('signal-composite-value');
+      const confEl = document.getElementById('signal-confidence');
+      const rowsEl = document.getElementById('signal-rows');
+
+      if (!st) {
+        compEl.textContent = '---';
+        compEl.className = 'signal-hold';
+        confEl.textContent = '';
+        rowsEl.innerHTML = '<div style="color:#888;font-size:11px">データ不足</div>';
+        return;
+      }
+
+      compEl.textContent = st.composite === 'BUY' ? '買いシグナル↑' : st.composite === 'SELL' ? '売りシグナル↓' : '様子見→';
+      compEl.className = signalClass(st.composite);
+      confEl.textContent = `信頼度 ${(st.confidence * 100).toFixed(0)}%`;
+
+      const fmt = v => v != null ? v.toLocaleString('ja-JP', { maximumFractionDigits: 1 }) : '---';
+      const fmtSmall = v => v != null ? v.toFixed(1) : '---';
+
+      const rows = [
+        {
+          name: 'SMA',
+          detail: st.smaVal != null ? `${fmt(st.smaVal)} (価格差 ${(st.price - st.smaVal > 0 ? '+' : '')}${(st.price - st.smaVal).toFixed(0)})` : '---',
+          signal: st.smaSignal,
+        },
+        {
+          name: 'EMA',
+          detail: st.emaVal != null ? `${fmt(st.emaVal)} (価格差 ${(st.price - st.emaVal > 0 ? '+' : '')}${(st.price - st.emaVal).toFixed(0)})` : '---',
+          signal: st.emaSignal,
+        },
+        {
+          name: 'RSI',
+          detail: st.rsiVal != null ? `${fmtSmall(st.rsiVal)} ${st.rsiVal < 30 ? '(売られすぎ)' : st.rsiVal > 70 ? '(買われすぎ)' : ''}` : '---',
+          signal: st.rsiSignal,
+        },
+        {
+          name: 'MACD',
+          detail: st.macdHistVal != null ? `ヒスト ${st.macdHistVal > 0 ? '+' : ''}${st.macdHistVal.toFixed(0)}` : '---',
+          signal: st.macdSignal,
+        },
+        {
+          name: 'BB',
+          detail: st.bbLast != null ? (st.price < st.bbLast.lower ? '下限割れ' : st.price > st.bbLast.upper ? '上限突破' : '中間帯') : '---',
+          signal: st.bbSignal,
+        },
+      ];
+
+      rowsEl.innerHTML = rows.map(r => `
+        <div class="signal-row">
+          <span class="signal-name">${r.name}</span>
+          <span class="signal-detail">${r.detail}</span>
+          <span class="signal-badge ${signalClass(r.signal)}">${r.signal ? signalLabel(r.signal) : '---'}</span>
+        </div>`).join('');
+    }
+
     // ── Global state ──────────────────────────────────────────────────────────
 
     let candleData = [];
@@ -605,6 +735,7 @@
         syncingRange = false;
       }
       resizeCharts();
+      updateSignalPanel();
     }
 
     // ── Load historical candles ───────────────────────────────────────────────
@@ -622,6 +753,9 @@
           candleSeries.setData(data);
           candleData = data;
           renderIndicators();
+          chart.timeScale().fitContent();
+          if (document.getElementById('cb-rsi').checked)  rsiChart.timeScale().fitContent();
+          if (document.getElementById('cb-macd').checked) macdChart.timeScale().fitContent();
         }
       } catch (e) { console.warn('candles load failed', e); }
     }

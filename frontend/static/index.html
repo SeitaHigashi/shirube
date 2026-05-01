@@ -413,6 +413,7 @@
       rsiChart.timeScale().setVisibleLogicalRange(range);
       macdChart.timeScale().setVisibleLogicalRange(range);
       syncingRange = false;
+      if (range.from <= 10) loadMoreHistory();
     });
     rsiChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
       if (syncingRange || !range) return;
@@ -599,6 +600,39 @@
     // ── Global state ──────────────────────────────────────────────────────────
 
     let candleData = [];
+    let isLoadingHistory = false;
+    let hasMoreHistory = true;
+
+    async function loadMoreHistory() {
+      if (isLoadingHistory || !hasMoreHistory || candleData.length === 0) return;
+      isLoadingHistory = true;
+      const oldestTime = candleData[0].time; // Unix seconds
+      const to = new Date(oldestTime * 1000).toISOString();
+      const url = `${BASE}/api/candles?resolution=60&count=200&to=${encodeURIComponent(to)}`;
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const candles = await res.json();
+        if (candles.length === 0) { hasMoreHistory = false; return; }
+        const newData = candles
+          .map(c => ({
+            time: toChartTime(c.open_time),
+            open: parseFloat(c.open), high: parseFloat(c.high),
+            low: parseFloat(c.low), close: parseFloat(c.close),
+          }))
+          .filter(c => c.time < candleData[0].time)
+          .sort((a, b) => a.time - b.time);
+        if (newData.length === 0) { hasMoreHistory = false; return; }
+        candleData = [...newData, ...candleData];
+        candleSeries.setData(candleData);
+        renderIndicators();
+      } catch (e) {
+        console.warn('History load error', e);
+      } finally {
+        isLoadingHistory = false;
+      }
+    }
+
     let currentCfg = {
       sma_period: 20, ema_period: 20, rsi_period: 14,
       macd_fast: 12, macd_slow: 26, macd_signal: 9,

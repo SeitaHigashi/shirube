@@ -379,41 +379,31 @@
     const macdSignalSeries = macdChart.addLineSeries({ color: '#e94560', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
     const macdHistSeries   = macdChart.addHistogramSeries({ color: '#26a69a', priceLineVisible: false, lastValueVisible: false });
 
-    // Sync time scales between sub-charts and main chart.
-    // Detection: subscribeVisibleLogicalRangeChange fires continuously during pan/zoom.
-    // Application: getVisibleRange()/setVisibleRange() uses actual timestamps, avoiding
-    // the logical-index mismatch caused by newsFixedSeries adding extra timestamps to
-    // the main chart's time scale.
+    // Sync time scales between sub-charts and main chart via logical range.
+    // newsFixedSeries timestamps are snapped to candle times (see snapToCandle),
+    // so all charts share the same logical index count and setVisibleLogicalRange
+    // produces accurate alignment without zoom drift.
     // syncingRange flag prevents circular re-entrancy.
     let syncingRange = false;
     chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
       if (syncingRange || !range) return;
       syncingRange = true;
-      const timeRange = chart.timeScale().getVisibleRange();
-      if (timeRange) {
-        rsiChart.timeScale().setVisibleRange(timeRange);
-        macdChart.timeScale().setVisibleRange(timeRange);
-      }
+      rsiChart.timeScale().setVisibleLogicalRange(range);
+      macdChart.timeScale().setVisibleLogicalRange(range);
       syncingRange = false;
     });
     rsiChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
       if (syncingRange || !range) return;
       syncingRange = true;
-      const timeRange = rsiChart.timeScale().getVisibleRange();
-      if (timeRange) {
-        chart.timeScale().setVisibleRange(timeRange);
-        macdChart.timeScale().setVisibleRange(timeRange);
-      }
+      chart.timeScale().setVisibleLogicalRange(range);
+      macdChart.timeScale().setVisibleLogicalRange(range);
       syncingRange = false;
     });
     macdChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
       if (syncingRange || !range) return;
       syncingRange = true;
-      const timeRange = macdChart.timeScale().getVisibleRange();
-      if (timeRange) {
-        chart.timeScale().setVisibleRange(timeRange);
-        rsiChart.timeScale().setVisibleRange(timeRange);
-      }
+      chart.timeScale().setVisibleLogicalRange(range);
+      rsiChart.timeScale().setVisibleLogicalRange(range);
       syncingRange = false;
     });
 
@@ -533,9 +523,9 @@
     function renderIndicators() {
       if (candleData.length === 0) return;
 
-      // Capture current visible time range BEFORE setData() calls, and block subscriptions
+      // Capture current visible logical range BEFORE setData() calls, and block subscriptions
       // to prevent circular range corruption while data is being updated.
-      const savedRange = chart.timeScale().getVisibleRange();
+      const savedRange = chart.timeScale().getVisibleLogicalRange();
       syncingRange = true;
 
       const closes = candleData.map(c => c.close);
@@ -605,13 +595,13 @@
         }))]);
       }
 
-      // Restore blocked subscriptions and apply the saved time range to all charts
+      // Restore blocked subscriptions and apply the saved logical range to all charts
       syncingRange = false;
       if (savedRange) {
         syncingRange = true;
-        chart.timeScale().setVisibleRange(savedRange);
-        if (showRSI)  rsiChart.timeScale().setVisibleRange(savedRange);
-        if (showMACD) macdChart.timeScale().setVisibleRange(savedRange);
+        chart.timeScale().setVisibleLogicalRange(savedRange);
+        if (showRSI)  rsiChart.timeScale().setVisibleLogicalRange(savedRange);
+        if (showMACD) macdChart.timeScale().setVisibleLogicalRange(savedRange);
         syncingRange = false;
       }
       resizeCharts();
@@ -710,6 +700,17 @@
       applyAllMarkers();
     }
 
+    // Snap an arbitrary timestamp to the nearest candle time so that
+    // newsFixedSeries does not introduce extra logical indices into the main
+    // chart's time scale, keeping it in sync with RSI/MACD sub-charts.
+    function snapToCandle(t) {
+      if (candleData.length === 0) return t;
+      return candleData.reduce((best, c) =>
+        Math.abs(c.time - t) < Math.abs(best - t) ? c.time : best,
+        candleData[0].time
+      );
+    }
+
     function updateNewsMarkers(items) {
       const fixedData = [];
       const markers = [];
@@ -720,7 +721,7 @@
           const isBullish = item.score > 0.1;
           const timeStr = item.published_at || item.analyzed_at;
           if (!timeStr) return;
-          const t = toChartTime(timeStr);
+          const t = snapToCandle(toChartTime(timeStr));
 
           fixedData.push({ time: t, value: isBullish ? 0.05 : 0.95 });
           markers.push({

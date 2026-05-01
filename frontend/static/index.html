@@ -296,7 +296,7 @@
       layout: { background: { color: '#16213e' }, textColor: '#e0e0e0' },
       grid: { vertLines: { color: '#0f3460' }, horzLines: { color: '#0f3460' } },
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-      rightPriceScale: { borderColor: '#0f3460' },
+      rightPriceScale: { borderColor: '#0f3460', minimumWidth: 90 },
       timeScale: { borderColor: '#0f3460', timeVisible: true, secondsVisible: false },
       localization: { timeFormatter: makeTzFormatter(useJST) },
     };
@@ -360,7 +360,7 @@
       ...chartOpts,
       width: rsiEl.clientWidth,
       height: 100,
-      rightPriceScale: { borderColor: '#0f3460', scaleMargins: { top: 0.1, bottom: 0.1 } },
+      rightPriceScale: { borderColor: '#0f3460', scaleMargins: { top: 0.1, bottom: 0.1 }, minimumWidth: 90 },
     });
     const rsiSeries = rsiChart.addLineSeries({ color: '#ff9e6d', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
     const rsiOBSeries = rsiChart.addLineSeries({ color: '#ef5350', lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
@@ -373,7 +373,7 @@
       ...chartOpts,
       width: macdEl.clientWidth,
       height: 110,
-      rightPriceScale: { borderColor: '#0f3460', scaleMargins: { top: 0.1, bottom: 0.1 } },
+      rightPriceScale: { borderColor: '#0f3460', scaleMargins: { top: 0.1, bottom: 0.1 }, minimumWidth: 90 },
     });
     const macdLineSeries   = macdChart.addLineSeries({ color: '#a8dadc', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
     const macdSignalSeries = macdChart.addLineSeries({ color: '#e94560', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });

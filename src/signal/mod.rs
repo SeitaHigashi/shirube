@@ -21,6 +21,8 @@ pub enum Signal {
 pub struct IndicatorSignal {
     pub name: String,
     pub signal: Option<Signal>,
+    /// 現在の計算値（SMA値、RSI値、MACDヒストグラム等）。ウォームアップ中は None。
+    pub value: Option<f64>,
 }
 
 // ---- SignalDetail — API レスポンス用（集計 + 個別） ----
@@ -37,6 +39,8 @@ pub trait Indicator: Send + Sync {
     fn name(&self) -> &str;
     /// Candle を受け取り、シグナルを返す。ウォームアップ中は None。
     fn update(&mut self, candle: &Candle) -> Option<Signal>;
+    /// 現在の計算値を返す（SMA値、RSI値等）。ウォームアップ中は None。
+    fn value(&self) -> Option<f64>;
     /// バックテスト再利用のためのリセット
     fn reset(&mut self);
     /// シグナルを出すのに必要な最低 Candle 数
@@ -72,6 +76,10 @@ pub mod mock {
 
         fn update(&mut self, _candle: &Candle) -> Option<Signal> {
             self.signals.pop_front().flatten()
+        }
+
+        fn value(&self) -> Option<f64> {
+            None
         }
 
         fn reset(&mut self) {

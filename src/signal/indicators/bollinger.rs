@@ -9,6 +9,8 @@ pub struct Bollinger {
     period: usize,
     multiplier: f64,
     buffer: VecDeque<f64>,
+    /// %B = (close - lower) / (upper - lower) * 100。50が中央、0が下限、100が上限。
+    current_pct_b: Option<f64>,
 }
 
 impl Bollinger {
@@ -18,6 +20,7 @@ impl Bollinger {
             period,
             multiplier,
             buffer: VecDeque::with_capacity(period + 1),
+            current_pct_b: None,
         }
     }
 
@@ -34,6 +37,7 @@ impl Default for Bollinger {
         Self::new(20, 2.0)
     }
 }
+
 
 impl Indicator for Bollinger {
     fn name(&self) -> &str {
@@ -57,6 +61,12 @@ impl Indicator for Bollinger {
         let lower = mean - self.multiplier * std;
         let bandwidth = upper - lower;
 
+        self.current_pct_b = if bandwidth > 0.0 {
+            Some((close - lower) / bandwidth * 100.0)
+        } else {
+            Some(50.0)
+        };
+
         let signal = if close < lower {
             let confidence = if bandwidth > 0.0 {
                 ((lower - close) / bandwidth).min(1.0)
@@ -78,8 +88,13 @@ impl Indicator for Bollinger {
         Some(signal)
     }
 
+    fn value(&self) -> Option<f64> {
+        self.current_pct_b
+    }
+
     fn reset(&mut self) {
         self.buffer.clear();
+        self.current_pct_b = None;
     }
 
     fn min_periods(&self) -> usize {

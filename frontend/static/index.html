@@ -547,6 +547,14 @@
       return { kind: 'HOLD', confidence: null, price: null };
     }
 
+    function formatIndicatorValue(name, value) {
+      if (name === 'RSI') return value.toFixed(1);
+      if (name === 'MACD') return value.toFixed(2);
+      if (name === 'Bollinger') return `%B ${value.toFixed(1)}`;
+      // SMA / EMA → 価格として表示
+      return value > 1000 ? `¥${Math.round(value).toLocaleString('ja-JP')}` : value.toFixed(4);
+    }
+
     function renderSignalPanel(detail) {
       const compEl = document.getElementById('signal-composite-value');
       const confEl = document.getElementById('signal-confidence');
@@ -573,9 +581,10 @@
         const badge = s.kind === 'HOLD' ? '－' : s.kind === 'BUY' ? '▲' : '▼';
         const cls = signalClass(s.kind);
         const conf = s.confidence != null ? ` ${(s.confidence * 100).toFixed(0)}%` : '';
+        const valText = ind.value != null ? formatIndicatorValue(ind.name, ind.value) : '---';
         return `<div class="signal-row">
           <span class="signal-name">${ind.name}</span>
-          <span class="signal-detail"></span>
+          <span class="signal-detail">${valText}</span>
           <span class="signal-badge ${cls}">${badge}${conf}</span>
         </div>`;
       }).join('');

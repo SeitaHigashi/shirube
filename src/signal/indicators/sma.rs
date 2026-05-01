@@ -73,6 +73,10 @@ impl Indicator for Sma {
         Some(signal)
     }
 
+    fn value(&self) -> Option<f64> {
+        self.prev_sma
+    }
+
     fn reset(&mut self) {
         self.buffer.clear();
         self.prev_close = None;

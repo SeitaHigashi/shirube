@@ -144,9 +144,10 @@ async fn main() -> anyhow::Result<()> {
                 for candle in &hist {
                     warmup_signals = indicators
                         .iter_mut()
-                        .map(|ind| IndicatorSignal {
-                            name: ind.name().to_string(),
-                            signal: ind.update(candle),
+                        .map(|ind| {
+                            let signal = ind.update(candle);
+                            let value = ind.value();
+                            IndicatorSignal { name: ind.name().to_string(), signal, value }
                         })
                         .collect();
                 }

@@ -82,6 +82,10 @@ impl Indicator for Ema {
         Some(signal)
     }
 
+    fn value(&self) -> Option<f64> {
+        self.current
+    }
+
     fn reset(&mut self) {
         self.init_buffer.clear();
         self.current = None;

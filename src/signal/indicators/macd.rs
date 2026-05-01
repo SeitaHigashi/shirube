@@ -66,6 +66,10 @@ impl Indicator for Macd {
         Some(signal)
     }
 
+    fn value(&self) -> Option<f64> {
+        self.prev_histogram
+    }
+
     fn reset(&mut self) {
         self.fast.reset();
         self.slow.reset();

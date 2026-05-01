@@ -31,9 +31,10 @@ impl SignalEngine {
                 Ok(candle) => {
                     let indicator_signals: Vec<IndicatorSignal> = self.indicators
                         .iter_mut()
-                        .map(|ind| IndicatorSignal {
-                            name: ind.name().to_string(),
-                            signal: ind.update(&candle),
+                        .map(|ind| {
+                            let signal = ind.update(&candle);
+                            let value = ind.value();
+                            IndicatorSignal { name: ind.name().to_string(), signal, value }
                         })
                         .collect();
                     let raw: Vec<Option<Signal>> = indicator_signals.iter()

@@ -10,6 +10,7 @@ pub struct Rsi {
     avg_gain: Option<f64>,
     avg_loss: Option<f64>,
     prev_close: Option<f64>,
+    current_rsi: Option<f64>,
 }
 
 impl Rsi {
@@ -21,6 +22,7 @@ impl Rsi {
             avg_gain: None,
             avg_loss: None,
             prev_close: None,
+            current_rsi: None,
         }
     }
 
@@ -59,6 +61,7 @@ impl Indicator for Rsi {
             self.avg_loss = Some(losses);
             self.prev_close = Some(close);
             let rsi = self.compute_rsi();
+            self.current_rsi = Some(rsi);
             return Some(rsi_to_signal(rsi, candle.close));
         }
 
@@ -75,7 +78,12 @@ impl Indicator for Rsi {
         self.prev_close = Some(close);
 
         let rsi = self.compute_rsi();
+        self.current_rsi = Some(rsi);
         Some(rsi_to_signal(rsi, candle.close))
+    }
+
+    fn value(&self) -> Option<f64> {
+        self.current_rsi
     }
 
     fn reset(&mut self) {
@@ -83,6 +91,7 @@ impl Indicator for Rsi {
         self.avg_gain = None;
         self.avg_loss = None;
         self.prev_close = None;
+        self.current_rsi = None;
     }
 
     fn min_periods(&self) -> usize {

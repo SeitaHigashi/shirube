@@ -379,31 +379,41 @@
     const macdSignalSeries = macdChart.addLineSeries({ color: '#e94560', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
     const macdHistSeries   = macdChart.addHistogramSeries({ color: '#26a69a', priceLineVisible: false, lastValueVisible: false });
 
-    // Sync time scales between sub-charts and main chart using TIME range.
-    // Time-based sync is used (not logical range) because newsFixedSeries adds
-    // arbitrary timestamps to the main chart, making its logical index count
-    // differ from RSI/MACD charts. Time range is the same across all charts.
+    // Sync time scales between sub-charts and main chart.
+    // Detection: subscribeVisibleLogicalRangeChange fires continuously during pan/zoom.
+    // Application: getVisibleRange()/setVisibleRange() uses actual timestamps, avoiding
+    // the logical-index mismatch caused by newsFixedSeries adding extra timestamps to
+    // the main chart's time scale.
     // syncingRange flag prevents circular re-entrancy.
     let syncingRange = false;
-    chart.timeScale().subscribeVisibleTimeRangeChange(range => {
+    chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
       if (syncingRange || !range) return;
       syncingRange = true;
-      rsiChart.timeScale().setVisibleRange(range);
-      macdChart.timeScale().setVisibleRange(range);
+      const timeRange = chart.timeScale().getVisibleRange();
+      if (timeRange) {
+        rsiChart.timeScale().setVisibleRange(timeRange);
+        macdChart.timeScale().setVisibleRange(timeRange);
+      }
       syncingRange = false;
     });
-    rsiChart.timeScale().subscribeVisibleTimeRangeChange(range => {
+    rsiChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
       if (syncingRange || !range) return;
       syncingRange = true;
-      chart.timeScale().setVisibleRange(range);
-      macdChart.timeScale().setVisibleRange(range);
+      const timeRange = rsiChart.timeScale().getVisibleRange();
+      if (timeRange) {
+        chart.timeScale().setVisibleRange(timeRange);
+        macdChart.timeScale().setVisibleRange(timeRange);
+      }
       syncingRange = false;
     });
-    macdChart.timeScale().subscribeVisibleTimeRangeChange(range => {
+    macdChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
       if (syncingRange || !range) return;
       syncingRange = true;
-      chart.timeScale().setVisibleRange(range);
-      rsiChart.timeScale().setVisibleRange(range);
+      const timeRange = macdChart.timeScale().getVisibleRange();
+      if (timeRange) {
+        chart.timeScale().setVisibleRange(timeRange);
+        rsiChart.timeScale().setVisibleRange(timeRange);
+      }
       syncingRange = false;
     });
 

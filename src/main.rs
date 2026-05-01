@@ -108,7 +108,6 @@ async fn main() -> anyhow::Result<()> {
 
     // MarketDataBus: WS + REST → Candle broadcast + DB 保存
     let market_bus = MarketDataBus::start(
-        Arc::clone(&client),
         ws_tx,
         db.clone(),
         "BTC_JPY",

@@ -1,12 +1,8 @@
-use std::sync::Arc;
-use std::time::Duration;
-
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
 use super::candle_aggregator::CandleAggregator;
 use crate::exchange::bitflyer::ws::WsMessage;
-use crate::exchange::ExchangeClient;
 use crate::storage::db::Database;
 use crate::types::market::Candle;
 
@@ -15,12 +11,11 @@ pub struct MarketDataBus {
 }
 
 impl MarketDataBus {
-    /// WS + REST を統合してキャンドルを broadcast する。
+    /// WS を統合してキャンドルを broadcast する。
     ///
     /// - `ws_tx`: bitFlyer WS タスクが publish している broadcast sender
     /// - `db`: CandleRepository への保存に使用
     pub async fn start(
-        exchange: Arc<dyn ExchangeClient>,
         ws_tx: broadcast::Sender<WsMessage>,
         db: Database,
         product_code: &str,
@@ -51,29 +46,6 @@ impl MarketDataBus {
                             warn!("MarketDataBus WS lagged by {}", n);
                         }
                         Err(broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            });
-        }
-
-        // REST polling task: fallback / candle 確定トリガー
-        {
-            let tx = candle_tx.clone();
-            let pc = product_code.to_string();
-            tokio::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_secs(1));
-                let mut agg = CandleAggregator::new(pc, resolution_secs);
-                loop {
-                    interval.tick().await;
-                    match exchange.get_ticker("BTC_JPY").await {
-                        Ok(ticker) => {
-                            if let Some(candle) = agg.feed_ticker(&ticker) {
-                                let _ = tx.send(candle);
-                            }
-                        }
-                        Err(e) => {
-                            warn!("REST ticker poll failed: {}", e);
-                        }
                     }
                 }
             });

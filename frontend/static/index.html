@@ -606,8 +606,10 @@
     async function loadMoreHistory() {
       if (isLoadingHistory || !hasMoreHistory || candleData.length === 0) return;
       isLoadingHistory = true;
-      const oldestTime = candleData[0].time; // Unix seconds
-      const to = new Date(oldestTime * 1000).toISOString();
+      // candleData[0].time may include JST offset; strip it to get real UTC unix time
+      const jstOffset = useJST ? JST_OFFSET : 0;
+      const oldestUtc = candleData[0].time - jstOffset;
+      const to = new Date(oldestUtc * 1000).toISOString();
       const url = `${BASE}/api/candles?resolution=60&count=200&to=${encodeURIComponent(to)}`;
       try {
         const res = await fetch(url);

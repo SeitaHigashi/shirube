@@ -25,7 +25,7 @@ use crate::signal::engine::SignalEngine;
 use crate::signal::indicators::{
     bollinger::Bollinger, ema::Ema, macd::Macd, rsi::Rsi, sma::Sma,
 };
-use crate::signal::Indicator;
+use crate::signal::{Indicator, IndicatorSignal, SignalDetail};
 use crate::storage::db::Database;
 use crate::trading::engine::TradingEngine;
 
@@ -127,6 +127,8 @@ async fn main() -> anyhow::Result<()> {
     let init_risk_params = init_cfg.to_risk_params();
 
     // インジケータのウォームアップ: 起動前にDBの過去Candleを流し込む
+    // 最後のCandleのシグナルを捕捉してキャッシュ事前初期化に使う
+    let mut warmup_signals: Vec<IndicatorSignal> = Vec::new();
     {
         let warmup_count = indicators.iter().map(|i| i.min_periods()).max().unwrap_or(0);
         // 余裕を持って2倍のCandleを取得（クロス検出等に前後の値が必要なため）
@@ -140,9 +142,13 @@ async fn main() -> anyhow::Result<()> {
                     warmup_count
                 );
                 for candle in &hist {
-                    for ind in &mut indicators {
-                        ind.update(candle);
-                    }
+                    warmup_signals = indicators
+                        .iter_mut()
+                        .map(|ind| IndicatorSignal {
+                            name: ind.name().to_string(),
+                            signal: ind.update(candle),
+                        })
+                        .collect();
                 }
             }
             Ok(_) => {
@@ -174,6 +180,15 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         });
+    }
+    // ウォームアップ結果でシグナルキャッシュを事前初期化（ライブCandle待ちで様子見になるのを防ぐ）
+    if !warmup_signals.is_empty() {
+        use crate::signal::Signal;
+        let raw: Vec<Option<Signal>> = warmup_signals.iter().map(|is| is.signal.clone()).collect();
+        let aggregated = SignalEngine::aggregate(&raw, 0.3);
+        let detail = SignalDetail { aggregate: aggregated, indicators: warmup_signals };
+        *latest_signal.write().await = Some(detail);
+        info!("Pre-populated signal cache from warmup data");
     }
 
     // TradingEngine: Signal → RiskManager → send_order

@@ -1,19 +1,18 @@
 use axum::{extract::State, Json};
 
 use crate::api::AppState;
-use crate::signal::Signal;
+use crate::signal::SignalDetail;
 
-pub async fn get_latest_signal(State(state): State<AppState>) -> Json<Option<Signal>> {
+pub async fn get_latest_signal(State(state): State<AppState>) -> Json<Option<SignalDetail>> {
     let sig = state.latest_signal.read().await;
     Json(sig.clone())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::api::AppState;
     use crate::exchange::mock::MockExchangeClient;
-    use crate::signal::Signal;
+    use crate::signal::{Signal, SignalDetail};
     use crate::storage::db::Database;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
@@ -22,7 +21,11 @@ mod tests {
     use tokio::sync::{broadcast, RwLock};
     use tower::ServiceExt;
 
-    async fn make_state_with_signal(sig: Option<Signal>) -> AppState {
+    fn detail(signal: Signal) -> SignalDetail {
+        SignalDetail { aggregate: signal, indicators: vec![] }
+    }
+
+    async fn make_state_with_signal(sig: Option<SignalDetail>) -> AppState {
         use crate::api::server::build_router;
         let _ = build_router; // suppress unused import
         use crate::config::TradingConfig;
@@ -58,7 +61,7 @@ mod tests {
     #[tokio::test]
     async fn returns_hold_signal() {
         use crate::api::server::build_router;
-        let app = build_router(make_state_with_signal(Some(Signal::Hold)).await);
+        let app = build_router(make_state_with_signal(Some(detail(Signal::Hold))).await);
         let req = Request::builder()
             .uri("/api/signal/latest")
             .body(Body::empty())
@@ -66,13 +69,14 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-        assert_eq!(&body[..], b"\"Hold\"");
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["aggregate"], "Hold");
     }
 
     #[tokio::test]
     async fn returns_buy_signal() {
         use crate::api::server::build_router;
-        let sig = Signal::Buy { price: dec!(9000000), confidence: 0.8 };
+        let sig = detail(Signal::Buy { price: dec!(9000000), confidence: 0.8 });
         let app = build_router(make_state_with_signal(Some(sig)).await);
         let req = Request::builder()
             .uri("/api/signal/latest")
@@ -82,6 +86,6 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["Buy"]["confidence"], 0.8);
+        assert_eq!(json["aggregate"]["Buy"]["confidence"], 0.8);
     }
 }

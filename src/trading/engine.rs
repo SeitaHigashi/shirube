@@ -11,11 +11,11 @@ use crate::config::TradingConfig;
 use crate::exchange::ExchangeClient;
 use crate::risk::manager::RiskManager;
 use crate::risk::{RiskDecision, RiskParams};
-use crate::signal::Signal;
+use crate::signal::{Signal, SignalDetail};
 use crate::types::order::{OrderRequest, OrderSide, OrderType};
 
 pub struct TradingEngine {
-    signal_rx: broadcast::Receiver<Signal>,
+    signal_rx: broadcast::Receiver<SignalDetail>,
     exchange: Arc<dyn ExchangeClient>,
     risk_manager: RiskManager,
     product_code: String,
@@ -28,7 +28,7 @@ pub struct TradingEngine {
 
 impl TradingEngine {
     pub fn new(
-        signal_rx: broadcast::Receiver<Signal>,
+        signal_rx: broadcast::Receiver<SignalDetail>,
         exchange: Arc<dyn ExchangeClient>,
         risk_manager: RiskManager,
         product_code: String,
@@ -57,8 +57,8 @@ impl TradingEngine {
     pub async fn run(mut self) {
         loop {
             match self.signal_rx.recv().await {
-                Ok(signal) => {
-                    if let Err(e) = self.handle_signal(signal).await {
+                Ok(detail) => {
+                    if let Err(e) = self.handle_signal(detail.aggregate).await {
                         warn!("TradingEngine error: {}", e);
                         self.alert.order_error(&e.to_string()).await;
                     }
@@ -172,10 +172,14 @@ mod tests {
     use super::*;
     use crate::exchange::mock::MockExchangeClient;
     use crate::risk::{RiskManager, RiskParams};
-    use crate::signal::Signal;
+    use crate::signal::{Signal, SignalDetail};
     use rust_decimal_macros::dec;
 
-    fn make_engine(signal_rx: broadcast::Receiver<Signal>) -> TradingEngine {
+    fn detail(signal: Signal) -> SignalDetail {
+        SignalDetail { aggregate: signal, indicators: vec![] }
+    }
+
+    fn make_engine(signal_rx: broadcast::Receiver<SignalDetail>) -> TradingEngine {
         let mock = Arc::new(MockExchangeClient::new());
         let params = RiskParams {
             max_position_btc: dec!(0.1),
@@ -188,8 +192,8 @@ mod tests {
 
     #[tokio::test]
     async fn hold_signal_does_not_place_order() {
-        let (tx, rx) = broadcast::channel::<Signal>(16);
-        let engine = make_engine(rx);
+        let (tx, rx) = broadcast::channel::<SignalDetail>(16);
+        let _engine = make_engine(rx);
         let mock_exchange = Arc::new(MockExchangeClient::new());
         let params = RiskParams::default();
         let mut engine = TradingEngine::new(
@@ -199,7 +203,7 @@ mod tests {
             "BTC_JPY".into(),
         );
 
-        tx.send(Signal::Hold).unwrap();
+        tx.send(detail(Signal::Hold)).unwrap();
         drop(tx); // channel を閉じて run() が終了するようにする
 
         engine.run().await;
@@ -209,7 +213,7 @@ mod tests {
     #[tokio::test]
     async fn buy_signal_places_order() {
         let mock_exchange = Arc::new(MockExchangeClient::new());
-        let (tx, _) = broadcast::channel::<Signal>(16);
+        let (tx, _) = broadcast::channel::<SignalDetail>(16);
         let params = RiskParams::default();
         let mut engine = TradingEngine::new(
             tx.subscribe(),
@@ -218,7 +222,7 @@ mod tests {
             "BTC_JPY".into(),
         );
 
-        tx.send(Signal::Buy { price: dec!(9000000), confidence: 0.8 }).unwrap();
+        tx.send(detail(Signal::Buy { price: dec!(9000000), confidence: 0.8 })).unwrap();
         drop(tx);
 
         engine.run().await;
@@ -242,7 +246,7 @@ mod tests {
                 available: dec!(0.1),
             },
         ]);
-        let (tx, _) = broadcast::channel::<Signal>(16);
+        let (tx, _) = broadcast::channel::<SignalDetail>(16);
         let params = RiskParams::default();
         let mut engine = TradingEngine::new(
             tx.subscribe(),
@@ -251,7 +255,7 @@ mod tests {
             "BTC_JPY".into(),
         );
 
-        tx.send(Signal::Sell { price: dec!(9000000), confidence: 0.9 }).unwrap();
+        tx.send(detail(Signal::Sell { price: dec!(9000000), confidence: 0.9 })).unwrap();
         drop(tx);
 
         engine.run().await;

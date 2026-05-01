@@ -15,6 +15,22 @@ pub enum Signal {
     Hold,
 }
 
+// ---- IndicatorSignal — 各インジケータの個別シグナル ----
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IndicatorSignal {
+    pub name: String,
+    pub signal: Option<Signal>,
+}
+
+// ---- SignalDetail — API レスポンス用（集計 + 個別） ----
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SignalDetail {
+    pub aggregate: Signal,
+    pub indicators: Vec<IndicatorSignal>,
+}
+
 // ---- Indicator trait ----
 
 pub trait Indicator: Send + Sync {

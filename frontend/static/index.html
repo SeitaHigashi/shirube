@@ -539,12 +539,19 @@
       return s === 'BUY' ? 'signal-buy' : s === 'SELL' ? 'signal-sell' : 'signal-hold';
     }
 
-    function renderSignalPanel(sig) {
+    function parseSignal(raw) {
+      if (!raw || raw === 'Hold') return { kind: 'HOLD', confidence: null, price: null };
+      if (raw.Buy) return { kind: 'BUY', confidence: raw.Buy.confidence, price: raw.Buy.price };
+      if (raw.Sell) return { kind: 'SELL', confidence: raw.Sell.confidence, price: raw.Sell.price };
+      return { kind: 'HOLD', confidence: null, price: null };
+    }
+
+    function renderSignalPanel(detail) {
       const compEl = document.getElementById('signal-composite-value');
       const confEl = document.getElementById('signal-confidence');
       const rowsEl = document.getElementById('signal-rows');
 
-      if (sig === null || sig === undefined) {
+      if (detail === null || detail === undefined) {
         compEl.textContent = '---';
         compEl.className = 'signal-hold';
         confEl.textContent = 'シグナル待機中';
@@ -552,29 +559,33 @@
         return;
       }
 
-      let kind, confidence, price;
-      if (sig === 'Hold') {
-        kind = 'HOLD'; confidence = null; price = null;
-      } else if (sig.Buy) {
-        kind = 'BUY'; confidence = sig.Buy.confidence; price = sig.Buy.price;
-      } else if (sig.Sell) {
-        kind = 'SELL'; confidence = sig.Sell.confidence; price = sig.Sell.price;
-      } else {
-        kind = 'HOLD'; confidence = null; price = null;
-      }
-
-      compEl.textContent = kind === 'BUY' ? '買いシグナル↑' : kind === 'SELL' ? '売りシグナル↓' : '様子見→';
-      compEl.className = signalClass(kind);
-      confEl.textContent = confidence != null
-        ? `信頼度 ${(confidence * 100).toFixed(0)}% (Rust SignalEngine)`
+      const agg = parseSignal(detail.aggregate);
+      compEl.textContent = agg.kind === 'BUY' ? '買いシグナル↑' : agg.kind === 'SELL' ? '売りシグナル↓' : '様子見→';
+      compEl.className = signalClass(agg.kind);
+      confEl.textContent = agg.confidence != null
+        ? `信頼度 ${(agg.confidence * 100).toFixed(0)}% (Rust SignalEngine)`
         : '(Rust SignalEngine)';
 
-      rowsEl.innerHTML = price ? `
-        <div class="signal-row">
+      const indicators = detail.indicators || [];
+      const indRows = indicators.map(ind => {
+        const s = parseSignal(ind.signal);
+        const badge = s.kind === 'HOLD' ? '－' : s.kind === 'BUY' ? '▲' : '▼';
+        const cls = signalClass(s.kind);
+        const conf = s.confidence != null ? ` ${(s.confidence * 100).toFixed(0)}%` : '';
+        return `<div class="signal-row">
+          <span class="signal-name">${ind.name}</span>
+          <span class="signal-detail"></span>
+          <span class="signal-badge ${cls}">${badge}${conf}</span>
+        </div>`;
+      }).join('');
+
+      const priceRow = agg.price ? `<div class="signal-row">
           <span class="signal-name">価格</span>
-          <span class="signal-detail">${Number(price).toLocaleString('ja-JP')}</span>
+          <span class="signal-detail">${Number(agg.price).toLocaleString('ja-JP')}</span>
           <span class="signal-badge"></span>
         </div>` : '';
+
+      rowsEl.innerHTML = indRows + priceRow;
     }
 
     async function loadSignal() {

@@ -1,20 +1,20 @@
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
 
-use super::{Indicator, Signal};
+use super::{Indicator, IndicatorSignal, Signal, SignalDetail};
 use crate::types::market::Candle;
 
 pub struct SignalEngine {
     indicators: Vec<Box<dyn Indicator>>,
     candle_rx: broadcast::Receiver<Candle>,
-    signal_tx: broadcast::Sender<Signal>,
+    signal_tx: broadcast::Sender<SignalDetail>,
 }
 
 impl SignalEngine {
     pub fn new(
         indicators: Vec<Box<dyn Indicator>>,
         candle_rx: broadcast::Receiver<Candle>,
-    ) -> (Self, broadcast::Sender<Signal>, broadcast::Receiver<Signal>) {
+    ) -> (Self, broadcast::Sender<SignalDetail>, broadcast::Receiver<SignalDetail>) {
         let (signal_tx, signal_rx) = broadcast::channel(256);
         (
             Self { indicators, candle_rx, signal_tx: signal_tx.clone() },
@@ -29,13 +29,23 @@ impl SignalEngine {
         loop {
             match self.candle_rx.recv().await {
                 Ok(candle) => {
-                    let signals: Vec<Option<Signal>> = self.indicators
+                    let indicator_signals: Vec<IndicatorSignal> = self.indicators
                         .iter_mut()
-                        .map(|ind| ind.update(&candle))
+                        .map(|ind| IndicatorSignal {
+                            name: ind.name().to_string(),
+                            signal: ind.update(&candle),
+                        })
                         .collect();
-                    let aggregated = Self::aggregate(&signals, 0.3);
+                    let raw: Vec<Option<Signal>> = indicator_signals.iter()
+                        .map(|is| is.signal.clone())
+                        .collect();
+                    let aggregated = Self::aggregate(&raw, 0.3);
                     debug!(signal = ?aggregated, "SignalEngine aggregated");
-                    let _ = self.signal_tx.send(aggregated);
+                    let detail = SignalDetail {
+                        aggregate: aggregated,
+                        indicators: indicator_signals,
+                    };
+                    let _ = self.signal_tx.send(detail);
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     warn!("SignalEngine lagged by {} candles", n);
@@ -182,6 +192,8 @@ mod tests {
             async { signal_rx.recv().await.unwrap() }
         ).await.expect("timeout");
 
-        assert!(matches!(sig, Signal::Buy { .. }));
+        assert!(matches!(sig.aggregate, Signal::Buy { .. }));
+        assert_eq!(sig.indicators.len(), 1);
+        assert_eq!(sig.indicators[0].name, "test");
     }
 }

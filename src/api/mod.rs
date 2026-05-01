@@ -9,7 +9,7 @@ use tokio::sync::{broadcast, RwLock};
 use crate::config::TradingConfig;
 use crate::exchange::ExchangeClient;
 use crate::news::analyzer::SentimentScore;
-use crate::signal::Signal;
+use crate::signal::SignalDetail;
 use crate::storage::db::Database;
 use crate::types::market::Candle;
 
@@ -18,9 +18,9 @@ pub struct AppState {
     pub db: Database,
     pub exchange: Arc<dyn ExchangeClient>,
     pub candle_tx: broadcast::Sender<Candle>,
-    pub signal_tx: broadcast::Sender<Signal>,
-    /// Rust SignalEngine が最後に出した最新シグナルのキャッシュ
-    pub latest_signal: Arc<RwLock<Option<Signal>>>,
+    pub signal_tx: broadcast::Sender<SignalDetail>,
+    /// Rust SignalEngine が最後に出した最新シグナルのキャッシュ（集計 + 各インジケータ）
+    pub latest_signal: Arc<RwLock<Option<SignalDetail>>>,
     /// 最新のニュースセンチメントスコアキャッシュ
     pub news_cache: Arc<RwLock<Vec<SentimentScore>>>,
     /// 取引設定（UIから変更可能）

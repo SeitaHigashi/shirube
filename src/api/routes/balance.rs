@@ -43,6 +43,7 @@ mod tests {
             exchange: mock,
             candle_tx,
             signal_tx,
+            latest_signal: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
             news_cache: std::sync::Arc::new(tokio::sync::RwLock::new(vec![])),
             trading_config: std::sync::Arc::new(tokio::sync::RwLock::new(
                 crate::config::TradingConfig::default(),

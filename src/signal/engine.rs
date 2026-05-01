@@ -14,10 +14,11 @@ impl SignalEngine {
     pub fn new(
         indicators: Vec<Box<dyn Indicator>>,
         candle_rx: broadcast::Receiver<Candle>,
-    ) -> (Self, broadcast::Receiver<Signal>) {
+    ) -> (Self, broadcast::Sender<Signal>, broadcast::Receiver<Signal>) {
         let (signal_tx, signal_rx) = broadcast::channel(256);
         (
-            Self { indicators, candle_rx, signal_tx },
+            Self { indicators, candle_rx, signal_tx: signal_tx.clone() },
+            signal_tx,
             signal_rx,
         )
     }
@@ -171,7 +172,7 @@ mod tests {
         ]);
         let indicators: Vec<Box<dyn Indicator>> = vec![Box::new(mock)];
 
-        let (engine, mut signal_rx) = SignalEngine::new(indicators, candle_rx);
+        let (engine, _signal_tx, mut signal_rx) = SignalEngine::new(indicators, candle_rx);
         tokio::spawn(engine.run());
 
         candle_tx.send(candle).unwrap();

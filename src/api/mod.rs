@@ -19,6 +19,8 @@ pub struct AppState {
     pub exchange: Arc<dyn ExchangeClient>,
     pub candle_tx: broadcast::Sender<Candle>,
     pub signal_tx: broadcast::Sender<Signal>,
+    /// Rust SignalEngine が最後に出した最新シグナルのキャッシュ
+    pub latest_signal: Arc<RwLock<Option<Signal>>>,
     /// 最新のニュースセンチメントスコアキャッシュ
     pub news_cache: Arc<RwLock<Vec<SentimentScore>>>,
     /// 取引設定（UIから変更可能）

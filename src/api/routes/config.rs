@@ -56,6 +56,7 @@ mod tests {
             exchange: mock,
             candle_tx,
             signal_tx,
+            latest_signal: Arc::new(RwLock::new(None)),
             news_cache: Arc::new(RwLock::new(vec![])),
             trading_config: Arc::new(RwLock::new(TradingConfig::default())),
         };

@@ -9,7 +9,7 @@ use tower_http::services::ServeDir;
 use tracing::info;
 
 use super::{
-    routes::{balance, backtest, candles, config, news, orders, ticker},
+    routes::{balance, backtest, candles, config, news, orders, signal, ticker},
     ws_handler, AppState,
 };
 
@@ -27,6 +27,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/orders", get(orders::get_orders).post(orders::post_order))
         .route("/api/backtest", get(backtest::list_backtests).post(backtest::run_backtest))
         .route("/api/news/latest", get(news::get_latest_news))
+        .route("/api/signal/latest", get(signal::get_latest_signal))
         .route("/api/config", get(config::get_config).put(config::put_config))
         // WebSocket endpoint
         .route("/ws/candles", get(ws_handler::ws_candles))
@@ -67,6 +68,7 @@ mod tests {
             exchange: mock,
             candle_tx,
             signal_tx,
+            latest_signal: Arc::new(RwLock::new(None)),
             news_cache: Arc::new(RwLock::new(vec![])),
             trading_config: Arc::new(RwLock::new(TradingConfig::default())),
         }

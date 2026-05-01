@@ -533,132 +533,61 @@
       return { macd: macdLine, sig: sigLine, hist };
     }
 
-    // ── Signal status ─────────────────────────────────────────────────────────
-
-    function computeSignalStatus() {
-      if (candleData.length < Math.max(currentCfg.sma_period, currentCfg.ema_period,
-          currentCfg.rsi_period + 1, currentCfg.macd_slow + currentCfg.macd_signal,
-          currentCfg.bollinger_period)) return null;
-
-      const closes = candleData.map(c => c.close);
-      const price = closes.at(-1);
-
-      const smaArr = calcSMA(closes, currentCfg.sma_period);
-      const smaVal = smaArr.at(-1)?.value;
-      const smaSignal = smaVal != null ? (price > smaVal ? 'BUY' : 'SELL') : null;
-
-      const emaArr = calcEMA(closes, currentCfg.ema_period);
-      const emaVal = emaArr.at(-1)?.value;
-      const emaSignal = emaVal != null ? (price > emaVal ? 'BUY' : 'SELL') : null;
-
-      const rsiArr = calcRSI(closes, currentCfg.rsi_period);
-      const rsiVal = rsiArr.at(-1)?.value;
-      const rsiSignal = rsiVal == null ? null : rsiVal < 30 ? 'BUY' : rsiVal > 70 ? 'SELL' : 'HOLD';
-
-      const { hist } = calcMACD(closes, currentCfg.macd_fast, currentCfg.macd_slow, currentCfg.macd_signal);
-      const macdHistVal = hist.at(-1)?.value;
-      const macdSignal = macdHistVal == null ? null : (macdHistVal > 0 ? 'BUY' : 'SELL');
-
-      const bbArr = calcBB(closes, currentCfg.bollinger_period, currentCfg.bollinger_std);
-      const bbLast = bbArr.at(-1);
-      const bbSignal = bbLast == null ? null
-        : price < bbLast.lower ? 'BUY'
-        : price > bbLast.upper ? 'SELL'
-        : 'HOLD';
-
-      const taSignals = [smaSignal, emaSignal, rsiSignal, macdSignal, bbSignal].filter(s => s != null);
-      const taScores = taSignals.map(s => s === 'BUY' ? 1 : s === 'SELL' ? -1 : 0);
-      const taAvg = taScores.length > 0 ? taScores.reduce((a, b) => a + b, 0) / taScores.length : 0;
-
-      // AI sentiment: -1.0〜+1.0 をそのまま使用
-      const sentScore = latestSentimentAvg ?? 0;
-      const sentSignal = sentScore > 0.1 ? 'BUY' : sentScore < -0.1 ? 'SELL' : 'HOLD';
-
-      // 重み付き合成: TA 0.8 + sentiment 0.2
-      const combined = taAvg * 0.8 + sentScore * 0.2;
-      const composite = combined > 0.2 ? 'BUY' : combined < -0.2 ? 'SELL' : 'HOLD';
-      const confidence = Math.abs(combined);
-
-      return { smaSignal, smaVal, emaSignal, emaVal, rsiVal, rsiSignal,
-               macdHistVal, macdSignal, bbLast, bbSignal,
-               sentScore, sentSignal,
-               composite, confidence, price };
-    }
+    // ── Signal panel (Rust SignalEngine API) ──────────────────────────────────
 
     function signalClass(s) {
       return s === 'BUY' ? 'signal-buy' : s === 'SELL' ? 'signal-sell' : 'signal-hold';
     }
 
-    function signalLabel(s) {
-      return s === 'BUY' ? '買↑' : s === 'SELL' ? '売↓' : '中立→';
-    }
-
-    function updateSignalPanel() {
-      const st = computeSignalStatus();
+    function renderSignalPanel(sig) {
       const compEl = document.getElementById('signal-composite-value');
       const confEl = document.getElementById('signal-confidence');
       const rowsEl = document.getElementById('signal-rows');
 
-      if (!st) {
+      if (sig === null || sig === undefined) {
         compEl.textContent = '---';
         compEl.className = 'signal-hold';
-        confEl.textContent = '';
-        rowsEl.innerHTML = '<div style="color:#888;font-size:11px">データ不足</div>';
+        confEl.textContent = 'シグナル待機中';
+        rowsEl.innerHTML = '';
         return;
       }
 
-      compEl.textContent = st.composite === 'BUY' ? '買いシグナル↑' : st.composite === 'SELL' ? '売りシグナル↓' : '様子見→';
-      compEl.className = signalClass(st.composite);
-      confEl.textContent = `信頼度 ${(st.confidence * 100).toFixed(0)}%`;
+      let kind, confidence, price;
+      if (sig === 'Hold') {
+        kind = 'HOLD'; confidence = null; price = null;
+      } else if (sig.Buy) {
+        kind = 'BUY'; confidence = sig.Buy.confidence; price = sig.Buy.price;
+      } else if (sig.Sell) {
+        kind = 'SELL'; confidence = sig.Sell.confidence; price = sig.Sell.price;
+      } else {
+        kind = 'HOLD'; confidence = null; price = null;
+      }
 
-      const fmt = v => v != null ? v.toLocaleString('ja-JP', { maximumFractionDigits: 1 }) : '---';
-      const fmtSmall = v => v != null ? v.toFixed(1) : '---';
+      compEl.textContent = kind === 'BUY' ? '買いシグナル↑' : kind === 'SELL' ? '売りシグナル↓' : '様子見→';
+      compEl.className = signalClass(kind);
+      confEl.textContent = confidence != null
+        ? `信頼度 ${(confidence * 100).toFixed(0)}% (Rust SignalEngine)`
+        : '(Rust SignalEngine)';
 
-      const rows = [
-        {
-          name: 'SMA',
-          detail: st.smaVal != null ? `${fmt(st.smaVal)} (価格差 ${(st.price - st.smaVal > 0 ? '+' : '')}${(st.price - st.smaVal).toFixed(0)})` : '---',
-          signal: st.smaSignal,
-        },
-        {
-          name: 'EMA',
-          detail: st.emaVal != null ? `${fmt(st.emaVal)} (価格差 ${(st.price - st.emaVal > 0 ? '+' : '')}${(st.price - st.emaVal).toFixed(0)})` : '---',
-          signal: st.emaSignal,
-        },
-        {
-          name: 'RSI',
-          detail: st.rsiVal != null ? `${fmtSmall(st.rsiVal)} ${st.rsiVal < 30 ? '(売られすぎ)' : st.rsiVal > 70 ? '(買われすぎ)' : ''}` : '---',
-          signal: st.rsiSignal,
-        },
-        {
-          name: 'MACD',
-          detail: st.macdHistVal != null ? `ヒスト ${st.macdHistVal > 0 ? '+' : ''}${st.macdHistVal.toFixed(0)}` : '---',
-          signal: st.macdSignal,
-        },
-        {
-          name: 'BB',
-          detail: st.bbLast != null ? (st.price < st.bbLast.lower ? '下限割れ' : st.price > st.bbLast.upper ? '上限突破' : '中間帯') : '---',
-          signal: st.bbSignal,
-        },
-        {
-          name: 'AI',
-          detail: latestSentimentAvg != null ? `センチメント ${st.sentScore > 0 ? '+' : ''}${st.sentScore.toFixed(2)}` : 'データなし',
-          signal: latestSentimentAvg != null ? st.sentSignal : null,
-        },
-      ];
-
-      rowsEl.innerHTML = rows.map(r => `
+      rowsEl.innerHTML = price ? `
         <div class="signal-row">
-          <span class="signal-name">${r.name}</span>
-          <span class="signal-detail">${r.detail}</span>
-          <span class="signal-badge ${signalClass(r.signal)}">${r.signal ? signalLabel(r.signal) : '---'}</span>
-        </div>`).join('');
+          <span class="signal-name">価格</span>
+          <span class="signal-detail">${Number(price).toLocaleString('ja-JP')}</span>
+          <span class="signal-badge"></span>
+        </div>` : '';
+    }
+
+    async function loadSignal() {
+      try {
+        const res = await fetch(`${BASE}/api/signal/latest`);
+        const sig = await res.json();
+        renderSignalPanel(sig);
+      } catch (e) { console.warn('signal load failed', e); }
     }
 
     // ── Global state ──────────────────────────────────────────────────────────
 
     let candleData = [];
-    let latestSentimentAvg = null; // AI news sentiment average (-1.0 to +1.0)
     let currentCfg = {
       sma_period: 20, ema_period: 20, rsi_period: 14,
       macd_fast: 12, macd_slow: 26, macd_signal: 9,
@@ -750,7 +679,6 @@
         syncingRange = false;
       }
       resizeCharts();
-      updateSignalPanel();
     }
 
     // ── Load historical candles ───────────────────────────────────────────────
@@ -1121,9 +1049,6 @@
         avgEl.textContent = avg.toFixed(2);
         avgEl.className = avg > 0.1 ? 'up' : avg < -0.1 ? 'down' : 'neutral';
 
-        latestSentimentAvg = avg;
-        updateSignalPanel();
-
         updateNewsMarkers(items);
 
         listEl.innerHTML = items.map(item => {
@@ -1262,6 +1187,7 @@
       loadCandles();
       loadOrders();
       loadNews();
+      loadSignal();
     });
 
     // ── Init ──────────────────────────────────────────────────────────────────
@@ -1270,11 +1196,13 @@
     loadTicker();
     loadBalance();
     loadOrders();
+    loadSignal();
     connectWS();
 
     setInterval(loadTicker, 5000);
     setInterval(loadBalance, 15000);
     setInterval(loadOrders, 10000);
+    setInterval(loadSignal, 5000);
 
     // Initial resize after layout settles
     setTimeout(resizeCharts, 100);

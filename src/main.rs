@@ -127,8 +127,26 @@ async fn main() -> anyhow::Result<()> {
     let init_risk_params = init_cfg.to_risk_params();
 
     // SignalEngine: Candle → Signal
-    let (signal_engine, signal_rx) = SignalEngine::new(indicators, market_bus.candle_rx());
+    let (signal_engine, signal_engine_tx, signal_rx) =
+        SignalEngine::new(indicators, market_bus.candle_rx());
     tokio::spawn(signal_engine.run());
+
+    // 最新シグナルをキャッシュするタスク（API配信用）
+    let latest_signal: Arc<RwLock<Option<crate::signal::Signal>>> =
+        Arc::new(RwLock::new(None));
+    {
+        let cache = Arc::clone(&latest_signal);
+        let mut rx = signal_engine_tx.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(sig) => { *cache.write().await = Some(sig); }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                }
+            }
+        });
+    }
 
     // TradingEngine: Signal → RiskManager → send_order
     let trading_engine = TradingEngine::new(
@@ -219,12 +237,12 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(3000);
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], api_port));
 
-    let (signal_tx, _signal_rx) = tokio::sync::broadcast::channel::<crate::signal::Signal>(64);
     let api_state = api::AppState {
         db: db.clone(),
         exchange: Arc::clone(&client),
         candle_tx: market_bus.candle_tx(),
-        signal_tx: signal_tx.clone(),
+        signal_tx: signal_engine_tx,
+        latest_signal,
         news_cache,
         trading_config: Arc::clone(&trading_config),
     };

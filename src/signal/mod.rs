@@ -2,12 +2,13 @@ pub mod engine;
 pub mod indicators;
 
 use rust_decimal::Decimal;
+use serde::Serialize;
 
 use crate::types::market::Candle;
 
 // ---- Signal ----
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum Signal {
     Buy { price: Decimal, confidence: f64 },
     Sell { price: Decimal, confidence: f64 },

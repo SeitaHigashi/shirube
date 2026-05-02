@@ -8,6 +8,10 @@ rust-version = "1.85"
 name = "shirube"
 path = "src/main.rs"
 
+[[bin]]
+name = "migrate_candles_to_tickers"
+path = "src/bin/migrate_candles_to_tickers.rs"
+
 [dependencies]
 tokio = { version = "1.37", features = ["full"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }

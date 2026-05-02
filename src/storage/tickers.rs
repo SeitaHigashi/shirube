@@ -73,6 +73,44 @@ impl TickerRepository {
         Ok(())
     }
 
+    /// StoredTicker を OHLCV を保持したまま保存する。
+    /// 同一 (product_code, timestamp) は INSERT OR IGNORE で無視する。
+    pub async fn insert_stored(&self, ticker: &StoredTicker) -> Result<()> {
+        let product_code = ticker.product_code.clone();
+        let timestamp = ticker.timestamp.to_rfc3339();
+        let best_bid = ticker.best_bid.to_string();
+        let best_ask = ticker.best_ask.to_string();
+        let best_bid_size = ticker.best_bid_size.to_string();
+        let best_ask_size = ticker.best_ask_size.to_string();
+        let ltp_open = ticker.ltp_open.to_string();
+        let ltp = ticker.ltp.to_string();
+        let ltp_high = ticker.ltp_high.to_string();
+        let ltp_low = ticker.ltp_low.to_string();
+        let volume = ticker.volume.to_string();
+        let volume_by_product = ticker.volume_by_product.to_string();
+
+        self.conn
+            .call(move |c| {
+                c.execute(
+                    "INSERT OR IGNORE INTO tickers
+                        (product_code, timestamp,
+                         best_bid, best_ask, best_bid_size, best_ask_size,
+                         ltp_open, ltp, ltp_high, ltp_low,
+                         volume, volume_by_product)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                    rusqlite::params![
+                        product_code, timestamp,
+                        best_bid, best_ask, best_bid_size, best_ask_size,
+                        ltp_open, ltp, ltp_high, ltp_low,
+                        volume, volume_by_product
+                    ],
+                )?;
+                Ok(())
+            })
+            .await?;
+        Ok(())
+    }
+
     /// 直近 N 件の StoredTicker を返す（古い順）。
     pub async fn latest(&self, product_code: &str, count: u32) -> Result<Vec<StoredTicker>> {
         let pc = product_code.to_string();

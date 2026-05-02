@@ -45,6 +45,29 @@ pub struct Candle {
     pub volume: Decimal,
 }
 
+/// DB に保存された Ticker。生ティックでは ltp_open = ltp = ltp_high = ltp_low。
+/// ダウンサンプリング後はバケット内の OHLC が集約される。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredTicker {
+    pub product_code: String,
+    /// バケット開始時刻（生ティックはティック自身の timestamp）
+    pub timestamp: DateTime<Utc>,
+    pub best_bid: Decimal,
+    pub best_ask: Decimal,
+    pub best_bid_size: Decimal,
+    pub best_ask_size: Decimal,
+    /// バケット内の始値（最初の ltp）
+    pub ltp_open: Decimal,
+    /// バケット内の終値（最後の ltp）
+    pub ltp: Decimal,
+    /// バケット内の高値
+    pub ltp_high: Decimal,
+    /// バケット内の安値
+    pub ltp_low: Decimal,
+    pub volume: Decimal,
+    pub volume_by_product: Decimal,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

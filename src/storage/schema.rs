@@ -156,6 +156,31 @@ pub async fn migrate(conn: &Connection) -> Result<()> {
             )?;
         }
 
+        if current_version < 7 {
+            c.execute_batch(
+                "CREATE TABLE IF NOT EXISTS tickers (
+                    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                    product_code      TEXT NOT NULL,
+                    timestamp         TEXT NOT NULL,
+                    best_bid          TEXT NOT NULL,
+                    best_ask          TEXT NOT NULL,
+                    best_bid_size     TEXT NOT NULL,
+                    best_ask_size     TEXT NOT NULL,
+                    ltp_open          TEXT NOT NULL,
+                    ltp               TEXT NOT NULL,
+                    ltp_high          TEXT NOT NULL,
+                    ltp_low           TEXT NOT NULL,
+                    volume            TEXT NOT NULL,
+                    volume_by_product TEXT NOT NULL,
+                    UNIQUE(product_code, timestamp)
+                );
+                CREATE INDEX IF NOT EXISTS idx_tickers_product_time
+                    ON tickers(product_code, timestamp DESC);
+
+                INSERT INTO schema_version(version) VALUES(7);",
+            )?;
+        }
+
         Ok(())
     })
     .await?;

@@ -8,6 +8,7 @@ use super::{
     news_sentiments::NewsSentimentRepository,
     orders::OrderRepository,
     schema::migrate,
+    tickers::TickerRepository,
     trades::TradeRepository,
 };
 use crate::error::Result;
@@ -56,5 +57,9 @@ impl Database {
 
     pub fn config(&self) -> ConfigRepository {
         ConfigRepository::new(self.conn.clone())
+    }
+
+    pub fn tickers(&self) -> TickerRepository {
+        TickerRepository::new(self.conn.clone())
     }
 }

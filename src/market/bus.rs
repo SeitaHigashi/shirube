@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
@@ -14,7 +16,7 @@ impl MarketDataBus {
     /// WS を統合してキャンドルを broadcast する。
     ///
     /// - `ws_tx`: bitFlyer WS タスクが publish している broadcast sender
-    /// - `db`: CandleRepository への保存に使用
+    /// - `db`: CandleRepository / TickerRepository への保存に使用
     pub async fn start(
         ws_tx: broadcast::Sender<WsMessage>,
         db: Database,
@@ -23,13 +25,14 @@ impl MarketDataBus {
     ) -> Self {
         let (candle_tx, _) = broadcast::channel::<Candle>(512);
 
-        // WS task: executions → Candle 集計
+        // WS task: executions → Candle 集計 + Ticker 保存
         {
             let tx = candle_tx.clone();
             let pc = product_code.to_string();
+            let db_ws = db.clone();
             let mut ws_rx = ws_tx.subscribe();
             tokio::spawn(async move {
-                let mut agg = CandleAggregator::new(pc, resolution_secs);
+                let mut agg = CandleAggregator::new(pc.clone(), resolution_secs);
                 loop {
                     match ws_rx.recv().await {
                         Ok(WsMessage::Executions(trades)) => {
@@ -40,6 +43,10 @@ impl MarketDataBus {
                         Ok(WsMessage::Ticker(ticker)) => {
                             if let Some(candle) = agg.feed_ticker(&ticker) {
                                 let _ = tx.send(candle);
+                            }
+                            // Ticker を全件 DB に保存（スロットルなし）
+                            if let Err(e) = db_ws.tickers().insert(&ticker).await {
+                                warn!("Failed to insert ticker: {}", e);
                             }
                         }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -53,12 +60,13 @@ impl MarketDataBus {
 
         // DB 保存 task: candle_tx を購読して永続化
         {
+            let db_candle = db.clone();
             let mut candle_rx = candle_tx.subscribe();
             tokio::spawn(async move {
                 loop {
                     match candle_rx.recv().await {
                         Ok(candle) => {
-                            if let Err(e) = db.candles().upsert(&candle).await {
+                            if let Err(e) = db_candle.candles().upsert(&candle).await {
                                 warn!("Failed to upsert candle: {}", e);
                             }
                         }
@@ -66,6 +74,34 @@ impl MarketDataBus {
                             warn!("MarketDataBus DB task lagged by {}", n);
                         }
                         Err(broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+        }
+
+        // ダウンサンプルタスク: 起動時に即実行 + 1時間ごと
+        {
+            let pc = product_code.to_string();
+            let db_ds = db.clone();
+            tokio::spawn(async move {
+                // 起動直後に一度実行（前回停止中に溜まった分を処理）
+                match db_ds.tickers().downsample(&pc).await {
+                    Ok(s) => info!(
+                        "Ticker downsample (startup): -{} tickers",
+                        s.tickers_deleted
+                    ),
+                    Err(e) => warn!("Ticker downsample failed: {}", e),
+                }
+
+                let mut iv = tokio::time::interval(Duration::from_secs(3600));
+                loop {
+                    iv.tick().await;
+                    match db_ds.tickers().downsample(&pc).await {
+                        Ok(s) => info!(
+                            "Ticker downsample: -{} tickers",
+                            s.tickers_deleted
+                        ),
+                        Err(e) => warn!("Ticker downsample failed: {}", e),
                     }
                 }
             });

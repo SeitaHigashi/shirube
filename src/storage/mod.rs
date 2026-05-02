@@ -6,4 +6,5 @@ pub mod mock_state;
 pub mod news_sentiments;
 pub mod orders;
 pub mod schema;
+pub mod tickers;
 pub mod trades;

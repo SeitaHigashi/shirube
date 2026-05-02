@@ -751,8 +751,8 @@
           low: parseFloat(c.low), close: parseFloat(c.close),
         })).sort((a, b) => a.time - b.time);
         if (data.length > 0) {
-          candleSeries.setData(data);
           candleData = data;
+          candleSeries.setData(data);
           renderIndicators();
           chart.timeScale().fitContent();
           if (document.getElementById('cb-rsi').checked)  rsiChart.timeScale().fitContent();

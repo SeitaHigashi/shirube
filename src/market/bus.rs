@@ -58,27 +58,6 @@ impl MarketDataBus {
             });
         }
 
-        // DB 保存 task: candle_tx を購読して永続化
-        {
-            let db_candle = db.clone();
-            let mut candle_rx = candle_tx.subscribe();
-            tokio::spawn(async move {
-                loop {
-                    match candle_rx.recv().await {
-                        Ok(candle) => {
-                            if let Err(e) = db_candle.candles().upsert(&candle).await {
-                                warn!("Failed to upsert candle: {}", e);
-                            }
-                        }
-                        Err(broadcast::error::RecvError::Lagged(n)) => {
-                            warn!("MarketDataBus DB task lagged by {}", n);
-                        }
-                        Err(broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            });
-        }
-
         // ダウンサンプルタスク: 起動時に即実行 + 1時間ごと
         {
             let pc = product_code.to_string();

@@ -30,7 +30,7 @@ pub async fn get_candles(
     State(state): State<AppState>,
     Query(q): Query<CandleQuery>,
 ) -> Result<Json<Vec<Candle>>, StatusCode> {
-    let repo = state.db.candles();
+    let repo = state.db.tickers();
 
     let to = q.to.unwrap_or_else(Utc::now);
     let from = q.from.unwrap_or_else(|| {
@@ -49,6 +49,7 @@ mod tests {
     use crate::api::AppState;
     use crate::exchange::mock::MockExchangeClient;
     use crate::storage::db::Database;
+    use crate::types::market::Ticker;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;
@@ -98,23 +99,23 @@ mod tests {
     async fn get_candles_returns_stored_candles() {
         let (app, db) = make_app().await;
         let t = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
-        db.candles()
-            .upsert(&Candle {
+        db.tickers()
+            .insert(&Ticker {
                 product_code: "BTC_JPY".into(),
-                open_time: t,
-                resolution_secs: 60,
-                open: dec!(9_000_000),
-                high: dec!(9_010_000),
-                low: dec!(8_990_000),
-                close: dec!(9_005_000),
+                timestamp: t,
+                best_bid: dec!(8_990_000),
+                best_ask: dec!(9_010_000),
+                best_bid_size: dec!(0.1),
+                best_ask_size: dec!(0.1),
+                ltp: dec!(9_005_000),
                 volume: dec!(1),
+                volume_by_product: dec!(1),
             })
             .await
             .unwrap();
 
         let from = t - chrono::Duration::seconds(60);
         let to = t + chrono::Duration::seconds(60);
-        // UTC は "+00:00" ではなく "Z" 形式を使いパーセントエンコード不要にする
         let from_str = from.format("%Y-%m-%dT%H:%M:%SZ").to_string();
         let to_str = to.format("%Y-%m-%dT%H:%M:%SZ").to_string();
         let uri = format!("/api/candles?resolution=60&from={from_str}&to={to_str}");

@@ -5,7 +5,7 @@ use std::str::FromStr;
 use tokio_rusqlite::Connection;
 
 use crate::error::Result;
-use crate::types::market::{StoredTicker, Ticker};
+use crate::types::market::{Candle, StoredTicker, Ticker};
 
 pub struct TickerRepository {
     conn: Connection,
@@ -170,6 +170,99 @@ impl TickerRepository {
             })
             .await?;
         Ok(rows)
+    }
+
+    /// tickers テーブルから任意の resolution_secs でキャンドルを集約して返す。
+    /// ltp_open/ltp_high/ltp_low/ltp を OHLC として使用する。
+    pub async fn get_aggregated(
+        &self,
+        product_code: &str,
+        resolution_secs: u32,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+        limit: Option<u32>,
+    ) -> Result<Vec<Candle>> {
+        let pc = product_code.to_string();
+        let from_str = from.to_rfc3339();
+        let to_str = to.to_rfc3339();
+        let limit = limit.unwrap_or(1000);
+        let res = resolution_secs as i64;
+
+        let candles = self
+            .conn
+            .call(move |c| {
+                let mut stmt = c.prepare(
+                    "WITH numbered AS (
+                       SELECT product_code, timestamp,
+                         (strftime('%s', timestamp) / ?1) * ?1 AS bucket_ts,
+                         CAST(ltp_open AS REAL) AS open,
+                         CAST(ltp_high AS REAL) AS high,
+                         CAST(ltp_low  AS REAL) AS low,
+                         CAST(ltp      AS REAL) AS close,
+                         CAST(volume   AS REAL) AS volume,
+                         ROW_NUMBER() OVER (
+                           PARTITION BY product_code, (strftime('%s', timestamp) / ?1)
+                           ORDER BY timestamp ASC
+                         ) AS rn_asc,
+                         ROW_NUMBER() OVER (
+                           PARTITION BY product_code, (strftime('%s', timestamp) / ?1)
+                           ORDER BY timestamp DESC
+                         ) AS rn_desc
+                       FROM tickers
+                       WHERE product_code = ?2
+                         AND timestamp >= ?3
+                         AND timestamp <= ?4
+                     ),
+                     agg AS (
+                       SELECT product_code, bucket_ts,
+                         MAX(CASE WHEN rn_asc  = 1 THEN open  END) AS open,
+                         MAX(high) AS high,
+                         MIN(low)  AS low,
+                         MAX(CASE WHEN rn_desc = 1 THEN close END) AS close,
+                         SUM(volume) AS volume
+                       FROM numbered
+                       GROUP BY product_code, bucket_ts
+                     )
+                     SELECT product_code,
+                       strftime('%Y-%m-%dT%H:%M:%SZ', bucket_ts, 'unixepoch') AS open_time,
+                       ?1 AS resolution_secs,
+                       CAST(open   AS TEXT),
+                       CAST(high   AS TEXT),
+                       CAST(low    AS TEXT),
+                       CAST(close  AS TEXT),
+                       CAST(volume AS TEXT)
+                     FROM agg
+                     ORDER BY bucket_ts ASC
+                     LIMIT ?5",
+                )?;
+                let rows = stmt.query_map(
+                    rusqlite::params![res, pc, from_str, to_str, limit],
+                    row_to_candle,
+                )?;
+                Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+            })
+            .await?;
+        Ok(candles)
+    }
+
+    /// 直近 count バケット分のキャンドルをウォームアップ用に返す。
+    pub async fn get_latest_as_candles(
+        &self,
+        product_code: &str,
+        resolution_secs: u32,
+        count: u32,
+    ) -> Result<Vec<Candle>> {
+        let to = Utc::now();
+        let from = to
+            - chrono::Duration::seconds((resolution_secs as i64) * (count as i64) * 2);
+        let mut candles = self
+            .get_aggregated(product_code, resolution_secs, from, to, Some(count))
+            .await?;
+        // 最新 count 件に絞る（超過分を先頭から削除）
+        if candles.len() > count as usize {
+            candles.drain(..candles.len() - count as usize);
+        }
+        Ok(candles)
     }
 
     /// 段階的ダウンサンプリングを実行する。
@@ -367,6 +460,33 @@ impl TickerRepository {
 
         Ok(deleted_count)
     }
+}
+
+fn row_to_candle(row: &rusqlite::Row<'_>) -> rusqlite::Result<Candle> {
+    use std::str::FromStr;
+    let product_code: String = row.get(0)?;
+    let open_time_str: String = row.get(1)?;
+    let resolution_secs: u32 = row.get(2)?;
+    let open_str: String = row.get(3)?;
+    let high_str: String = row.get(4)?;
+    let low_str: String = row.get(5)?;
+    let close_str: String = row.get(6)?;
+    let volume_str: String = row.get(7)?;
+
+    let open_time = DateTime::parse_from_rfc3339(&open_time_str)
+        .map(|dt| dt.with_timezone(&Utc))
+        .unwrap_or_default();
+
+    Ok(Candle {
+        product_code,
+        open_time,
+        resolution_secs,
+        open: Decimal::from_str(&open_str).unwrap_or_default(),
+        high: Decimal::from_str(&high_str).unwrap_or_default(),
+        low: Decimal::from_str(&low_str).unwrap_or_default(),
+        close: Decimal::from_str(&close_str).unwrap_or_default(),
+        volume: Decimal::from_str(&volume_str).unwrap_or_default(),
+    })
 }
 
 fn row_to_stored_ticker(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredTicker> {

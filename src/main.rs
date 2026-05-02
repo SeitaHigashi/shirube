@@ -133,7 +133,7 @@ async fn main() -> anyhow::Result<()> {
         let warmup_count = indicators.iter().map(|i| i.min_periods()).max().unwrap_or(0);
         // 余裕を持って2倍のCandleを取得（クロス検出等に前後の値が必要なため）
         let fetch_count = (warmup_count * 2).max(1) as u32;
-        match db.candles().get_latest("BTC_JPY", 60, fetch_count).await {
+        match db.tickers().get_latest_as_candles("BTC_JPY", 60, fetch_count).await {
             Ok(hist) if !hist.is_empty() => {
                 info!(
                     "Warming up {} indicators with {} historical candles (need={})",

@@ -37,7 +37,7 @@ pub async fn get_candles(
         to - chrono::Duration::seconds((q.resolution as i64) * (q.count as i64))
     });
 
-    repo.get_range("BTC_JPY", q.resolution, from, to, Some(q.count))
+    repo.get_aggregated("BTC_JPY", q.resolution, from, to, Some(q.count))
         .await
         .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)

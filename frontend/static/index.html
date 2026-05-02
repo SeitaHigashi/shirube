@@ -157,8 +157,11 @@
       <div id="chart-header">
         <div id="chart-title">BTC/JPY — 1分足</div>
         <div id="resolution-buttons">
-          <button id="btn-1m" class="res-btn active">1分</button>
-          <button id="btn-5m" class="res-btn">5分</button>
+          <button id="btn-1m"  class="res-btn active">1分</button>
+          <button id="btn-5m"  class="res-btn">5分</button>
+          <button id="btn-15m" class="res-btn">15分</button>
+          <button id="btn-1h"  class="res-btn">1時間</button>
+          <button id="btn-1d"  class="res-btn">日足</button>
         </div>
       </div>
       <div id="indicator-bar">
@@ -642,12 +645,16 @@
       return Array.from(buckets.values()).sort((a, b) => a.time - b.time);
     }
 
+    const RES_BTN_ID = { 60: 'btn-1m', 300: 'btn-5m', 900: 'btn-15m', 3600: 'btn-1h', 86400: 'btn-1d' };
+    const RES_LABEL  = { 60: '1分足', 300: '5分足', 900: '15分足', 3600: '1時間足', 86400: '日足' };
+    const RES_COUNT  = { 60: 200, 300: 200, 900: 200, 3600: 200, 86400: 60 };
+
     function switchResolution(res) {
       currentResolution = res;
       document.querySelectorAll('.res-btn').forEach(b => b.classList.remove('active'));
-      document.getElementById(res === 60 ? 'btn-1m' : 'btn-5m').classList.add('active');
-      const labels = { 60: '1分足', 300: '5分足' };
-      document.getElementById('chart-title').textContent = `BTC/JPY — ${labels[res] || res + '秒足'}`;
+      const btnId = RES_BTN_ID[res];
+      if (btnId) document.getElementById(btnId).classList.add('active');
+      document.getElementById('chart-title').textContent = `BTC/JPY — ${RES_LABEL[res] || res + '秒足'}`;
       candleData = [];
       ws1mBuffer = [];
       hasMoreHistory = true;
@@ -661,9 +668,8 @@
       const jstOffset = useJST ? JST_OFFSET : 0;
       const oldestUtc = candleData[0].time - jstOffset;
       const to = new Date(oldestUtc * 1000).toISOString();
-      const fetchRes = currentResolution > 60 ? 60 : currentResolution;
-      const fetchCount = currentResolution > 60 ? 200 * (currentResolution / 60) : 200;
-      const url = `${BASE}/api/candles?resolution=${fetchRes}&count=${Math.min(Math.round(fetchCount), 1000)}&to=${encodeURIComponent(to)}`;
+      const count = RES_COUNT[currentResolution] || 200;
+      const url = `${BASE}/api/candles?resolution=${currentResolution}&count=${count}&to=${encodeURIComponent(to)}`;
       try {
         const res = await fetch(url);
         if (!res.ok) return;
@@ -675,9 +681,8 @@
             open: parseFloat(c.open), high: parseFloat(c.high),
             low: parseFloat(c.low), close: parseFloat(c.close),
           }))
+          .filter(c => c.time < candleData[0].time)
           .sort((a, b) => a.time - b.time);
-        if (currentResolution > 60) newData = aggregateCandles(newData, currentResolution);
-        newData = newData.filter(c => c.time < candleData[0].time);
         if (newData.length === 0) { hasMoreHistory = false; return; }
         candleData = [...newData, ...candleData];
         candleSeries.setData(candleData);
@@ -788,16 +793,14 @@
       isLoadingHistory = false;
       hasMoreHistory = true;
       try {
-        const fetchRes = currentResolution > 60 ? 60 : currentResolution;
-        const fetchCount = currentResolution > 60 ? Math.min(200 * (currentResolution / 60), 1000) : 200;
-        const res = await fetch(`${BASE}/api/candles?resolution=${fetchRes}&count=${Math.round(fetchCount)}`);
+        const count = RES_COUNT[currentResolution] || 200;
+        const res = await fetch(`${BASE}/api/candles?resolution=${currentResolution}&count=${count}`);
         const candles = await res.json();
-        let data = candles.map(c => ({
+        const data = candles.map(c => ({
           time: toChartTime(c.open_time),
           open: parseFloat(c.open), high: parseFloat(c.high),
           low: parseFloat(c.low), close: parseFloat(c.close),
         })).sort((a, b) => a.time - b.time);
-        if (currentResolution > 60) data = aggregateCandles(data, currentResolution);
         if (data.length > 0) {
           candleData = data;
           candleSeries.setData(data);
@@ -1295,8 +1298,11 @@
 
     // ── Resolution buttons ────────────────────────────────────────────────────
 
-    document.getElementById('btn-1m').addEventListener('click', () => switchResolution(60));
-    document.getElementById('btn-5m').addEventListener('click', () => switchResolution(300));
+    document.getElementById('btn-1m' ).addEventListener('click', () => switchResolution(60));
+    document.getElementById('btn-5m' ).addEventListener('click', () => switchResolution(300));
+    document.getElementById('btn-15m').addEventListener('click', () => switchResolution(900));
+    document.getElementById('btn-1h' ).addEventListener('click', () => switchResolution(3600));
+    document.getElementById('btn-1d' ).addEventListener('click', () => switchResolution(86400));
 
     // ── Timezone toggle ───────────────────────────────────────────────────────
 

@@ -155,6 +155,84 @@ impl CandleRepository {
             .await?;
         Ok(candles)
     }
+
+    /// 任意の resolution_secs でキャンドルを集約して返す。
+    /// 常に DB 内の resolution_secs=60 の1分足を元データとして使用する。
+    /// resolution_secs=60 を指定した場合は1分足をそのまま返す。
+    pub async fn get_aggregated(
+        &self,
+        product_code: &str,
+        resolution_secs: u32,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+        limit: Option<u32>,
+    ) -> Result<Vec<Candle>> {
+        let product_code = product_code.to_string();
+        let from_str = from.to_rfc3339();
+        let to_str = to.to_rfc3339();
+        let limit = limit.unwrap_or(1000);
+        let res = resolution_secs as i64;
+
+        let candles = self
+            .conn
+            .call(move |c| {
+                let mut stmt = c.prepare(
+                    "WITH numbered AS (
+                       SELECT product_code, open_time,
+                         (strftime('%s', open_time) / ?1) * ?1 AS bucket_ts,
+                         CAST(open   AS REAL) AS open,
+                         CAST(high   AS REAL) AS high,
+                         CAST(low    AS REAL) AS low,
+                         CAST(close  AS REAL) AS close,
+                         CAST(volume AS REAL) AS volume,
+                         ROW_NUMBER() OVER (
+                           PARTITION BY product_code, (strftime('%s', open_time) / ?1)
+                           ORDER BY open_time ASC
+                         ) AS rn_asc,
+                         ROW_NUMBER() OVER (
+                           PARTITION BY product_code, (strftime('%s', open_time) / ?1)
+                           ORDER BY open_time DESC
+                         ) AS rn_desc
+                       FROM candles
+                       WHERE product_code = ?2
+                         AND resolution_secs = 60
+                         AND open_time >= ?3
+                         AND open_time <= ?4
+                     ),
+                     agg AS (
+                       SELECT
+                         product_code,
+                         bucket_ts,
+                         MAX(CASE WHEN rn_asc  = 1 THEN open  END) AS open,
+                         MAX(high)  AS high,
+                         MIN(low)   AS low,
+                         MAX(CASE WHEN rn_desc = 1 THEN close END) AS close,
+                         SUM(volume) AS volume
+                       FROM numbered
+                       GROUP BY product_code, bucket_ts
+                     )
+                     SELECT
+                       product_code,
+                       datetime(bucket_ts, 'unixepoch') AS open_time,
+                       ?1 AS resolution_secs,
+                       CAST(open   AS TEXT),
+                       CAST(high   AS TEXT),
+                       CAST(low    AS TEXT),
+                       CAST(close  AS TEXT),
+                       CAST(volume AS TEXT)
+                     FROM agg
+                     ORDER BY bucket_ts ASC
+                     LIMIT ?5",
+                )?;
+                let rows = stmt.query_map(
+                    rusqlite::params![res, product_code, from_str, to_str, limit],
+                    row_to_candle,
+                )?;
+                Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+            })
+            .await?;
+        Ok(candles)
+    }
 }
 
 fn row_to_candle(row: &rusqlite::Row<'_>) -> rusqlite::Result<Candle> {

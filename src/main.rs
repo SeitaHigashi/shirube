@@ -163,7 +163,7 @@ async fn main() -> anyhow::Result<()> {
 
     // SignalEngine: Candle → Signal
     let (signal_engine, signal_engine_tx, signal_rx) =
-        SignalEngine::new(indicators, market_bus.candle_rx());
+        SignalEngine::new(indicators, market_bus.candle_rx(), init_cfg.signal_threshold);
     tokio::spawn(signal_engine.run());
 
     // 最新シグナルをキャッシュするタスク（API配信用）
@@ -186,7 +186,7 @@ async fn main() -> anyhow::Result<()> {
     if !warmup_signals.is_empty() {
         use crate::signal::Signal;
         let raw: Vec<Option<Signal>> = warmup_signals.iter().map(|is| is.signal.clone()).collect();
-        let aggregated = SignalEngine::aggregate(&raw, 0.3);
+        let aggregated = SignalEngine::aggregate(&raw, init_cfg.signal_threshold);
         let detail = SignalDetail { aggregate: aggregated, indicators: warmup_signals };
         *latest_signal.write().await = Some(detail);
         info!("Pre-populated signal cache from warmup data");

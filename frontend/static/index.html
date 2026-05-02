@@ -21,6 +21,10 @@
     #chart-container { background: #16213e; border-radius: 8px; padding: 12px; grid-row: 1 / 4; display: flex; flex-direction: column; }
     #chart-header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
     #chart-title { font-size: 13px; color: #888; }
+    #resolution-buttons { display: flex; gap: 4px; margin-left: auto; }
+    .res-btn { background: #1e2d4a; color: #aaa; border: 1px solid #2a3f60; border-radius: 4px; padding: 2px 10px; cursor: pointer; font-size: 11px; }
+    .res-btn.active { background: #2a5298; color: #fff; border-color: #4a80d4; }
+    .res-btn:hover:not(.active) { background: #253a5e; }
     #indicator-bar { display: flex; gap: 12px; padding: 4px 0 6px; flex-wrap: wrap; }
     #indicator-bar label { font-size: 12px; color: #aaa; cursor: pointer; user-select: none; display: flex; align-items: center; gap: 4px; }
     #indicator-bar input[type=checkbox] { cursor: pointer; accent-color: #26a69a; }
@@ -152,6 +156,10 @@
     <div id="chart-container">
       <div id="chart-header">
         <div id="chart-title">BTC/JPY — 1分足</div>
+        <div id="resolution-buttons">
+          <button id="btn-1m" class="res-btn active">1分</button>
+          <button id="btn-5m" class="res-btn">5分</button>
+        </div>
       </div>
       <div id="indicator-bar">
         <label><input type="checkbox" id="cb-sma"><span class="ind-sma">SMA</span></label>
@@ -611,6 +619,40 @@
     let candleData = [];
     let isLoadingHistory = false;
     let hasMoreHistory = true;
+    let currentResolution = 60; // 現在選択中の足種（秒）
+    let ws1mBuffer = [];        // 1分足より長い足表示時のWS受信バッファ
+
+    // 任意のresolutionSecs単位でキャンドルを集約する汎用関数
+    function aggregateCandles(candles, resolutionSecs) {
+      const buckets = new Map();
+      for (const c of candles) {
+        const jstOffset = useJST ? JST_OFFSET : 0;
+        const utcTime = c.time - jstOffset;
+        const bucketUtc = Math.floor(utcTime / resolutionSecs) * resolutionSecs;
+        const bucketTime = bucketUtc + jstOffset;
+        if (!buckets.has(bucketTime)) {
+          buckets.set(bucketTime, { time: bucketTime, open: c.open, high: c.high, low: c.low, close: c.close });
+        } else {
+          const b = buckets.get(bucketTime);
+          b.high = Math.max(b.high, c.high);
+          b.low  = Math.min(b.low, c.low);
+          b.close = c.close;
+        }
+      }
+      return Array.from(buckets.values()).sort((a, b) => a.time - b.time);
+    }
+
+    function switchResolution(res) {
+      currentResolution = res;
+      document.querySelectorAll('.res-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById(res === 60 ? 'btn-1m' : 'btn-5m').classList.add('active');
+      const labels = { 60: '1分足', 300: '5分足' };
+      document.getElementById('chart-title').textContent = `BTC/JPY — ${labels[res] || res + '秒足'}`;
+      candleData = [];
+      ws1mBuffer = [];
+      hasMoreHistory = true;
+      loadCandles();
+    }
 
     async function loadMoreHistory() {
       if (isLoadingHistory || !hasMoreHistory || candleData.length === 0) return;
@@ -619,20 +661,23 @@
       const jstOffset = useJST ? JST_OFFSET : 0;
       const oldestUtc = candleData[0].time - jstOffset;
       const to = new Date(oldestUtc * 1000).toISOString();
-      const url = `${BASE}/api/candles?resolution=60&count=200&to=${encodeURIComponent(to)}`;
+      const fetchRes = currentResolution > 60 ? 60 : currentResolution;
+      const fetchCount = currentResolution > 60 ? 200 * (currentResolution / 60) : 200;
+      const url = `${BASE}/api/candles?resolution=${fetchRes}&count=${Math.min(Math.round(fetchCount), 1000)}&to=${encodeURIComponent(to)}`;
       try {
         const res = await fetch(url);
         if (!res.ok) return;
         const candles = await res.json();
         if (candles.length === 0) { hasMoreHistory = false; return; }
-        const newData = candles
+        let newData = candles
           .map(c => ({
             time: toChartTime(c.open_time),
             open: parseFloat(c.open), high: parseFloat(c.high),
             low: parseFloat(c.low), close: parseFloat(c.close),
           }))
-          .filter(c => c.time < candleData[0].time)
           .sort((a, b) => a.time - b.time);
+        if (currentResolution > 60) newData = aggregateCandles(newData, currentResolution);
+        newData = newData.filter(c => c.time < candleData[0].time);
         if (newData.length === 0) { hasMoreHistory = false; return; }
         candleData = [...newData, ...candleData];
         candleSeries.setData(candleData);
@@ -743,13 +788,16 @@
       isLoadingHistory = false;
       hasMoreHistory = true;
       try {
-        const res = await fetch(`${BASE}/api/candles?resolution=60&count=200`);
+        const fetchRes = currentResolution > 60 ? 60 : currentResolution;
+        const fetchCount = currentResolution > 60 ? Math.min(200 * (currentResolution / 60), 1000) : 200;
+        const res = await fetch(`${BASE}/api/candles?resolution=${fetchRes}&count=${Math.round(fetchCount)}`);
         const candles = await res.json();
-        const data = candles.map(c => ({
+        let data = candles.map(c => ({
           time: toChartTime(c.open_time),
           open: parseFloat(c.open), high: parseFloat(c.high),
           low: parseFloat(c.low), close: parseFloat(c.close),
         })).sort((a, b) => a.time - b.time);
+        if (currentResolution > 60) data = aggregateCandles(data, currentResolution);
         if (data.length > 0) {
           candleData = data;
           candleSeries.setData(data);
@@ -916,19 +964,31 @@
       ws.onmessage = (evt) => {
         try {
           const c = JSON.parse(evt.data);
-          const bar = {
+          const bar1m = {
             time: toChartTime(c.open_time),
             open: parseFloat(c.open), high: parseFloat(c.high),
             low: parseFloat(c.low), close: parseFloat(c.close),
           };
-          candleSeries.update(bar);
-          // Update candleData
-          const idx = candleData.findIndex(d => d.time === bar.time);
-          if (idx >= 0) {
-            candleData[idx] = bar;
+
+          if (currentResolution === 60) {
+            // 1分足モード: 従来通りの処理
+            candleSeries.update(bar1m);
+            const idx = candleData.findIndex(d => d.time === bar1m.time);
+            if (idx >= 0) { candleData[idx] = bar1m; } else { candleData.push(bar1m); candleData.sort((a, b) => a.time - b.time); }
           } else {
-            candleData.push(bar);
-            candleData.sort((a, b) => a.time - b.time);
+            // 長い足モード: 1分足をバッファに蓄積し集約してチャートを更新
+            const idx = ws1mBuffer.findIndex(d => d.time === bar1m.time);
+            if (idx >= 0) { ws1mBuffer[idx] = bar1m; } else { ws1mBuffer.push(bar1m); ws1mBuffer.sort((a, b) => a.time - b.time); }
+            // 最新N本だけ保持してメモリを節約
+            if (ws1mBuffer.length > 1000) ws1mBuffer = ws1mBuffer.slice(-1000);
+            // 集約結果でcandleDataの末尾を更新
+            const aggregated = aggregateCandles([...candleData.slice(-currentResolution), ...ws1mBuffer], currentResolution);
+            if (aggregated.length > 0) {
+              const latestAgg = aggregated[aggregated.length - 1];
+              const aidx = candleData.findIndex(d => d.time === latestAgg.time);
+              if (aidx >= 0) { candleData[aidx] = latestAgg; } else { candleData.push(latestAgg); candleData.sort((a, b) => a.time - b.time); }
+              candleSeries.update(latestAgg);
+            }
           }
           renderIndicators();
           document.getElementById('price').textContent = Number(c.close).toLocaleString('ja-JP');
@@ -1232,6 +1292,11 @@
     });
 
     document.getElementById('cb-news').addEventListener('change', applyAllMarkers);
+
+    // ── Resolution buttons ────────────────────────────────────────────────────
+
+    document.getElementById('btn-1m').addEventListener('click', () => switchResolution(60));
+    document.getElementById('btn-5m').addEventListener('click', () => switchResolution(300));
 
     // ── Timezone toggle ───────────────────────────────────────────────────────
 

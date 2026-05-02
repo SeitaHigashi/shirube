@@ -8,16 +8,18 @@ pub struct SignalEngine {
     indicators: Vec<Box<dyn Indicator>>,
     candle_rx: broadcast::Receiver<Candle>,
     signal_tx: broadcast::Sender<SignalDetail>,
+    threshold: f64,
 }
 
 impl SignalEngine {
     pub fn new(
         indicators: Vec<Box<dyn Indicator>>,
         candle_rx: broadcast::Receiver<Candle>,
+        threshold: f64,
     ) -> (Self, broadcast::Sender<SignalDetail>, broadcast::Receiver<SignalDetail>) {
         let (signal_tx, signal_rx) = broadcast::channel(256);
         (
-            Self { indicators, candle_rx, signal_tx: signal_tx.clone() },
+            Self { indicators, candle_rx, signal_tx: signal_tx.clone(), threshold },
             signal_tx,
             signal_rx,
         )
@@ -40,7 +42,7 @@ impl SignalEngine {
                     let raw: Vec<Option<Signal>> = indicator_signals.iter()
                         .map(|is| is.signal.clone())
                         .collect();
-                    let aggregated = Self::aggregate(&raw, 0.3);
+                    let aggregated = Self::aggregate(&raw, self.threshold);
                     debug!(signal = ?aggregated, "SignalEngine aggregated");
                     let detail = SignalDetail {
                         aggregate: aggregated,
@@ -183,7 +185,7 @@ mod tests {
         ]);
         let indicators: Vec<Box<dyn Indicator>> = vec![Box::new(mock)];
 
-        let (engine, _signal_tx, mut signal_rx) = SignalEngine::new(indicators, candle_rx);
+        let (engine, _signal_tx, mut signal_rx) = SignalEngine::new(indicators, candle_rx, 0.3);
         tokio::spawn(engine.run());
 
         candle_tx.send(candle).unwrap();

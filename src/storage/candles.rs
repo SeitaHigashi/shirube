@@ -213,7 +213,7 @@ impl CandleRepository {
                      )
                      SELECT
                        product_code,
-                       datetime(bucket_ts, 'unixepoch') AS open_time,
+                       strftime('%Y-%m-%dT%H:%M:%SZ', bucket_ts, 'unixepoch') AS open_time,
                        ?1 AS resolution_secs,
                        CAST(open   AS TEXT),
                        CAST(high   AS TEXT),

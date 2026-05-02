@@ -10,9 +10,10 @@ use crate::alert::AlertManager;
 use crate::config::TradingConfig;
 use crate::exchange::ExchangeClient;
 use crate::risk::manager::RiskManager;
-use crate::risk::{RiskDecision, RiskParams};
+use crate::risk::RiskDecision;
 use crate::signal::{Signal, SignalDetail};
-use crate::types::order::{OrderRequest, OrderSide, OrderType};
+use crate::storage::orders::OrderRepository;
+use crate::types::order::{Order, OrderRequest, OrderSide, OrderStatus, OrderType};
 
 pub struct TradingEngine {
     signal_rx: broadcast::Receiver<SignalDetail>,
@@ -24,6 +25,8 @@ pub struct TradingEngine {
     last_reset_date: Option<NaiveDate>,
     /// 取引設定（UIから動的変更可能）
     config: Arc<RwLock<TradingConfig>>,
+    /// 注文をDBに永続化するリポジトリ（オプション）
+    order_repo: Option<OrderRepository>,
 }
 
 impl TradingEngine {
@@ -41,7 +44,13 @@ impl TradingEngine {
             alert: Arc::new(AlertManager::new()),
             last_reset_date: None,
             config: Arc::new(RwLock::new(TradingConfig::default())),
+            order_repo: None,
         }
+    }
+
+    pub fn with_order_repo(mut self, repo: OrderRepository) -> Self {
+        self.order_repo = Some(repo);
+        self
     }
 
     pub fn with_config(mut self, config: Arc<RwLock<TradingConfig>>) -> Self {
@@ -119,6 +128,24 @@ impl TradingEngine {
                     acceptance_id,
                     "Order placed"
                 );
+                if let Some(repo) = &self.order_repo {
+                    let now = Utc::now();
+                    let order = Order {
+                        id: None,
+                        acceptance_id: acceptance_id.clone(),
+                        product_code: self.product_code.clone(),
+                        side: req.side.clone(),
+                        order_type: req.order_type.clone(),
+                        price: req.price,
+                        size: req.size,
+                        status: OrderStatus::Completed,
+                        created_at: now,
+                        updated_at: now,
+                    };
+                    if let Err(e) = repo.upsert(&order).await {
+                        warn!("Failed to persist order to DB: {}", e);
+                    }
+                }
             }
             RiskDecision::Reject(reason) => {
                 warn!(reason, "Order rejected by risk manager");

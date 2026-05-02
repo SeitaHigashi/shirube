@@ -8,11 +8,12 @@ pub async fn get_orders(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<Order>>, StatusCode> {
     state
-        .exchange
-        .get_orders("BTC_JPY", None, Some(50))
+        .db
+        .orders()
+        .fetch_all(50)
         .await
         .map(Json)
-        .map_err(|_| StatusCode::BAD_GATEWAY)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 #[derive(Debug, Deserialize)]

@@ -200,7 +200,8 @@ async fn main() -> anyhow::Result<()> {
         "BTC_JPY".to_string(),
     )
     .with_alert(Arc::clone(&alert))
-    .with_config(Arc::clone(&trading_config));
+    .with_config(Arc::clone(&trading_config))
+    .with_order_repo(db.orders());
     tokio::spawn(trading_engine.run());
 
     // News AI タスク起動（5分ごとにRSSフィードを取得、新規記事のみOllamaでセンチメント分析）

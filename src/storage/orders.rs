@@ -70,6 +70,23 @@ impl OrderRepository {
         Ok(order)
     }
 
+    pub async fn fetch_all(&self, limit: u32) -> Result<Vec<Order>> {
+        let orders = self
+            .conn
+            .call(move |c| {
+                let mut stmt = c.prepare(
+                    "SELECT id, acceptance_id, product_code, side, order_type, price, size, status, created_at, updated_at
+                     FROM orders
+                     ORDER BY created_at DESC
+                     LIMIT ?1",
+                )?;
+                let rows = stmt.query_map(rusqlite::params![limit], row_to_order)?;
+                Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+            })
+            .await?;
+        Ok(orders)
+    }
+
     pub async fn get_by_status(
         &self,
         product_code: &str,

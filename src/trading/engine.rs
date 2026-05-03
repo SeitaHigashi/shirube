@@ -93,8 +93,13 @@ impl TradingEngine {
             cfg.allocation_threshold
         };
 
-        // 現在の残高・ポジションを取得
-        let balances = self.exchange.get_balance().await?;
+        // 現在の残高・ポジション・価格を並列取得
+        let (balances, positions, ticker) = tokio::try_join!(
+            self.exchange.get_balance(),
+            self.exchange.get_positions(&self.product_code),
+            self.exchange.get_ticker(&self.product_code),
+        )?;
+
         let jpy_balance = balances.iter()
             .find(|b| b.currency_code == "JPY")
             .map(|b| b.available)
@@ -108,7 +113,6 @@ impl TradingEngine {
             info!("RiskManager daily reset: baseline_jpy={}", jpy_balance);
         }
 
-        let positions = self.exchange.get_positions(&self.product_code).await?;
         let btc_position: Decimal = positions.iter().map(|p| p.size).sum();
 
         // BTC 残高も考慮（MockExchangeClient では balance で管理）
@@ -118,8 +122,6 @@ impl TradingEngine {
             .unwrap_or(Decimal::ZERO);
         let btc_held = btc_position.max(btc_balance);
 
-        // 現在の BTC 価格を取得
-        let ticker = self.exchange.get_ticker(&self.product_code).await?;
         let btc_price = ticker.ltp;
 
         let btc_value = btc_held * btc_price;

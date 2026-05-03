@@ -79,7 +79,7 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["signal_threshold"], 0.4);
-        assert_eq!(v["sma_period"], 75);
+        assert_eq!(v["sma_period"], 200);
     }
 
     #[tokio::test]

@@ -65,13 +65,13 @@ impl Default for TradingConfig {
             min_order_size: 0.001,
             signal_threshold: 0.4,
             allocation_threshold: 0.05,
-            sma_period: 75,
-            ema_period: 50,
-            rsi_period: 21,
-            macd_fast: 26,
-            macd_slow: 52,
-            macd_signal: 9,
-            bollinger_period: 20,
+            sma_period: 200,
+            ema_period: 100,
+            rsi_period: 42,
+            macd_fast: 52,
+            macd_slow: 104,
+            macd_signal: 18,
+            bollinger_period: 60,
             bollinger_std: 2.0,
             ta_weight: 0.7,
             sentiment_weight: 0.3,
@@ -146,7 +146,7 @@ mod tests {
     fn default_values_are_correct() {
         let cfg = TradingConfig::default();
         assert_eq!(cfg.signal_threshold, 0.4);
-        assert_eq!(cfg.sma_period, 75);
+        assert_eq!(cfg.sma_period, 200);
         assert_eq!(cfg.ta_weight, 0.7);
     }
 

@@ -129,6 +129,14 @@
     .signal-buy { color: #26a69a; }
     .signal-sell { color: #ef5350; }
     .signal-hold { color: #888; }
+    #signal-zone-diff { display: none; font-size: 11px; color: #aaa; margin-bottom: 8px; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .zone-raw-label { color: #777; }
+    .zone-raw-val { color: #ccc; font-weight: bold; }
+    .zone-arrow { color: #555; }
+    .zone-badge { font-size: 10px; font-weight: bold; padding: 1px 6px; border-radius: 3px; }
+    .zone-badge-a { background: #4a1515; color: #ef5350; border: 1px solid #ef5350; }
+    .zone-badge-b { background: #3a3000; color: #ffb300; border: 1px solid #ffb300; }
+    .zone-badge-c { background: #0d2e2b; color: #26a69a; border: 1px solid #26a69a; }
   </style>
 </head>
 <body>
@@ -188,6 +196,12 @@
         <span class="signal-composite-label">目標BTC配分</span>
         <span id="alloc-target-pct" class="signal-hold">--.--%</span>
         <span id="alloc-current-pct" style="font-size:11px;color:#888;">現在 --.--%</span>
+      </div>
+      <div id="signal-zone-diff">
+        <span class="zone-raw-label">生シグナル:</span>
+        <span id="raw-signal-pct" class="zone-raw-val">--.--%</span>
+        <span class="zone-arrow">→</span>
+        <span id="zone-badge" class="zone-badge zone-badge-b">Zone B 比例配分</span>
       </div>
       <div id="alloc-gauge-wrap">
         <div id="alloc-gauge-track">
@@ -593,7 +607,7 @@
         return;
       }
 
-      const agg = detail.aggregate; // { target_pct, confidence }
+      const agg = detail.aggregate; // { raw_signal, target_pct, confidence }
       const pct = (agg.target_pct * 100).toFixed(1);
       targetEl.textContent = `${pct}%`;
       targetEl.className = agg.target_pct > 0.55 ? 'signal-buy'
@@ -603,6 +617,29 @@
 
       if (currentAllocPct != null) {
         currentEl.textContent = `現在 ${(currentAllocPct * 100).toFixed(1)}%`;
+      }
+
+      // ゾーン差分表示: raw_signal と target_pct が 1% 以上異なる場合に表示
+      const zoneDiffEl = document.getElementById('signal-zone-diff');
+      const rawPctEl   = document.getElementById('raw-signal-pct');
+      const zoneBadgeEl = document.getElementById('zone-badge');
+      const rawSignal = agg.raw_signal != null ? agg.raw_signal : agg.target_pct;
+      const diff = Math.abs(rawSignal - agg.target_pct);
+      if (diff >= 0.01) {
+        rawPctEl.textContent = `${(rawSignal * 100).toFixed(1)}%`;
+        let zone, cls;
+        if (agg.target_pct <= 0.001 && rawSignal > 0.001) {
+          zone = 'Zone A  JPY保持'; cls = 'zone-badge zone-badge-a';
+        } else if (agg.target_pct >= 0.999 && rawSignal < 0.999) {
+          zone = 'Zone C  BTC保持'; cls = 'zone-badge zone-badge-c';
+        } else {
+          zone = 'Zone B  比例配分'; cls = 'zone-badge zone-badge-b';
+        }
+        zoneBadgeEl.textContent = zone;
+        zoneBadgeEl.className = cls;
+        zoneDiffEl.style.display = 'flex';
+      } else {
+        zoneDiffEl.style.display = 'none';
       }
 
       confEl.textContent = `信頼度 ${(agg.confidence * 100).toFixed(0)}%`;

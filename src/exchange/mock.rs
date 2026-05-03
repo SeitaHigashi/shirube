@@ -44,9 +44,9 @@ impl Default for MockExchangeClient {
 }
 
 impl MockExchangeClient {
-    /// デフォルト手数料 0.015% でクライアントを生成する。
+    /// デフォルト手数料 0.15% でクライアントを生成する。
     pub fn new() -> Self {
-        Self::with_fee(0.00015)
+        Self::with_fee(0.0015)
     }
 
     /// 手数料率を指定してクライアントを生成する（テスト用）。
@@ -362,19 +362,19 @@ mod tests {
 
     #[tokio::test]
     async fn fee_reduces_balance() {
-        let client = MockExchangeClient::with_fee(0.00015); // 0.015%
+        let client = MockExchangeClient::with_fee(0.0015); // 0.15%
         client.set_price(dec!(9_000_000));
 
         client.send_order(&buy_req(dec!(0.001))).await.unwrap();
 
-        // cost = 9_000, fee = 9_000 * 0.00015 = 1.35 → total = 9_001.35
-        let expected_jpy = dec!(1_000_000) - dec!(9_001.35);
+        // cost = 9_000, fee = 9_000 * 0.0015 = 13.5 → total = 9_013.5
+        let expected_jpy = dec!(1_000_000) - dec!(9_013.5);
         assert_eq!(client.jpy_balance(), expected_jpy);
         assert_eq!(client.btc_balance(), dec!(0.001));
 
         let trades = client.filled_trades();
         assert_eq!(trades.len(), 1);
-        assert_eq!(trades[0].fee, dec!(1.35));
+        assert_eq!(trades[0].fee, dec!(13.5));
     }
 
     #[tokio::test]

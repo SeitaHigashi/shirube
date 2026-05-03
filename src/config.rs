@@ -87,6 +87,7 @@ impl TradingConfig {
             max_daily_drawdown: self.max_daily_drawdown,
             stop_loss_pct: self.stop_loss_pct,
             min_order_size: Decimal::try_from(self.min_order_size).unwrap_or(dec!(0.001)),
+            circuit_breaker_enabled: true,
         }
     }
 

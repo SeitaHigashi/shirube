@@ -273,6 +273,7 @@ mod tests {
             max_daily_drawdown: 0.5,
             stop_loss_pct: 0.5,
             min_order_size: dec!(0.001),
+            circuit_breaker_enabled: true,
         };
         let mut engine = TradingEngine::new(
             tx.subscribe(),

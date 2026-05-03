@@ -49,7 +49,7 @@ impl RiskManager {
         current_jpy: Decimal,
     ) -> RiskDecision {
         // 1. サーキットブレーカー
-        if self.circuit_broken {
+        if self.circuit_broken && self.params.circuit_breaker_enabled {
             return RiskDecision::Reject("circuit breaker active".into());
         }
 
@@ -72,7 +72,7 @@ impl RiskManager {
         }
 
         // 4. 日次損失率チェック（ベースラインが設定されている場合のみ）
-        if self.daily_start_jpy > Decimal::ZERO {
+        if self.daily_start_jpy > Decimal::ZERO && self.params.circuit_breaker_enabled {
             let drawdown = self.daily_drawdown_pct(current_jpy);
             if drawdown > self.params.max_daily_drawdown {
                 self.circuit_broken = true;
@@ -168,9 +168,9 @@ mod tests {
     #[test]
     fn triggers_circuit_breaker_on_drawdown() {
         let mut rm = default_manager();
-        // ベースライン 1,000,000 JPY → 現在 940,000 JPY = 6% 損失 > 5%
+        // ベースライン 1,000,000 JPY → 現在 490,000 JPY = 51% 損失 > 50%
         rm.reset_daily(dec!(1_000_000));
-        let result = rm.evaluate(make_buy(dec!(0.001)), dec!(0), dec!(940_000));
+        let result = rm.evaluate(make_buy(dec!(0.001)), dec!(0), dec!(490_000));
         assert!(matches!(result, RiskDecision::CircuitBreaker { .. }));
         assert!(rm.is_circuit_broken());
     }
@@ -186,9 +186,9 @@ mod tests {
     #[test]
     fn drawdown_within_limit_is_allowed() {
         let mut rm = default_manager();
-        // ベースライン 1,000,000 → 現在 960,000 = 4% 損失 < 5%
+        // ベースライン 1,000,000 → 現在 510,000 = 49% 損失 < 50%
         rm.reset_daily(dec!(1_000_000));
-        let result = rm.evaluate(make_buy(dec!(0.001)), dec!(0), dec!(960_000));
+        let result = rm.evaluate(make_buy(dec!(0.001)), dec!(0), dec!(510_000));
         assert!(matches!(result, RiskDecision::Allow(_)));
     }
 }

@@ -19,15 +19,18 @@ pub struct RiskParams {
     pub stop_loss_pct: f64,
     /// 最小注文サイズ
     pub min_order_size: Decimal,
+    /// false にするとサーキットブレーカーを完全無効化（デバッグ用）
+    pub circuit_breaker_enabled: bool,
 }
 
 impl Default for RiskParams {
     fn default() -> Self {
         Self {
             max_position_btc: dec!(0.1),
-            max_daily_drawdown: 0.05,
+            max_daily_drawdown: 0.50,
             stop_loss_pct: 0.02,
             min_order_size: dec!(0.001),
+            circuit_breaker_enabled: true,
         }
     }
 }

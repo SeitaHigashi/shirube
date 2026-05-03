@@ -48,6 +48,8 @@
     .balance-item { background: #0f3460; border-radius: 6px; padding: 10px; }
     .balance-currency { font-size: 11px; color: #888; }
     .balance-amount { font-size: 18px; font-weight: bold; margin-top: 2px; }
+    .balance-btc-jpy { font-size: 11px; color: #aaa; margin-top: 2px; }
+    .balance-pct { font-size: 11px; color: #888; margin-top: 1px; }
     table { width: 100%; border-collapse: collapse; font-size: 12px; }
     th { color: #888; font-weight: normal; text-align: left; padding: 4px 6px; border-bottom: 1px solid #0f3460; }
     td { padding: 4px 6px; border-bottom: 1px solid #1a1a2e; }
@@ -198,7 +200,6 @@
       <div id="signal-composite">
         <span class="signal-composite-label">目標BTC配分</span>
         <span id="alloc-target-pct" class="signal-hold">--.--%</span>
-        <span id="alloc-current-pct" style="font-size:11px;color:#888;">現在 --.--%</span>
       </div>
       <div id="signal-zone-diff">
         <span class="zone-raw-label">生シグナル:</span>
@@ -226,10 +227,13 @@
         <div class="balance-item">
           <div class="balance-currency">JPY</div>
           <div class="balance-amount neutral" id="jpy-balance">---</div>
+          <div class="balance-pct" id="jpy-pct">--.--%</div>
         </div>
         <div class="balance-item">
           <div class="balance-currency">BTC</div>
           <div class="balance-amount neutral" id="btc-balance">---</div>
+          <div class="balance-btc-jpy" id="btc-jpy">≈ ---円</div>
+          <div class="balance-pct" id="btc-pct">--.--%</div>
         </div>
       </div>
       <div class="balance-total">
@@ -599,9 +603,8 @@
       return value > 1000 ? `¥${Math.round(value).toLocaleString('ja-JP')}` : value.toFixed(4);
     }
 
-    function renderSignalPanel(detail, currentAllocPct) {
+    function renderSignalPanel(detail) {
       const targetEl = document.getElementById('alloc-target-pct');
-      const currentEl = document.getElementById('alloc-current-pct');
       const fillEl    = document.getElementById('alloc-gauge-fill');
       const confEl    = document.getElementById('signal-confidence');
       const rowsEl    = document.getElementById('signal-rows');
@@ -622,10 +625,6 @@
                          : agg.target_pct < 0.45 ? 'signal-sell'
                          : 'signal-hold';
       fillEl.style.width = `${pct}%`;
-
-      if (currentAllocPct != null) {
-        currentEl.textContent = `現在 ${(currentAllocPct * 100).toFixed(1)}%`;
-      }
 
       // ゾーン差分表示: raw_signal と target_pct が 1% 以上異なる場合に表示
       const zoneDiffEl = document.getElementById('signal-zone-diff');
@@ -686,26 +685,9 @@
 
     async function loadSignal() {
       try {
-        const [sigRes, balRes, tickerRes] = await Promise.all([
-          fetch(`${BASE}/api/signal/latest`),
-          fetch(`${BASE}/api/balance`),
-          fetch(`${BASE}/api/ticker`),
-        ]);
-        const sig = await sigRes.json();
-        let currentAllocPct = null;
-        try {
-          const bal = await balRes.json();
-          const ticker = await tickerRes.json();
-          const jpy = parseFloat(bal.find(b => b.currency_code === 'JPY')?.available || 0);
-          const btc = parseFloat(bal.find(b => b.currency_code === 'BTC')?.available || 0);
-          const price = parseFloat(ticker?.ltp || 0);
-          if (price > 0) {
-            const btcVal = btc * price;
-            const total = jpy + btcVal;
-            currentAllocPct = total > 0 ? btcVal / total : 0;
-          }
-        } catch (_) {}
-        renderSignalPanel(sig, currentAllocPct);
+        const res = await fetch(`${BASE}/api/signal/latest`);
+        const sig = await res.json();
+        renderSignalPanel(sig);
       } catch (e) { console.warn('signal load failed', e); }
     }
 
@@ -956,9 +938,18 @@
 
     function updateTotalBalance() {
       if (currentPrice === null || jpyAvailable === null || btcAvailable === null) return;
-      const total = jpyAvailable + btcAvailable * currentPrice;
+      const btcJpy = btcAvailable * currentPrice;
+      const total = jpyAvailable + btcJpy;
       document.getElementById('total-balance-jpy').textContent =
         total.toLocaleString('ja-JP', { maximumFractionDigits: 0 });
+      document.getElementById('btc-jpy').textContent =
+        `≈ ${Math.round(btcJpy).toLocaleString('ja-JP')}円`;
+      if (total > 0) {
+        document.getElementById('jpy-pct').textContent =
+          `${(jpyAvailable / total * 100).toFixed(1)}%`;
+        document.getElementById('btc-pct').textContent =
+          `${(btcJpy / total * 100).toFixed(1)}%`;
+      }
     }
 
     let tradeMarkers = [];
@@ -1150,7 +1141,7 @@
       signalWs.onmessage = (evt) => {
         try {
           const sig = JSON.parse(evt.data);
-          renderSignalPanel(sig, null);
+          renderSignalPanel(sig);
         } catch (e) { console.warn('signal ws parse error', e); }
       };
       signalWs.onclose = () => setTimeout(connectSignalWS, 3000);

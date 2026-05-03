@@ -83,18 +83,22 @@ impl Simulator {
             let signals: Vec<Option<Signal>> =
                 indicators.iter_mut().map(|ind| ind.update(candle)).collect();
 
-            let aggregated = crate::signal::engine::SignalEngine::aggregate(&signals, 0.3);
+            let alloc = crate::signal::engine::SignalEngine::aggregate(&signals, 0.3);
 
-            match aggregated {
-                Signal::Hold => {}
-                signal @ (Signal::Buy { .. } | Signal::Sell { .. }) => {
-                    let jpy = exchange.jpy_balance();
-                    let btc = exchange.btc_balance();
+            let jpy = exchange.jpy_balance();
+            let btc = exchange.btc_balance();
+            let btc_value = btc * price_with_slip;
+            let total = jpy + btc_value;
 
-                    let order_req = signal_to_order(
-                        &signal,
-                        jpy,
-                        btc,
+            if !total.is_zero() && !price_with_slip.is_zero() {
+                let current_alloc = (btc_value / total).to_f64().unwrap_or(0.0);
+                let delta = alloc.target_pct - current_alloc;
+
+                if delta.abs() >= 0.05 {
+                    let order_req = allocation_delta_to_order(
+                        delta,
+                        total,
+                        price_with_slip,
                         &self.config.product_code,
                         risk_manager.params().min_order_size,
                     );
@@ -139,42 +143,29 @@ fn apply_slippage(price: Decimal, slippage_pct: f64) -> Decimal {
     price * (Decimal::ONE + slip)
 }
 
-fn signal_to_order(
-    signal: &Signal,
-    jpy: Decimal,
-    btc: Decimal,
+fn allocation_delta_to_order(
+    delta: f64,
+    total_value: Decimal,
+    btc_price: Decimal,
     product_code: &str,
     min_size: Decimal,
 ) -> Option<OrderRequest> {
-    match signal {
-        Signal::Buy { .. } => {
-            let _ = jpy;
-            Some(OrderRequest {
-                product_code: product_code.to_string(),
-                side: OrderSide::Buy,
-                order_type: OrderType::Market,
-                price: None,
-                size: min_size,
-                minute_to_expire: None,
-                time_in_force: None,
-            })
-        }
-        Signal::Sell { .. } => {
-            if btc < min_size {
-                return None;
-            }
-            Some(OrderRequest {
-                product_code: product_code.to_string(),
-                side: OrderSide::Sell,
-                order_type: OrderType::Market,
-                price: None,
-                size: min_size,
-                minute_to_expire: None,
-                time_in_force: None,
-            })
-        }
-        Signal::Hold => None,
+    use rust_decimal::prelude::FromPrimitive;
+    let delta_dec = Decimal::from_f64(delta.abs()).unwrap_or(Decimal::ZERO);
+    let size = (delta_dec * total_value / btc_price).round_dp(8);
+    if size < min_size {
+        return None;
     }
+    let side = if delta > 0.0 { OrderSide::Buy } else { OrderSide::Sell };
+    Some(OrderRequest {
+        product_code: product_code.to_string(),
+        side,
+        order_type: OrderType::Market,
+        price: None,
+        size,
+        minute_to_expire: None,
+        time_in_force: None,
+    })
 }
 
 fn compute_report(

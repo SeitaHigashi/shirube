@@ -1,7 +1,7 @@
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
 
-use super::{Indicator, IndicatorSignal, Signal, SignalDetail};
+use super::{AllocationSignal, Indicator, IndicatorSignal, Signal, SignalDetail};
 use crate::types::market::Candle;
 
 pub struct SignalEngine {
@@ -60,47 +60,39 @@ impl SignalEngine {
         }
     }
 
-    /// 複数インジケータのシグナルを合成する（純粋関数）。
+    /// 複数インジケータのシグナルを合成して目標BTC配分率を返す（純粋関数）。
     /// - None (ウォームアップ中) は集計から除外
-    /// - Buy/Sell の confidence を合算し、閾値を超えた方を採用
-    pub fn aggregate(signals: &[Option<Signal>], threshold: f64) -> Signal {
-        let mut buy_score = 0.0f64;
-        let mut sell_score = 0.0f64;
+    /// - Buy は target_pct を 1.0 方向へ、Sell は 0.0 方向へ押す
+    /// - 中立（インジケータなし）は 0.5
+    pub fn aggregate(signals: &[Option<Signal>], _threshold: f64) -> AllocationSignal {
+        let mut delta_sum = 0.0f64;
         let mut active = 0usize;
+        let mut directional = 0usize;
 
         for sig in signals.iter().flatten() {
+            active += 1;
             match sig {
                 Signal::Buy { confidence, .. } => {
-                    buy_score += confidence;
-                    active += 1;
+                    delta_sum += confidence;
+                    directional += 1;
                 }
                 Signal::Sell { confidence, .. } => {
-                    sell_score += confidence;
-                    active += 1;
+                    delta_sum -= confidence;
+                    directional += 1;
                 }
-                Signal::Hold => {
-                    active += 1;
-                }
+                Signal::Hold => {}
             }
         }
 
         if active == 0 {
-            return Signal::Hold;
+            return AllocationSignal::neutral();
         }
 
-        // 代表価格は None のため Hold の price は不要。Buy/Sell は後続で再取得される。
-        // ここでは price を 0 にしておき、TradingEngine 側で現在価格で上書きする。
-        use rust_decimal::Decimal;
-        // Hold カウントは threshold 計算から除外し、Buy/Sell のみで判定
-        let scored = signals.iter().flatten().filter(|s| !matches!(s, Signal::Hold)).count();
-        let denom = scored.max(1) as f64;
-        if buy_score > sell_score && buy_score / denom >= threshold {
-            Signal::Buy { price: Decimal::ZERO, confidence: buy_score / denom }
-        } else if sell_score > buy_score && sell_score / denom >= threshold {
-            Signal::Sell { price: Decimal::ZERO, confidence: sell_score / denom }
-        } else {
-            Signal::Hold
-        }
+        // Buy(1.0) 1本のみ → 0.5 + 1.0/(1*2) = 1.0
+        // Sell(1.0) 1本のみ → 0.5 - 1.0/(1*2) = 0.0
+        let target_pct = (0.5 + delta_sum / (active as f64 * 2.0)).clamp(0.0, 1.0);
+        let confidence = directional as f64 / active as f64;
+        AllocationSignal { target_pct, confidence }
     }
 }
 
@@ -118,49 +110,59 @@ mod tests {
     }
 
     #[test]
-    fn empty_signals_returns_hold() {
-        assert_eq!(SignalEngine::aggregate(&[], 0.3), Signal::Hold);
+    fn empty_signals_returns_neutral() {
+        let result = SignalEngine::aggregate(&[], 0.3);
+        assert_eq!(result, AllocationSignal::neutral());
     }
 
     #[test]
-    fn all_none_returns_hold() {
-        assert_eq!(SignalEngine::aggregate(&[None, None, None], 0.3), Signal::Hold);
+    fn all_none_returns_neutral() {
+        let result = SignalEngine::aggregate(&[None, None, None], 0.3);
+        assert_eq!(result, AllocationSignal::neutral());
     }
 
     #[test]
     fn buy_dominates() {
         let signals = vec![buy(0.8), sell(0.3), Some(Signal::Hold)];
         let result = SignalEngine::aggregate(&signals, 0.3);
-        assert!(matches!(result, Signal::Buy { .. }));
+        assert!(result.target_pct > 0.5, "got {}", result.target_pct);
     }
 
     #[test]
     fn sell_dominates() {
         let signals = vec![buy(0.2), sell(0.9)];
         let result = SignalEngine::aggregate(&signals, 0.3);
-        assert!(matches!(result, Signal::Sell { .. }));
+        assert!(result.target_pct < 0.5, "got {}", result.target_pct);
     }
 
     #[test]
-    fn below_threshold_returns_hold() {
-        // buy_score=0.1/3=0.033 < 0.3
+    fn weak_buy_stays_near_neutral() {
+        // delta = 0.1, active=3 → 0.5 + 0.1/6 ≈ 0.517
         let signals = vec![buy(0.1), Some(Signal::Hold), Some(Signal::Hold)];
         let result = SignalEngine::aggregate(&signals, 0.3);
-        assert_eq!(result, Signal::Hold);
+        assert!(result.target_pct > 0.5 && result.target_pct < 0.6,
+            "got {}", result.target_pct);
     }
 
     #[test]
-    fn tied_returns_hold() {
+    fn tied_returns_neutral() {
         let signals = vec![buy(0.5), sell(0.5)];
         let result = SignalEngine::aggregate(&signals, 0.3);
-        assert_eq!(result, Signal::Hold);
+        assert!((result.target_pct - 0.5).abs() < 1e-9, "got {}", result.target_pct);
     }
 
     #[test]
     fn single_strong_buy() {
-        let signals = vec![buy(0.9)];
+        let signals = vec![buy(1.0)];
         let result = SignalEngine::aggregate(&signals, 0.3);
-        assert!(matches!(result, Signal::Buy { .. }));
+        assert!((result.target_pct - 1.0).abs() < 1e-9, "got {}", result.target_pct);
+    }
+
+    #[test]
+    fn single_strong_sell() {
+        let signals = vec![sell(1.0)];
+        let result = SignalEngine::aggregate(&signals, 0.3);
+        assert!((result.target_pct - 0.0).abs() < 1e-9, "got {}", result.target_pct);
     }
 
     #[tokio::test]
@@ -181,7 +183,7 @@ mod tests {
 
         let (candle_tx, candle_rx) = broadcast::channel::<Candle>(16);
         let mock = MockIndicator::new("test", vec![
-            Some(Signal::Buy { price: dec!(9000000), confidence: 0.8 }),
+            Some(Signal::Buy { price: dec!(9000000), confidence: 1.0 }),
         ]);
         let indicators: Vec<Box<dyn Indicator>> = vec![Box::new(mock)];
 
@@ -195,7 +197,7 @@ mod tests {
             async { signal_rx.recv().await.unwrap() }
         ).await.expect("timeout");
 
-        assert!(matches!(sig.aggregate, Signal::Buy { .. }));
+        assert!(sig.aggregate.target_pct > 0.5, "expected bullish allocation");
         assert_eq!(sig.indicators.len(), 1);
         assert_eq!(sig.indicators[0].name, "test");
     }

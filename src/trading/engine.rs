@@ -6,12 +6,14 @@ use tracing::{info, warn};
 
 use rust_decimal::Decimal;
 
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
+
 use crate::alert::AlertManager;
 use crate::config::TradingConfig;
 use crate::exchange::ExchangeClient;
 use crate::risk::manager::RiskManager;
 use crate::risk::RiskDecision;
-use crate::signal::{Signal, SignalDetail};
+use crate::signal::{AllocationSignal, SignalDetail};
 use crate::storage::orders::OrderRepository;
 use crate::types::order::{Order, OrderRequest, OrderSide, OrderStatus, OrderType};
 
@@ -83,17 +85,13 @@ impl TradingEngine {
         }
     }
 
-    async fn handle_signal(&mut self, signal: Signal) -> crate::error::Result<()> {
-        match signal {
-            Signal::Hold => return Ok(()),
-            Signal::Buy { .. } | Signal::Sell { .. } => {}
-        }
-
+    async fn handle_signal(&mut self, signal: AllocationSignal) -> crate::error::Result<()> {
         // 最新の設定を risk_manager に反映
-        {
+        let allocation_threshold = {
             let cfg = self.config.read().await;
             self.risk_manager.update_params(cfg.to_risk_params());
-        }
+            cfg.allocation_threshold
+        };
 
         // 現在の残高・ポジションを取得
         let balances = self.exchange.get_balance().await?;
@@ -113,7 +111,41 @@ impl TradingEngine {
         let positions = self.exchange.get_positions(&self.product_code).await?;
         let btc_position: Decimal = positions.iter().map(|p| p.size).sum();
 
-        let order_req = self.signal_to_order(&signal, jpy_balance);
+        // BTC 残高も考慮（MockExchangeClient では balance で管理）
+        let btc_balance = balances.iter()
+            .find(|b| b.currency_code == "BTC")
+            .map(|b| b.available)
+            .unwrap_or(Decimal::ZERO);
+        let btc_held = btc_position.max(btc_balance);
+
+        // 現在の BTC 価格を取得
+        let ticker = self.exchange.get_ticker(&self.product_code).await?;
+        let btc_price = ticker.ltp;
+
+        let btc_value = btc_held * btc_price;
+        let total_value = btc_value + jpy_balance;
+
+        let min_order_size = self.risk_manager.params().min_order_size;
+        let order_req = if total_value.is_zero() || btc_price.is_zero() {
+            None
+        } else {
+            let current_alloc = (btc_value / total_value)
+                .to_f64()
+                .unwrap_or(0.0);
+            let delta = signal.target_pct - current_alloc;
+            if delta.abs() < allocation_threshold {
+                None
+            } else {
+                Self::allocation_delta_to_order(
+                    delta,
+                    total_value,
+                    btc_price,
+                    &self.product_code,
+                    min_order_size,
+                )
+            }
+        };
+
         let order_req = match order_req {
             Some(r) => r,
             None => return Ok(()),
@@ -159,38 +191,31 @@ impl TradingEngine {
         Ok(())
     }
 
-    fn signal_to_order(&self, signal: &Signal, jpy_balance: Decimal) -> Option<OrderRequest> {
-        let min_size = self.risk_manager.params().min_order_size;
-
-        match signal {
-            Signal::Buy { .. } => {
-                // 利用可能 JPY の 10% を BTC 購入に充てる（シンプルなポジションサイジング）
-                // 実際の価格は Market 注文なので price=None
-                // サイズは min_order_size を使用（安全側）
-                let _ = jpy_balance;
-                Some(OrderRequest {
-                    product_code: self.product_code.clone(),
-                    side: OrderSide::Buy,
-                    order_type: OrderType::Market,
-                    price: None,
-                    size: min_size,
-                    minute_to_expire: None,
-                    time_in_force: None,
-                })
-            }
-            Signal::Sell { .. } => {
-                Some(OrderRequest {
-                    product_code: self.product_code.clone(),
-                    side: OrderSide::Sell,
-                    order_type: OrderType::Market,
-                    price: None,
-                    size: min_size,
-                    minute_to_expire: None,
-                    time_in_force: None,
-                })
-            }
-            Signal::Hold => None,
+    /// 配分デルタから注文を生成する。
+    /// delta > 0 → 買い, delta < 0 → 売り。
+    /// size = |delta| * total_value / btc_price
+    fn allocation_delta_to_order(
+        delta: f64,
+        total_value: Decimal,
+        btc_price: Decimal,
+        product_code: &str,
+        min_size: Decimal,
+    ) -> Option<OrderRequest> {
+        let delta_dec = Decimal::from_f64(delta.abs()).unwrap_or(Decimal::ZERO);
+        let size = (delta_dec * total_value / btc_price).round_dp(8);
+        if size < min_size {
+            return None;
         }
+        let side = if delta > 0.0 { OrderSide::Buy } else { OrderSide::Sell };
+        Some(OrderRequest {
+            product_code: product_code.to_string(),
+            side,
+            order_type: OrderType::Market,
+            price: None,
+            size,
+            minute_to_expire: None,
+            time_in_force: None,
+        })
     }
 }
 
@@ -199,46 +224,26 @@ mod tests {
     use super::*;
     use crate::exchange::mock::MockExchangeClient;
     use crate::risk::{RiskManager, RiskParams};
-    use crate::signal::{Signal, SignalDetail};
+    use crate::signal::{AllocationSignal, SignalDetail};
     use rust_decimal_macros::dec;
 
-    fn detail(signal: Signal) -> SignalDetail {
-        SignalDetail { aggregate: signal, indicators: vec![] }
-    }
-
-    fn make_engine(signal_rx: broadcast::Receiver<SignalDetail>) -> TradingEngine {
-        let mock = Arc::new(MockExchangeClient::new());
-        let params = RiskParams {
-            max_position_btc: dec!(0.1),
-            max_daily_drawdown: 0.05,
-            stop_loss_pct: 0.02,
-            min_order_size: dec!(0.001),
-        };
-        TradingEngine::new(signal_rx, mock, RiskManager::new(params), "BTC_JPY".into())
+    fn detail(target_pct: f64, confidence: f64) -> SignalDetail {
+        SignalDetail {
+            aggregate: AllocationSignal { target_pct, confidence },
+            indicators: vec![],
+        }
     }
 
     #[tokio::test]
-    async fn hold_signal_does_not_place_order() {
-        let (tx, rx) = broadcast::channel::<SignalDetail>(16);
-        let _engine = make_engine(rx);
-        let mock_exchange = Arc::new(MockExchangeClient::new());
-        let params = RiskParams::default();
-        let mut engine = TradingEngine::new(
-            tx.subscribe(),
-            mock_exchange.clone(),
-            RiskManager::new(params),
-            "BTC_JPY".into(),
-        );
-
-        tx.send(detail(Signal::Hold)).unwrap();
-        drop(tx); // channel を閉じて run() が終了するようにする
-
-        engine.run().await;
-        assert!(mock_exchange.placed_orders().is_empty());
-    }
-
-    #[tokio::test]
-    async fn buy_signal_places_order() {
+    async fn neutral_allocation_does_not_place_order() {
+        // 中立 (0.5) かつ現在BTCなし → delta=0.5 だが JPY/BTC 価格が初期状態
+        // MockExchangeClient デフォルト: ltp=9_000_500, JPY=1_000_000, BTC=0
+        // current_alloc = 0.0, target = 0.5, delta = 0.5 > threshold(0.05)
+        // → 実際は注文が入る。中立テストは厳密に 0.5 の配分を再現するため
+        //   BTC を 50% 保有した状態でテストする。
+        // 代わりに target_pct = current_alloc のケース（delta < threshold）をテスト
+        // MockExchangeClient: JPY=1_000_000, BTC=0, price=9_000_500
+        // current_alloc ≈ 0.0 なので target_pct=0.0 → delta=0.0 < 0.05
         let mock_exchange = Arc::new(MockExchangeClient::new());
         let (tx, _) = broadcast::channel::<SignalDetail>(16);
         let params = RiskParams::default();
@@ -249,7 +254,34 @@ mod tests {
             "BTC_JPY".into(),
         );
 
-        tx.send(detail(Signal::Buy { price: dec!(9000000), confidence: 0.8 })).unwrap();
+        // target_pct = 0.02 → delta ≈ 0.02 < allocation_threshold(0.05)
+        tx.send(detail(0.02, 0.1)).unwrap();
+        drop(tx);
+
+        engine.run().await;
+        assert!(mock_exchange.placed_orders().is_empty());
+    }
+
+    #[tokio::test]
+    async fn bullish_allocation_places_buy_order() {
+        // JPY=1_000_000, BTC=0, price=9_000_500
+        // current_alloc ≈ 0.0, target=0.8 → delta=0.8 → buy
+        let mock_exchange = Arc::new(MockExchangeClient::new());
+        let (tx, _) = broadcast::channel::<SignalDetail>(16);
+        let params = RiskParams {
+            max_position_btc: dec!(1.0),  // 上限を大きくして注文を通す
+            max_daily_drawdown: 0.5,
+            stop_loss_pct: 0.5,
+            min_order_size: dec!(0.001),
+        };
+        let mut engine = TradingEngine::new(
+            tx.subscribe(),
+            mock_exchange.clone(),
+            RiskManager::new(params),
+            "BTC_JPY".into(),
+        );
+
+        tx.send(detail(0.8, 0.9)).unwrap();
         drop(tx);
 
         engine.run().await;
@@ -258,14 +290,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sell_signal_places_order() {
+    async fn bearish_allocation_places_sell_order() {
         let mock_exchange = Arc::new(MockExchangeClient::new());
-        // Sell注文が通るようにBTC残高を事前に設定
+        // BTC を多く保有した状態 → current_alloc 高い → target低い → sell
         mock_exchange.set_balances(vec![
             crate::types::balance::Balance {
                 currency_code: "JPY".to_string(),
-                amount: dec!(1_000_000),
-                available: dec!(1_000_000),
+                amount: dec!(100_000),
+                available: dec!(100_000),
             },
             crate::types::balance::Balance {
                 currency_code: "BTC".to_string(),
@@ -273,6 +305,9 @@ mod tests {
                 available: dec!(0.1),
             },
         ]);
+        // price=9_000_500 → BTC価値 ≈ 900_050 JPY
+        // total ≈ 1_000_050 JPY, current_alloc ≈ 0.9 → target=0.1 → delta=-0.8 → sell
+
         let (tx, _) = broadcast::channel::<SignalDetail>(16);
         let params = RiskParams::default();
         let mut engine = TradingEngine::new(
@@ -282,7 +317,7 @@ mod tests {
             "BTC_JPY".into(),
         );
 
-        tx.send(detail(Signal::Sell { price: dec!(9000000), confidence: 0.9 })).unwrap();
+        tx.send(detail(0.1, 0.9)).unwrap();
         drop(tx);
 
         engine.run().await;

@@ -185,7 +185,8 @@ async fn main() -> anyhow::Result<()> {
     // ウォームアップ結果でシグナルキャッシュを事前初期化（ライブCandle待ちで様子見になるのを防ぐ）
     if !warmup_signals.is_empty() {
         use crate::signal::Signal;
-        let raw: Vec<Option<Signal>> = warmup_signals.iter().map(|is| is.signal.clone()).collect();
+        let raw: Vec<Option<Signal>> =
+            warmup_signals.iter().map(|is| is.signal.clone()).collect();
         let aggregated = SignalEngine::aggregate(&raw, init_cfg.signal_threshold);
         let detail = SignalDetail { aggregate: aggregated, indicators: warmup_signals };
         *latest_signal.write().await = Some(detail);

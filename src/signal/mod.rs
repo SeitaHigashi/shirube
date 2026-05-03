@@ -25,11 +25,29 @@ pub struct IndicatorSignal {
     pub value: Option<f64>,
 }
 
+// ---- AllocationSignal — 連続配分シグナル ----
+
+/// 目標BTC配分率。target_pct ∈ [0.0, 1.0]（0.0=全JPY, 0.5=中立, 1.0=全BTC）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AllocationSignal {
+    pub target_pct: f64,
+    pub confidence: f64,
+}
+
+impl AllocationSignal {
+    pub fn neutral() -> Self {
+        Self { target_pct: 0.5, confidence: 0.0 }
+    }
+
+    pub fn is_bullish(&self) -> bool { self.target_pct > 0.5 }
+    pub fn is_bearish(&self) -> bool { self.target_pct < 0.5 }
+}
+
 // ---- SignalDetail — API レスポンス用（集計 + 個別） ----
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SignalDetail {
-    pub aggregate: Signal,
+    pub aggregate: AllocationSignal,
     pub indicators: Vec<IndicatorSignal>,
 }
 

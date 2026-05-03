@@ -113,10 +113,14 @@
     #settings-msg.ok { color: #26a69a; }
     #settings-msg.err { color: #ef5350; }
     /* Signal panel */
-    #signal-composite { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #0f3460; }
-    #signal-composite-label { font-size: 11px; color: #888; }
-    #signal-composite-value { font-size: 20px; font-weight: bold; }
-    #signal-confidence { font-size: 12px; color: #888; }
+    #signal-composite { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #0f3460; }
+    .signal-composite-label { font-size: 11px; color: #888; }
+    #alloc-target-pct { font-size: 26px; font-weight: bold; }
+    #signal-confidence { font-size: 12px; color: #888; margin-bottom: 8px; }
+    #alloc-gauge-wrap { margin-bottom: 10px; }
+    #alloc-gauge-track { background: #0f3460; border-radius: 4px; height: 10px; position: relative; }
+    #alloc-gauge-fill { height: 100%; border-radius: 4px; background: linear-gradient(to right, #ef5350, #ffb300, #26a69a); transition: width 0.4s; }
+    #alloc-labels { display: flex; justify-content: space-between; font-size: 10px; color: #555; margin-top: 3px; }
     .signal-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid #1a1a2e; font-size: 12px; }
     .signal-row:last-child { border-bottom: none; }
     .signal-name { color: #888; min-width: 40px; }
@@ -179,12 +183,19 @@
       <div id="macd-chart"></div>
     </div>
     <div class="panel" id="signal-panel">
-      <h2>シグナル状態</h2>
+      <h2>シグナル</h2>
       <div id="signal-composite">
-        <span class="signal-composite-label">総合</span>
-        <span id="signal-composite-value" class="signal-hold">---</span>
-        <span id="signal-confidence"></span>
+        <span class="signal-composite-label">目標BTC配分</span>
+        <span id="alloc-target-pct" class="signal-hold">--.--%</span>
+        <span id="alloc-current-pct" style="font-size:11px;color:#888;">現在 --.--%</span>
       </div>
+      <div id="alloc-gauge-wrap">
+        <div id="alloc-gauge-track">
+          <div id="alloc-gauge-fill" style="width:50%"></div>
+        </div>
+        <div id="alloc-labels"><span>0%</span><span>50%</span><span>100%</span></div>
+      </div>
+      <div id="signal-confidence"></div>
       <div id="signal-rows"></div>
     </div>
     <div class="panel" id="balance-panel">
@@ -566,28 +577,38 @@
       return value > 1000 ? `¥${Math.round(value).toLocaleString('ja-JP')}` : value.toFixed(4);
     }
 
-    function renderSignalPanel(detail) {
-      const compEl = document.getElementById('signal-composite-value');
-      const confEl = document.getElementById('signal-confidence');
-      const rowsEl = document.getElementById('signal-rows');
+    function renderSignalPanel(detail, currentAllocPct) {
+      const targetEl = document.getElementById('alloc-target-pct');
+      const currentEl = document.getElementById('alloc-current-pct');
+      const fillEl    = document.getElementById('alloc-gauge-fill');
+      const confEl    = document.getElementById('signal-confidence');
+      const rowsEl    = document.getElementById('signal-rows');
 
       if (detail === null || detail === undefined) {
-        compEl.textContent = '---';
-        compEl.className = 'signal-hold';
+        targetEl.textContent = '--.--%';
+        targetEl.className = 'signal-hold';
         confEl.textContent = 'シグナル待機中';
         rowsEl.innerHTML = '';
+        fillEl.style.width = '50%';
         return;
       }
 
-      const agg = parseSignal(detail.aggregate);
-      compEl.textContent = agg.kind === 'BUY' ? '買いシグナル↑' : agg.kind === 'SELL' ? '売りシグナル↓' : '様子見→';
-      compEl.className = signalClass(agg.kind);
-      confEl.textContent = agg.confidence != null
-        ? `信頼度 ${(agg.confidence * 100).toFixed(0)}% (Rust SignalEngine)`
-        : '(Rust SignalEngine)';
+      const agg = detail.aggregate; // { target_pct, confidence }
+      const pct = (agg.target_pct * 100).toFixed(1);
+      targetEl.textContent = `${pct}%`;
+      targetEl.className = agg.target_pct > 0.55 ? 'signal-buy'
+                         : agg.target_pct < 0.45 ? 'signal-sell'
+                         : 'signal-hold';
+      fillEl.style.width = `${pct}%`;
+
+      if (currentAllocPct != null) {
+        currentEl.textContent = `現在 ${(currentAllocPct * 100).toFixed(1)}%`;
+      }
+
+      confEl.textContent = `信頼度 ${(agg.confidence * 100).toFixed(0)}%`;
 
       const indicators = detail.indicators || [];
-      const indRows = indicators.map(ind => {
+      rowsEl.innerHTML = indicators.map(ind => {
         const s = parseSignal(ind.signal);
         const badge = s.kind === 'HOLD' ? '－' : s.kind === 'BUY' ? '▲' : '▼';
         const cls = signalClass(s.kind);
@@ -599,21 +620,30 @@
           <span class="signal-badge ${cls}">${badge}${conf}</span>
         </div>`;
       }).join('');
-
-      const priceRow = agg.price ? `<div class="signal-row">
-          <span class="signal-name">価格</span>
-          <span class="signal-detail">${Number(agg.price).toLocaleString('ja-JP')}</span>
-          <span class="signal-badge"></span>
-        </div>` : '';
-
-      rowsEl.innerHTML = indRows + priceRow;
     }
 
     async function loadSignal() {
       try {
-        const res = await fetch(`${BASE}/api/signal/latest`);
-        const sig = await res.json();
-        renderSignalPanel(sig);
+        const [sigRes, balRes, tickerRes] = await Promise.all([
+          fetch(`${BASE}/api/signal/latest`),
+          fetch(`${BASE}/api/balance`),
+          fetch(`${BASE}/api/ticker`),
+        ]);
+        const sig = await sigRes.json();
+        let currentAllocPct = null;
+        try {
+          const bal = await balRes.json();
+          const ticker = await tickerRes.json();
+          const jpy = parseFloat(bal.find(b => b.currency_code === 'JPY')?.available || 0);
+          const btc = parseFloat(bal.find(b => b.currency_code === 'BTC')?.available || 0);
+          const price = parseFloat(ticker?.ltp || 0);
+          if (price > 0) {
+            const btcVal = btc * price;
+            const total = jpy + btcVal;
+            currentAllocPct = total > 0 ? btcVal / total : 0;
+          }
+        } catch (_) {}
+        renderSignalPanel(sig, currentAllocPct);
       } catch (e) { console.warn('signal load failed', e); }
     }
 

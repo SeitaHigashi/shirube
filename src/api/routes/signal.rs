@@ -12,17 +12,17 @@ pub async fn get_latest_signal(State(state): State<AppState>) -> Json<Option<Sig
 mod tests {
     use crate::api::AppState;
     use crate::exchange::mock::MockExchangeClient;
-    use crate::signal::{Signal, SignalDetail};
+    use crate::signal::SignalDetail;
     use crate::storage::db::Database;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use rust_decimal_macros::dec;
     use std::sync::Arc;
     use tokio::sync::{broadcast, RwLock};
     use tower::ServiceExt;
 
-    fn detail(signal: Signal) -> SignalDetail {
-        SignalDetail { aggregate: signal, indicators: vec![] }
+    fn detail(target_pct: f64, confidence: f64) -> SignalDetail {
+        use crate::signal::AllocationSignal;
+        SignalDetail { aggregate: AllocationSignal { target_pct, confidence }, indicators: vec![] }
     }
 
     async fn make_state_with_signal(sig: Option<SignalDetail>) -> AppState {
@@ -61,9 +61,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn returns_hold_signal() {
+    async fn returns_neutral_allocation_signal() {
         use crate::api::server::build_router;
-        let app = build_router(make_state_with_signal(Some(detail(Signal::Hold))).await);
+        let app = build_router(make_state_with_signal(Some(detail(0.5, 0.0))).await);
         let req = Request::builder()
             .uri("/api/signal/latest")
             .body(Body::empty())
@@ -72,13 +72,14 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["aggregate"], "Hold");
+        let pct = json["aggregate"]["target_pct"].as_f64().unwrap();
+        assert!((pct - 0.5).abs() < 1e-9);
     }
 
     #[tokio::test]
-    async fn returns_buy_signal() {
+    async fn returns_bullish_allocation_signal() {
         use crate::api::server::build_router;
-        let sig = detail(Signal::Buy { price: dec!(9000000), confidence: 0.8 });
+        let sig = detail(0.8, 0.9);
         let app = build_router(make_state_with_signal(Some(sig)).await);
         let req = Request::builder()
             .uri("/api/signal/latest")
@@ -88,6 +89,9 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["aggregate"]["Buy"]["confidence"], 0.8);
+        let pct = json["aggregate"]["target_pct"].as_f64().unwrap();
+        assert!(pct > 0.5, "expected bullish allocation, got {pct}");
+        let conf = json["aggregate"]["confidence"].as_f64().unwrap();
+        assert!((conf - 0.9).abs() < 1e-9);
     }
 }

@@ -14,6 +14,8 @@ pub struct TradingConfig {
 
     // シグナル閾値
     pub signal_threshold: f64,
+    /// 配分変更の dead-band。|delta| がこれ未満なら注文しない。デフォルト 0.05 (5%)
+    pub allocation_threshold: f64,
 
     // インジケータ設定
     pub sma_period: usize,
@@ -38,6 +40,7 @@ impl Default for TradingConfig {
             stop_loss_pct: 0.02,
             min_order_size: 0.001,
             signal_threshold: 0.4,
+            allocation_threshold: 0.05,
             sma_period: 75,
             ema_period: 50,
             rsi_period: 21,
@@ -65,6 +68,9 @@ impl TradingConfig {
     pub fn validate(&self) -> Result<(), String> {
         if !(0.0..=1.0).contains(&self.signal_threshold) {
             return Err("signal_threshold は 0.0〜1.0 の範囲で指定してください".into());
+        }
+        if !(0.0..=1.0).contains(&self.allocation_threshold) {
+            return Err("allocation_threshold は 0.0〜1.0 の範囲で指定してください".into());
         }
         if !(0.0..=1.0).contains(&self.max_daily_drawdown) {
             return Err("max_daily_drawdown は 0.0〜1.0 の範囲で指定してください".into());

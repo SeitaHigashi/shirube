@@ -1,4 +1,3 @@
-pub mod downloader;
 pub mod report;
 pub mod simulator;
 

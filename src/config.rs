@@ -64,7 +64,7 @@ impl Default for TradingConfig {
             stop_loss_pct: 0.02,
             min_order_size: 0.001,
             signal_threshold: 0.4,
-            allocation_threshold: 0.05,
+            allocation_threshold: 0.15,
             sma_period: 200,
             ema_period: 100,
             rsi_period: 42,

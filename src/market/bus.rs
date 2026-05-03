@@ -47,6 +47,10 @@ impl MarketDataBus {
                             if let Some(candle) = agg.feed_ticker(&ticker) {
                                 let _ = tx.send(candle);
                             }
+                            // 確定前の partial candle を即時プッシュ（リアルタイム更新用）
+                            if let Some(partial) = agg.peek_current() {
+                                let _ = tx.send(partial);
+                            }
                             // Ticker を全件 DB に保存（スロットルなし）
                             if let Err(e) = db_ws.tickers().insert(&ticker).await {
                                 warn!("Failed to insert ticker: {}", e);

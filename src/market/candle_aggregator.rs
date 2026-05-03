@@ -9,6 +9,7 @@ pub struct CandleAggregator {
     current: Option<PartialCandle>,
 }
 
+#[derive(Clone)]
 struct PartialCandle {
     open_time: DateTime<Utc>,
     open: Decimal,
@@ -88,6 +89,14 @@ impl CandleAggregator {
             }
         }
         finalized
+    }
+
+    /// 現在の確定前 partial candle をスナップショットとして返す（確定しない）。
+    /// Ticker 到着ごとにリアルタイムでチャートに反映するために使用する。
+    pub fn peek_current(&self) -> Option<Candle> {
+        self.current
+            .as_ref()
+            .map(|pc| pc.clone().finalize(&self.product_code, self.resolution_secs))
     }
 
     /// 内部の price 更新ロジック。bucket が変わったら旧 Candle を確定する。
@@ -212,5 +221,27 @@ mod tests {
         let finalized = agg.feed_trades(&trades);
         assert_eq!(finalized.len(), 1);
         assert_eq!(finalized[0].volume, dec!(0.3)); // 0.1 + 0.2
+    }
+
+    #[test]
+    fn peek_current_returns_partial_candle() {
+        let mut agg = CandleAggregator::new("BTC_JPY".into(), 60);
+        assert!(agg.peek_current().is_none());
+        agg.feed_ticker(&ticker(0, dec!(9000000)));
+        let partial = agg.peek_current().unwrap();
+        assert_eq!(partial.open, dec!(9000000));
+        assert_eq!(partial.close, dec!(9000000));
+        assert_eq!(partial.open_time, Utc.timestamp_opt(0, 0).unwrap());
+    }
+
+    #[test]
+    fn peek_current_does_not_finalize() {
+        let mut agg = CandleAggregator::new("BTC_JPY".into(), 60);
+        agg.feed_ticker(&ticker(0, dec!(9000000)));
+        agg.feed_ticker(&ticker(30, dec!(9010000)));
+        let _ = agg.peek_current();
+        let _ = agg.peek_current(); // 2回呼んでも current は消えない
+        let candle = agg.feed_ticker(&ticker(60, dec!(9005000))).unwrap();
+        assert_eq!(candle.high, dec!(9010000));
     }
 }

@@ -700,6 +700,13 @@
       bollinger_period: 20, bollinger_std: 2.0,
     };
 
+    // partial candle が毎Ticker届くためインジケータ再計算を 500ms debounce する
+    let renderIndicatorsTimer = null;
+    function debouncedRenderIndicators() {
+      if (renderIndicatorsTimer) clearTimeout(renderIndicatorsTimer);
+      renderIndicatorsTimer = setTimeout(renderIndicators, 500);
+    }
+
     function renderIndicators() {
       if (candleData.length === 0) return;
 
@@ -993,7 +1000,7 @@
               candleSeries.update(latestAgg);
             }
           }
-          renderIndicators();
+          debouncedRenderIndicators();
           document.getElementById('price').textContent = Number(c.close).toLocaleString('ja-JP');
           currentPrice = Number(c.close);
           updateTotalBalance();

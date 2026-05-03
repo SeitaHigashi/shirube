@@ -1,11 +1,12 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
 use tracing::info;
 
 use crate::error::Result;
 use crate::market::candle_aggregator::CandleAggregator;
 use crate::storage::db::Database;
-use crate::types::market::{Candle, Trade};
+use crate::types::market::{Candle, StoredTicker, Trade};
 
 use super::BacktestConfig;
 
@@ -35,27 +36,33 @@ impl Downloader {
     /// DB にキャッシュ済みのデータを優先して返す。
     /// キャッシュがない期間は `source` からフェッチして DB に保存する。
     pub async fn load(&self, config: &BacktestConfig) -> Result<Vec<Candle>> {
-        let cached = self
+        let has_cache = !self
             .db
-            .candles()
-            .get_range(
-                &config.product_code,
-                config.resolution_secs,
-                config.from,
-                config.to,
-                Some(100_000),
-            )
-            .await?;
+            .tickers()
+            .range(&config.product_code, config.from, config.to)
+            .await?
+            .is_empty();
 
-        if !cached.is_empty() {
+        if has_cache {
+            let candles = self
+                .db
+                .tickers()
+                .get_aggregated(
+                    &config.product_code,
+                    config.resolution_secs,
+                    config.from,
+                    config.to,
+                    Some(100_000),
+                )
+                .await?;
             info!(
                 "Loaded {} cached candles for {} [{} - {}]",
-                cached.len(),
+                candles.len(),
                 config.product_code,
                 config.from,
                 config.to
             );
-            return Ok(cached);
+            return Ok(candles);
         }
 
         // キャッシュなし — REST からフェッチ
@@ -63,7 +70,7 @@ impl Downloader {
         Ok(candles)
     }
 
-    /// 約定履歴をページネーションで全取得し、Candle に集計して DB 保存する
+    /// 約定履歴をページネーションで全取得し、Candle に集計して ticker DB に保存する
     async fn fetch_and_store(&self, config: &BacktestConfig) -> Result<Vec<Candle>> {
         let mut aggregator =
             CandleAggregator::new(config.product_code.clone(), config.resolution_secs);
@@ -104,7 +111,9 @@ impl Downloader {
         }
 
         if !all_candles.is_empty() {
-            self.db.candles().upsert_batch(&all_candles).await?;
+            let stored: Vec<StoredTicker> =
+                all_candles.iter().map(candle_to_stored_ticker).collect();
+            self.db.tickers().insert_stored_batch(&stored).await?;
             info!(
                 "Downloaded and stored {} candles for {}",
                 all_candles.len(),
@@ -113,6 +122,23 @@ impl Downloader {
         }
 
         Ok(all_candles)
+    }
+}
+
+fn candle_to_stored_ticker(c: &Candle) -> StoredTicker {
+    StoredTicker {
+        product_code: c.product_code.clone(),
+        timestamp: c.open_time,
+        best_bid: c.close,
+        best_ask: c.close,
+        best_bid_size: Decimal::ZERO,
+        best_ask_size: Decimal::ZERO,
+        ltp_open: c.open,
+        ltp: c.close,
+        ltp_high: c.high,
+        ltp_low: c.low,
+        volume: c.volume,
+        volume_by_product: c.volume,
     }
 }
 
@@ -125,7 +151,6 @@ impl Downloader {
 pub mod mock {
     use super::*;
     use crate::types::market::TradeSide;
-    use rust_decimal::Decimal;
     use std::sync::{Arc, Mutex};
 
     pub struct MockExecutionSource {
@@ -180,6 +205,7 @@ mod tests {
     use super::mock::{make_trade, MockExecutionSource};
     use super::*;
     use crate::storage::db::Database;
+    use crate::types::market::Ticker;
     use chrono::TimeZone;
     use rust_decimal_macros::dec;
 
@@ -216,10 +242,10 @@ mod tests {
 
         // 0:00 と 0:01 の 2 candle が出来る（0:01 は最後の trade で finalize される）
         assert!(!candles.is_empty());
-        // DB にも保存されているはず
+        // ticker DB にも保存されているはず
         let cached = db
-            .candles()
-            .get_range("BTC_JPY", 60, from, to, None)
+            .tickers()
+            .get_aggregated("BTC_JPY", 60, from, to, None)
             .await
             .unwrap();
         assert!(!cached.is_empty());
@@ -232,18 +258,21 @@ mod tests {
 
         let db = Database::open_in_memory().await.unwrap();
 
-        // 事前にキャッシュを挿入
-        let candle = crate::types::market::Candle {
-            product_code: "BTC_JPY".into(),
-            open_time: from,
-            resolution_secs: 60,
-            open: dec!(9_000_000),
-            high: dec!(9_010_000),
-            low: dec!(8_990_000),
-            close: dec!(9_005_000),
-            volume: dec!(1),
-        };
-        db.candles().upsert(&candle).await.unwrap();
+        // 事前にキャッシュを ticker DB に挿入
+        db.tickers()
+            .insert(&Ticker {
+                product_code: "BTC_JPY".into(),
+                timestamp: from,
+                best_bid: dec!(8_990_000),
+                best_ask: dec!(9_010_000),
+                best_bid_size: dec!(0.1),
+                best_ask_size: dec!(0.1),
+                ltp: dec!(9_005_000),
+                volume: dec!(1),
+                volume_by_product: dec!(1),
+            })
+            .await
+            .unwrap();
 
         // ソースが呼ばれないことを確認（空のソース）
         let source = MockExecutionSource::new(vec![]);

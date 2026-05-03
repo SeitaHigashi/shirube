@@ -87,8 +87,8 @@ pub async fn run_backtest(
 
     let candles = state
         .db
-        .candles()
-        .get_range("BTC_JPY", req.resolution_secs, req.from, req.to, None)
+        .tickers()
+        .get_aggregated("BTC_JPY", req.resolution_secs, req.from, req.to, None)
         .await
         .map_err(|e| {
             (
@@ -162,7 +162,7 @@ mod tests {
     use crate::api::AppState;
     use crate::exchange::mock::MockExchangeClient;
     use crate::storage::db::Database;
-    use crate::types::market::Candle;
+    use crate::types::market::Ticker;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::Router;
@@ -259,20 +259,21 @@ mod tests {
     async fn post_backtest_returns_200_with_report() {
         let (app, db) = make_app().await;
 
-        // candle を事前挿入
+        // ticker を事前挿入
         let t1 = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
         let t2 = Utc.with_ymd_and_hms(2024, 1, 1, 0, 1, 0).unwrap();
         for t in [t1, t2] {
-            db.candles()
-                .upsert(&Candle {
+            db.tickers()
+                .insert(&Ticker {
                     product_code: "BTC_JPY".into(),
-                    open_time: t,
-                    resolution_secs: 60,
-                    open: dec!(9_000_000),
-                    high: dec!(9_010_000),
-                    low: dec!(8_990_000),
-                    close: dec!(9_005_000),
+                    timestamp: t,
+                    best_bid: dec!(8_990_000),
+                    best_ask: dec!(9_010_000),
+                    best_bid_size: dec!(0.1),
+                    best_ask_size: dec!(0.1),
+                    ltp: dec!(9_005_000),
                     volume: dec!(1),
+                    volume_by_product: dec!(1),
                 })
                 .await
                 .unwrap();

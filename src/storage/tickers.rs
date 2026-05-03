@@ -111,6 +111,56 @@ impl TickerRepository {
         Ok(())
     }
 
+    /// 複数の StoredTicker を一括挿入する（INSERT OR IGNORE）。
+    pub async fn insert_stored_batch(&self, tickers: &[StoredTicker]) -> Result<()> {
+        if tickers.is_empty() {
+            return Ok(());
+        }
+        let rows: Vec<(String, String, String, String, String, String, String, String, String, String, String, String)> = tickers
+            .iter()
+            .map(|t| {
+                (
+                    t.product_code.clone(),
+                    t.timestamp.to_rfc3339(),
+                    t.best_bid.to_string(),
+                    t.best_ask.to_string(),
+                    t.best_bid_size.to_string(),
+                    t.best_ask_size.to_string(),
+                    t.ltp_open.to_string(),
+                    t.ltp.to_string(),
+                    t.ltp_high.to_string(),
+                    t.ltp_low.to_string(),
+                    t.volume.to_string(),
+                    t.volume_by_product.to_string(),
+                )
+            })
+            .collect();
+
+        self.conn
+            .call(move |c| {
+                let tx = c.transaction()?;
+                {
+                    let mut stmt = tx.prepare(
+                        "INSERT OR IGNORE INTO tickers
+                            (product_code, timestamp,
+                             best_bid, best_ask, best_bid_size, best_ask_size,
+                             ltp_open, ltp, ltp_high, ltp_low,
+                             volume, volume_by_product)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                    )?;
+                    for (pc, ts, bb, ba, bbs, bas, lo, ltp, lh, ll, vol, volp) in &rows {
+                        stmt.execute(rusqlite::params![
+                            pc, ts, bb, ba, bbs, bas, lo, ltp, lh, ll, vol, volp
+                        ])?;
+                    }
+                }
+                tx.commit()?;
+                Ok(())
+            })
+            .await?;
+        Ok(())
+    }
+
     /// 直近 N 件の StoredTicker を返す（古い順）。
     pub async fn latest(&self, product_code: &str, count: u32) -> Result<Vec<StoredTicker>> {
         let pc = product_code.to_string();

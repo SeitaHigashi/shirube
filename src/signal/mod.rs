@@ -27,20 +27,48 @@ pub struct IndicatorSignal {
 
 // ---- AllocationSignal — 連続配分シグナル ----
 
-/// 目標BTC配分率。target_pct ∈ [0.0, 1.0]（0.0=全JPY, 0.5=中立, 1.0=全BTC）。
+/// 目標BTC配分率。
+/// - raw_signal: ゾーン変換前の生シグナル値。ZoneConfig.range_max までの範囲を取る。
+/// - target_pct: ゾーン変換後の実効BTC配分率 ∈ [0.0, 1.0]（TradingEngineはこれを使う）
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AllocationSignal {
+    /// 変換前の生シグナル値。デフォルトゾーンでは target_pct と同値。
+    pub raw_signal: f64,
     pub target_pct: f64,
     pub confidence: f64,
 }
 
 impl AllocationSignal {
     pub fn neutral() -> Self {
-        Self { target_pct: 0.5, confidence: 0.0 }
+        Self { raw_signal: 0.5, target_pct: 0.5, confidence: 0.0 }
+    }
+
+    /// レガシー互換コンストラクタ: raw_signal = target_pct として生成
+    pub fn from_effective(target_pct: f64, confidence: f64) -> Self {
+        Self { raw_signal: target_pct, target_pct, confidence }
     }
 
     pub fn is_bullish(&self) -> bool { self.target_pct > 0.5 }
     pub fn is_bearish(&self) -> bool { self.target_pct < 0.5 }
+}
+
+/// raw_signal を ZoneConfig に従って実効BTC配分率 [0.0, 1.0] に変換する。
+///
+/// Zone A: raw < hold_jpy_below  → 0.0（全JPY）
+/// Zone B: hold_jpy_below ≤ raw ≤ hold_btc_above → 線形補間
+/// Zone C: raw > hold_btc_above  → 1.0（全BTC）
+pub fn apply_zone(raw: f64, zone: &crate::config::ZoneConfig) -> f64 {
+    if raw < zone.hold_jpy_below {
+        return 0.0;
+    }
+    if raw > zone.hold_btc_above {
+        return 1.0;
+    }
+    let span = zone.hold_btc_above - zone.hold_jpy_below;
+    if span <= 0.0 {
+        return if raw >= zone.hold_btc_above { 1.0 } else { 0.0 };
+    }
+    ((raw - zone.hold_jpy_below) / span).clamp(0.0, 1.0)
 }
 
 // ---- SignalDetail — API レスポンス用（集計 + 個別） ----
@@ -158,5 +186,53 @@ mod tests {
         let candle = dummy_candle();
         let mut ind = MockIndicator::new("empty", vec![]);
         assert!(ind.update(&candle).is_none());
+    }
+
+    mod zone_tests {
+        use super::*;
+        use crate::config::ZoneConfig;
+
+        fn zone_4() -> ZoneConfig {
+            ZoneConfig { range_max: 4.0, hold_jpy_below: 1.0, hold_btc_above: 3.0 }
+        }
+
+        #[test]
+        fn apply_zone_zone_a_returns_zero() {
+            assert_eq!(apply_zone(0.5, &zone_4()), 0.0);
+            assert_eq!(apply_zone(0.0, &zone_4()), 0.0);
+        }
+
+        #[test]
+        fn apply_zone_zone_b_midpoint() {
+            let eff = apply_zone(2.0, &zone_4());
+            assert!((eff - 0.5).abs() < 1e-9, "got {}", eff);
+        }
+
+        #[test]
+        fn apply_zone_zone_b_lower_bound() {
+            let eff = apply_zone(1.0, &zone_4());
+            assert!((eff - 0.0).abs() < 1e-9, "got {}", eff);
+        }
+
+        #[test]
+        fn apply_zone_zone_b_upper_bound() {
+            let eff = apply_zone(3.0, &zone_4());
+            assert!((eff - 1.0).abs() < 1e-9, "got {}", eff);
+        }
+
+        #[test]
+        fn apply_zone_zone_c_returns_one() {
+            assert_eq!(apply_zone(3.5, &zone_4()), 1.0);
+            assert_eq!(apply_zone(4.0, &zone_4()), 1.0);
+        }
+
+        #[test]
+        fn apply_zone_default_is_identity() {
+            let zone = ZoneConfig::default();
+            for v in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                let eff = apply_zone(v, &zone);
+                assert!((eff - v).abs() < 1e-9, "v={}, eff={}", v, eff);
+            }
+        }
     }
 }

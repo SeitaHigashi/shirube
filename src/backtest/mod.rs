@@ -4,6 +4,8 @@ pub mod simulator;
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 
+use crate::config::ZoneConfig;
+
 #[derive(Debug, Clone)]
 pub struct BacktestConfig {
     pub product_code: String,
@@ -15,6 +17,8 @@ pub struct BacktestConfig {
     /// 手数料率（例: 0.0015 = 0.15%）
     pub fee_pct: f64,
     pub initial_jpy: Decimal,
+    /// ゾーン制配分の設定。デフォルトは現行互換（[0.0, 1.0]）
+    pub zone: ZoneConfig,
 }
 
 #[derive(Debug, Clone)]

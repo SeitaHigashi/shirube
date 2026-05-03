@@ -4,6 +4,26 @@ use serde::{Deserialize, Serialize};
 
 use crate::risk::RiskParams;
 
+/// シグナル値をBTC配分率に変換するゾーン設定。
+/// Zone A: raw < hold_jpy_below  → 0.0（全JPY）
+/// Zone B: hold_jpy_below ≤ raw ≤ hold_btc_above → 線形補間（0.0〜1.0 BTC）
+/// Zone C: raw > hold_btc_above  → 1.0（全BTC）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZoneConfig {
+    /// 生シグナルの最大値。デフォルト 1.0
+    pub range_max: f64,
+    /// これ未満のraw_signalは effective=0.0（全JPY）。デフォルト 0.0
+    pub hold_jpy_below: f64,
+    /// これ超のraw_signalは effective=1.0（全BTC）。デフォルト 1.0
+    pub hold_btc_above: f64,
+}
+
+impl Default for ZoneConfig {
+    fn default() -> Self {
+        Self { range_max: 1.0, hold_jpy_below: 0.0, hold_btc_above: 1.0 }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradingConfig {
     // リスク管理
@@ -30,6 +50,10 @@ pub struct TradingConfig {
     // シグナル重み
     pub ta_weight: f64,
     pub sentiment_weight: f64,
+
+    /// ゾーン制配分の設定。デフォルトは現行互換（[0.0, 1.0]）
+    #[serde(default)]
+    pub zone: ZoneConfig,
 }
 
 impl Default for TradingConfig {
@@ -51,6 +75,7 @@ impl Default for TradingConfig {
             bollinger_std: 2.0,
             ta_weight: 0.7,
             sentiment_weight: 0.3,
+            zone: ZoneConfig::default(),
         }
     }
 }
@@ -95,6 +120,18 @@ impl TradingConfig {
         let weight_sum = self.ta_weight + self.sentiment_weight;
         if (weight_sum - 1.0).abs() > 0.01 {
             return Err("ta_weight + sentiment_weight の合計は 1.0 にしてください".into());
+        }
+        if self.zone.range_max <= 0.0 {
+            return Err("zone.range_max は 0 より大きい値を指定してください".into());
+        }
+        if !(0.0..=self.zone.range_max).contains(&self.zone.hold_jpy_below) {
+            return Err("zone.hold_jpy_below は [0, range_max] の範囲で指定してください".into());
+        }
+        if !(0.0..=self.zone.range_max).contains(&self.zone.hold_btc_above) {
+            return Err("zone.hold_btc_above は [0, range_max] の範囲で指定してください".into());
+        }
+        if self.zone.hold_jpy_below >= self.zone.hold_btc_above {
+            return Err("zone.hold_jpy_below < zone.hold_btc_above を満たす必要があります".into());
         }
         Ok(())
     }

@@ -83,7 +83,9 @@ impl Simulator {
             let signals: Vec<Option<Signal>> =
                 indicators.iter_mut().map(|ind| ind.update(candle)).collect();
 
-            let alloc = crate::signal::engine::SignalEngine::aggregate(&signals, 0.3);
+            let alloc = crate::signal::engine::SignalEngine::aggregate_with_zone(
+                &signals, 0.3, &self.config.zone,
+            );
 
             let jpy = exchange.jpy_balance();
             let btc = exchange.btc_balance();
@@ -473,6 +475,7 @@ mod tests {
             slippage_pct: 0.0,
             fee_pct: 0.0,
             initial_jpy: dec!(1_000_000),
+            zone: crate::config::ZoneConfig::default(),
         };
 
         let prices = [

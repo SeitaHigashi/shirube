@@ -229,7 +229,7 @@ mod tests {
 
     fn detail(target_pct: f64, confidence: f64) -> SignalDetail {
         SignalDetail {
-            aggregate: AllocationSignal { target_pct, confidence },
+            aggregate: AllocationSignal::from_effective(target_pct, confidence),
             indicators: vec![],
         }
     }

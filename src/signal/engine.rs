@@ -2,6 +2,7 @@ use tokio::sync::broadcast;
 use tracing::{debug, warn};
 
 use super::{AllocationSignal, Indicator, IndicatorSignal, Signal, SignalDetail};
+use crate::config::ZoneConfig;
 use crate::types::market::Candle;
 
 pub struct SignalEngine {
@@ -9,6 +10,7 @@ pub struct SignalEngine {
     candle_rx: broadcast::Receiver<Candle>,
     signal_tx: broadcast::Sender<SignalDetail>,
     threshold: f64,
+    zone: ZoneConfig,
 }
 
 impl SignalEngine {
@@ -17,9 +19,18 @@ impl SignalEngine {
         candle_rx: broadcast::Receiver<Candle>,
         threshold: f64,
     ) -> (Self, broadcast::Sender<SignalDetail>, broadcast::Receiver<SignalDetail>) {
+        Self::new_with_zone(indicators, candle_rx, threshold, ZoneConfig::default())
+    }
+
+    pub fn new_with_zone(
+        indicators: Vec<Box<dyn Indicator>>,
+        candle_rx: broadcast::Receiver<Candle>,
+        threshold: f64,
+        zone: ZoneConfig,
+    ) -> (Self, broadcast::Sender<SignalDetail>, broadcast::Receiver<SignalDetail>) {
         let (signal_tx, signal_rx) = broadcast::channel(256);
         (
-            Self { indicators, candle_rx, signal_tx: signal_tx.clone(), threshold },
+            Self { indicators, candle_rx, signal_tx: signal_tx.clone(), threshold, zone },
             signal_tx,
             signal_rx,
         )
@@ -42,7 +53,7 @@ impl SignalEngine {
                     let raw: Vec<Option<Signal>> = indicator_signals.iter()
                         .map(|is| is.signal.clone())
                         .collect();
-                    let aggregated = Self::aggregate(&raw, self.threshold);
+                    let aggregated = Self::aggregate_with_zone(&raw, self.threshold, &self.zone);
                     debug!(signal = ?aggregated, "SignalEngine aggregated");
                     let detail = SignalDetail {
                         aggregate: aggregated,
@@ -60,11 +71,15 @@ impl SignalEngine {
         }
     }
 
-    /// 複数インジケータのシグナルを合成して目標BTC配分率を返す（純粋関数）。
+    /// 複数インジケータのシグナルをZoneConfigに従って合成する（純粋関数）。
     /// - None (ウォームアップ中) は集計から除外
-    /// - Buy は target_pct を 1.0 方向へ、Sell は 0.0 方向へ押す
-    /// - 中立（インジケータなし）は 0.5
-    pub fn aggregate(signals: &[Option<Signal>], _threshold: f64) -> AllocationSignal {
+    /// - Buy は raw_signal を range_max 方向へ、Sell は 0.0 方向へ押す
+    /// - 中立（インジケータなし）は range_max / 2.0
+    pub fn aggregate_with_zone(
+        signals: &[Option<Signal>],
+        _threshold: f64,
+        zone: &ZoneConfig,
+    ) -> AllocationSignal {
         let mut delta_sum = 0.0f64;
         let mut active = 0usize;
         let mut directional = 0usize;
@@ -88,11 +103,19 @@ impl SignalEngine {
             return AllocationSignal::neutral();
         }
 
-        // Buy(1.0) 1本のみ → 0.5 + 1.0/(1*2) = 1.0
-        // Sell(1.0) 1本のみ → 0.5 - 1.0/(1*2) = 0.0
-        let target_pct = (0.5 + delta_sum / (active as f64 * 2.0)).clamp(0.0, 1.0);
+        // 正規化後の値 [0.0, 1.0] を range_max にスケール
+        // Buy(1.0) 1本のみ → (0.5 + 0.5) * range_max = range_max
+        // Sell(1.0) 1本のみ → (0.5 - 0.5) * range_max = 0.0
+        let normalized = (0.5 + delta_sum / (active as f64 * 2.0)).clamp(0.0, 1.0);
+        let raw_signal = normalized * zone.range_max;
+        let target_pct = crate::signal::apply_zone(raw_signal, zone);
         let confidence = directional as f64 / active as f64;
-        AllocationSignal { target_pct, confidence }
+        AllocationSignal { raw_signal, target_pct, confidence }
+    }
+
+    /// 後方互換: デフォルトZoneConfig（range_max=1.0）で集計する。
+    pub fn aggregate(signals: &[Option<Signal>], threshold: f64) -> AllocationSignal {
+        Self::aggregate_with_zone(signals, threshold, &ZoneConfig::default())
     }
 }
 

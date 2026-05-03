@@ -83,6 +83,7 @@ pub async fn run_backtest(
         slippage_pct: req.slippage_pct,
         fee_pct: req.fee_pct,
         initial_jpy: req.initial_jpy,
+        zone: crate::config::ZoneConfig::default(),
     };
 
     let candles = state
@@ -221,6 +222,7 @@ mod tests {
             slippage_pct: 0.001,
             fee_pct: 0.0015,
             initial_jpy: dec!(1_000_000),
+            zone: crate::config::ZoneConfig::default(),
         };
         let report = BacktestReport {
             total_return_pct: 5.0,

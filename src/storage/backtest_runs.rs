@@ -135,6 +135,7 @@ impl BacktestRunRepository {
                     slippage_pct,
                     fee_pct,
                     initial_jpy: Decimal::from_str(&initial_jpy).unwrap_or_default(),
+                    zone: crate::config::ZoneConfig::default(),
                 },
                 report: BacktestReport {
                     total_return_pct,
@@ -166,6 +167,7 @@ mod tests {
             slippage_pct: 0.001,
             fee_pct: 0.0015,
             initial_jpy: dec!(1_000_000),
+            zone: crate::config::ZoneConfig::default(),
         }
     }
 

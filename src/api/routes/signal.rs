@@ -22,7 +22,7 @@ mod tests {
 
     fn detail(target_pct: f64, confidence: f64) -> SignalDetail {
         use crate::signal::AllocationSignal;
-        SignalDetail { aggregate: AllocationSignal { target_pct, confidence }, indicators: vec![] }
+        SignalDetail { aggregate: AllocationSignal::from_effective(target_pct, confidence), indicators: vec![] }
     }
 
     async fn make_state_with_signal(sig: Option<SignalDetail>) -> AppState {

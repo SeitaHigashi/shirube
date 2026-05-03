@@ -286,6 +286,7 @@ async fn main() -> anyhow::Result<()> {
         db: db.clone(),
         exchange: Arc::clone(&client),
         candle_tx: market_bus.candle_tx(),
+        ticker_tx: market_bus.ticker_tx(),
         signal_tx: signal_engine_tx,
         latest_signal,
         news_cache,

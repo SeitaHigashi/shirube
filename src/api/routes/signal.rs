@@ -32,11 +32,13 @@ mod tests {
         let db = Database::open_in_memory().await.unwrap();
         let mock = Arc::new(MockExchangeClient::new());
         let (candle_tx, _) = broadcast::channel(16);
+        let (ticker_tx, _) = broadcast::channel(16);
         let (signal_tx, _) = broadcast::channel(16);
         AppState {
             db,
             exchange: mock,
             candle_tx,
+            ticker_tx,
             signal_tx,
             latest_signal: Arc::new(RwLock::new(sig)),
             news_cache: Arc::new(RwLock::new(vec![])),

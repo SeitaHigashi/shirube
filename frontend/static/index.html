@@ -1013,6 +1013,34 @@
       ws.onerror = () => ws.close();
     }
 
+    // ── Ticker WebSocket ──────────────────────────────────────────────────────
+
+    const TICKER_WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/tickers`;
+    let tickerWs = null;
+
+    function connectTickerWS() {
+      tickerWs = new WebSocket(TICKER_WS_URL);
+
+      tickerWs.onmessage = (evt) => {
+        try {
+          const t = JSON.parse(evt.data);
+          document.getElementById('bid').textContent = Number(t.best_bid).toLocaleString('ja-JP');
+          document.getElementById('ask').textContent = Number(t.best_ask).toLocaleString('ja-JP');
+          document.getElementById('volume').textContent = Number(t.volume_by_product).toFixed(2);
+          document.getElementById('price').textContent = Number(t.ltp).toLocaleString('ja-JP');
+          currentPrice = Number(t.ltp);
+          updateTotalBalance();
+          const nowStr = useJST
+            ? new Date().toLocaleTimeString('ja-JP')
+            : new Date().toUTCString().slice(17, 25) + ' UTC';
+          document.getElementById('last-update').textContent = '最終更新: ' + nowStr;
+        } catch (e) { console.warn('ticker ws parse error', e); }
+      };
+
+      tickerWs.onclose = () => setTimeout(connectTickerWS, 3000);
+      tickerWs.onerror = () => tickerWs.close();
+    }
+
     // ── Backtest ──────────────────────────────────────────────────────────────
 
     function renderBacktestResult(report) {
@@ -1327,8 +1355,8 @@
     loadOrders();
     loadSignal();
     connectWS();
+    connectTickerWS();
 
-    setInterval(loadTicker, 5000);
     setInterval(loadBalance, 15000);
     setInterval(loadOrders, 10000);
     setInterval(loadSignal, 5000);

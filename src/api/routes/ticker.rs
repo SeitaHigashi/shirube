@@ -46,11 +46,13 @@ mod tests {
             volume_by_product: dec!(50),
         });
         let (candle_tx, _) = broadcast::channel(16);
+        let (ticker_tx, _) = broadcast::channel(16);
         let (signal_tx, _) = broadcast::channel(16);
         let state = AppState {
             db,
             exchange: mock,
             candle_tx,
+            ticker_tx,
             signal_tx,
             latest_signal: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
             news_cache: std::sync::Arc::new(tokio::sync::RwLock::new(vec![])),

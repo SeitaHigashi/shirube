@@ -176,11 +176,13 @@ mod tests {
         let db = Database::open_in_memory().await.unwrap();
         let mock = Arc::new(MockExchangeClient::new());
         let (candle_tx, _) = broadcast::channel(16);
+        let (ticker_tx, _) = broadcast::channel(16);
         let (signal_tx, _) = broadcast::channel(16);
         let state = AppState {
             db: db.clone(),
             exchange: mock,
             candle_tx,
+            ticker_tx,
             signal_tx,
             latest_signal: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
             news_cache: std::sync::Arc::new(tokio::sync::RwLock::new(vec![])),

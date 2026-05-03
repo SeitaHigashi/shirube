@@ -29,8 +29,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/news/latest", get(news::get_latest_news))
         .route("/api/signal/latest", get(signal::get_latest_signal))
         .route("/api/config", get(config::get_config).put(config::put_config))
-        // WebSocket endpoint
+        // WebSocket endpoints
         .route("/ws/candles", get(ws_handler::ws_candles))
+        .route("/ws/tickers", get(ws_handler::ws_tickers))
         .layer(cors)
         .with_state(state)
         // 静的ファイル配信 (フロントエンドダッシュボード)
@@ -62,11 +63,13 @@ mod tests {
         let db = Database::open_in_memory().await.unwrap();
         let mock = Arc::new(MockExchangeClient::new());
         let (candle_tx, _) = broadcast::channel(16);
+        let (ticker_tx, _) = broadcast::channel(16);
         let (signal_tx, _) = broadcast::channel(16);
         AppState {
             db,
             exchange: mock,
             candle_tx,
+            ticker_tx,
             signal_tx,
             latest_signal: Arc::new(RwLock::new(None)),
             news_cache: Arc::new(RwLock::new(vec![])),

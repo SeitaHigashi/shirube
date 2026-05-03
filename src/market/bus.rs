@@ -6,10 +6,11 @@ use tracing::{info, warn};
 use super::candle_aggregator::CandleAggregator;
 use crate::exchange::bitflyer::ws::WsMessage;
 use crate::storage::db::Database;
-use crate::types::market::Candle;
+use crate::types::market::{Candle, Ticker};
 
 pub struct MarketDataBus {
     candle_tx: broadcast::Sender<Candle>,
+    ticker_tx: broadcast::Sender<Ticker>,
 }
 
 impl MarketDataBus {
@@ -24,10 +25,12 @@ impl MarketDataBus {
         resolution_secs: u32,
     ) -> Self {
         let (candle_tx, _) = broadcast::channel::<Candle>(512);
+        let (ticker_tx, _) = broadcast::channel::<Ticker>(64);
 
         // WS task: executions → Candle 集計 + Ticker 保存
         {
             let tx = candle_tx.clone();
+            let ticker_tx_ws = ticker_tx.clone();
             let pc = product_code.to_string();
             let db_ws = db.clone();
             let mut ws_rx = ws_tx.subscribe();
@@ -48,6 +51,7 @@ impl MarketDataBus {
                             if let Err(e) = db_ws.tickers().insert(&ticker).await {
                                 warn!("Failed to insert ticker: {}", e);
                             }
+                            let _ = ticker_tx_ws.send(ticker);
                         }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
                             warn!("MarketDataBus WS lagged by {}", n);
@@ -87,7 +91,7 @@ impl MarketDataBus {
         }
 
         info!("MarketDataBus started (product={}, resolution={}s)", product_code, resolution_secs);
-        Self { candle_tx }
+        Self { candle_tx, ticker_tx }
     }
 
     pub fn candle_rx(&self) -> broadcast::Receiver<Candle> {
@@ -96,5 +100,9 @@ impl MarketDataBus {
 
     pub fn candle_tx(&self) -> broadcast::Sender<Candle> {
         self.candle_tx.clone()
+    }
+
+    pub fn ticker_tx(&self) -> broadcast::Sender<Ticker> {
+        self.ticker_tx.clone()
     }
 }

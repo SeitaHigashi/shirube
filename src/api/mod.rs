@@ -11,13 +11,14 @@ use crate::exchange::ExchangeClient;
 use crate::news::analyzer::SentimentScore;
 use crate::signal::SignalDetail;
 use crate::storage::db::Database;
-use crate::types::market::Candle;
+use crate::types::market::{Candle, Ticker};
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: Database,
     pub exchange: Arc<dyn ExchangeClient>,
     pub candle_tx: broadcast::Sender<Candle>,
+    pub ticker_tx: broadcast::Sender<Ticker>,
     pub signal_tx: broadcast::Sender<SignalDetail>,
     /// Rust SignalEngine が最後に出した最新シグナルのキャッシュ（集計 + 各インジケータ）
     pub latest_signal: Arc<RwLock<Option<SignalDetail>>>,

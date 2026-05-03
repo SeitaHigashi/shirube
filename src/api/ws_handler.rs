@@ -10,6 +10,7 @@ use tokio::sync::broadcast::error::RecvError;
 use tracing::{info, warn};
 
 use crate::api::AppState;
+use crate::signal::SignalDetail;
 
 pub async fn ws_tickers(
     ws: WebSocketUpgrade,
@@ -52,6 +53,56 @@ async fn handle_ticker_socket(socket: WebSocket, state: AppState) {
                     }
                     Err(RecvError::Closed) => {
                         info!("Ticker broadcast channel closed");
+                        break;
+                    }
+                }
+            }
+            _ = &mut recv_task => break,
+        }
+    }
+}
+
+pub async fn ws_signal(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> Response {
+    ws.on_upgrade(move |socket| handle_signal_socket(socket, state))
+}
+
+async fn handle_signal_socket(socket: WebSocket, state: AppState) {
+    let mut rx = state.signal_tx.subscribe();
+    let (mut sender, mut receiver) = socket.split();
+
+    let mut recv_task = tokio::spawn(async move {
+        while let Some(msg) = receiver.next().await {
+            match msg {
+                Ok(Message::Close(_)) | Err(_) => break,
+                _ => {}
+            }
+        }
+    });
+
+    loop {
+        tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Ok(detail) => {
+                        let json = match serde_json::to_string(&detail) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                warn!("Failed to serialize signal: {}", e);
+                                continue;
+                            }
+                        };
+                        if sender.send(Message::Text(json.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(RecvError::Lagged(n)) => {
+                        warn!("WS signal stream lagged by {}", n);
+                    }
+                    Err(RecvError::Closed) => {
+                        info!("Signal broadcast channel closed");
                         break;
                     }
                 }

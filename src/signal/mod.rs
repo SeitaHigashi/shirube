@@ -1,6 +1,7 @@
 pub mod engine;
 pub mod indicators;
 
+use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::Serialize;
 
@@ -77,6 +78,10 @@ pub fn apply_zone(raw: f64, zone: &crate::config::ZoneConfig) -> f64 {
 pub struct SignalDetail {
     pub aggregate: AllocationSignal,
     pub indicators: Vec<IndicatorSignal>,
+    /// シグナルが計算された日時（ミリ秒精度）
+    pub calculated_at: DateTime<Utc>,
+    /// 計算エンジンの状態: "active" | "waiting_for_data"
+    pub calculation_state: String,
 }
 
 // ---- Indicator trait ----

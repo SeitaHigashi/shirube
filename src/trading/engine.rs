@@ -231,6 +231,8 @@ mod tests {
         SignalDetail {
             aggregate: AllocationSignal::from_effective(target_pct, confidence),
             indicators: vec![],
+            calculated_at: chrono::Utc::now(),
+            calculation_state: "active".to_string(),
         }
     }
 

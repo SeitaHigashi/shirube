@@ -1,4 +1,8 @@
+use std::time::Duration;
+
+use chrono::Utc;
 use tokio::sync::broadcast;
+use tokio::time::{interval, MissedTickBehavior};
 use tracing::{debug, warn};
 
 use super::{AllocationSignal, Indicator, IndicatorSignal, Signal, SignalDetail};
@@ -11,6 +15,8 @@ pub struct SignalEngine {
     signal_tx: broadcast::Sender<SignalDetail>,
     threshold: f64,
     zone: ZoneConfig,
+    /// 最後に受信したキャンドルから計算したインジケータ結果（タイマー再計算に使用）
+    last_indicator_signals: Option<Vec<IndicatorSignal>>,
 }
 
 impl SignalEngine {
@@ -30,42 +36,67 @@ impl SignalEngine {
     ) -> (Self, broadcast::Sender<SignalDetail>, broadcast::Receiver<SignalDetail>) {
         let (signal_tx, signal_rx) = broadcast::channel(256);
         (
-            Self { indicators, candle_rx, signal_tx: signal_tx.clone(), threshold, zone },
+            Self {
+                indicators,
+                candle_rx,
+                signal_tx: signal_tx.clone(),
+                threshold,
+                zone,
+                last_indicator_signals: None,
+            },
             signal_tx,
             signal_rx,
         )
     }
 
     /// 非同期タスクとして動かす。
-    /// candle_rx からCandleを受け取り、各インジケータを更新し、集計シグナルを送信する。
+    /// キャンドル受信時はインジケータを更新してキャッシュし、
+    /// 100ms タイマーで再集計してシグナルをブロードキャストする。
     pub async fn run(mut self) {
+        let mut ticker = interval(Duration::from_millis(100));
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
         loop {
-            match self.candle_rx.recv().await {
-                Ok(candle) => {
-                    let indicator_signals: Vec<IndicatorSignal> = self.indicators
-                        .iter_mut()
-                        .map(|ind| {
-                            let signal = ind.update(&candle);
-                            let value = ind.value();
-                            IndicatorSignal { name: ind.name().to_string(), signal, value }
-                        })
-                        .collect();
-                    let raw: Vec<Option<Signal>> = indicator_signals.iter()
-                        .map(|is| is.signal.clone())
-                        .collect();
-                    let aggregated = Self::aggregate_with_zone(&raw, self.threshold, &self.zone);
-                    debug!(signal = ?aggregated, "SignalEngine aggregated");
-                    let detail = SignalDetail {
-                        aggregate: aggregated,
-                        indicators: indicator_signals,
-                    };
-                    let _ = self.signal_tx.send(detail);
+            tokio::select! {
+                // キャンドル受信: インジケータを更新してキャッシュ（送信はしない）
+                result = self.candle_rx.recv() => {
+                    match result {
+                        Ok(candle) => {
+                            let indicator_signals: Vec<IndicatorSignal> = self.indicators
+                                .iter_mut()
+                                .map(|ind| {
+                                    let signal = ind.update(&candle);
+                                    let value = ind.value();
+                                    IndicatorSignal { name: ind.name().to_string(), signal, value }
+                                })
+                                .collect();
+                            self.last_indicator_signals = Some(indicator_signals);
+                        }
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            warn!("SignalEngine lagged by {} candles", n);
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            break;
+                        }
+                    }
                 }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    warn!("SignalEngine lagged by {} candles", n);
-                }
-                Err(broadcast::error::RecvError::Closed) => {
-                    break;
+                // 100ms タイマー: キャッシュ済みインジケータ結果で再集計して送信
+                _ = ticker.tick() => {
+                    if let Some(ref ind_signals) = self.last_indicator_signals {
+                        let raw: Vec<Option<Signal>> = ind_signals.iter()
+                            .map(|is| is.signal.clone())
+                            .collect();
+                        let aggregated = Self::aggregate_with_zone(&raw, self.threshold, &self.zone);
+                        debug!(signal = ?aggregated, "SignalEngine aggregated");
+                        let detail = SignalDetail {
+                            aggregate: aggregated,
+                            indicators: ind_signals.clone(),
+                            calculated_at: Utc::now(),
+                            calculation_state: "active".to_string(),
+                        };
+                        let _ = self.signal_tx.send(detail);
+                    }
+                    // last_indicator_signals が None の場合は無送信（データ待ち）
                 }
             }
         }

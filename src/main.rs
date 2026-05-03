@@ -188,7 +188,12 @@ async fn main() -> anyhow::Result<()> {
         let raw: Vec<Option<Signal>> =
             warmup_signals.iter().map(|is| is.signal.clone()).collect();
         let aggregated = SignalEngine::aggregate(&raw, init_cfg.signal_threshold);
-        let detail = SignalDetail { aggregate: aggregated, indicators: warmup_signals };
+        let detail = SignalDetail {
+            aggregate: aggregated,
+            indicators: warmup_signals,
+            calculated_at: chrono::Utc::now(),
+            calculation_state: "active".to_string(),
+        };
         *latest_signal.write().await = Some(detail);
         info!("Pre-populated signal cache from warmup data");
     }

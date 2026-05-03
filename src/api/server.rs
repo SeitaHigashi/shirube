@@ -32,6 +32,7 @@ pub fn build_router(state: AppState) -> Router {
         // WebSocket endpoints
         .route("/ws/candles", get(ws_handler::ws_candles))
         .route("/ws/tickers", get(ws_handler::ws_tickers))
+        .route("/ws/signal", get(ws_handler::ws_signal))
         .layer(cors)
         .with_state(state)
         // 静的ファイル配信 (フロントエンドダッシュボード)

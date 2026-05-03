@@ -56,6 +56,9 @@
     #status-bar { position: fixed; bottom: 0; left: 0; right: 0; background: #0f3460; padding: 4px 16px; font-size: 11px; color: #888; display: flex; gap: 16px; }
     #ws-status { color: #ef5350; }
     #ws-status.connected { color: #26a69a; }
+    @keyframes calcPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+    #calc-dot.active  { background: #26a69a !important; animation: calcPulse 1s infinite; }
+    #calc-dot.waiting { background: #555 !important; }
     #tz-toggle { background: #0f3460; color: #e0e0e0; border: 1px solid #26a69a; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
     #tz-toggle:hover { background: #1a4a80; }
     body { padding-bottom: 32px; }
@@ -210,6 +213,11 @@
         <div id="alloc-labels"><span>0%</span><span>50%</span><span>100%</span></div>
       </div>
       <div id="signal-confidence"></div>
+      <div style="display:flex;align-items:center;gap:6px;margin:4px 0 6px;font-size:11px;color:#888;">
+        <span id="calc-dot" style="width:8px;height:8px;border-radius:50%;background:#555;flex-shrink:0;"></span>
+        <span id="calc-state-text">--</span>
+        <span id="calc-time" style="margin-left:auto;font-family:monospace;font-size:10px;"></span>
+      </div>
       <div id="signal-rows"></div>
     </div>
     <div class="panel" id="balance-panel">
@@ -643,6 +651,23 @@
       }
 
       confEl.textContent = `信頼度 ${(agg.confidence * 100).toFixed(0)}%`;
+
+      // 計算状態の表示
+      const dot = document.getElementById('calc-dot');
+      const stateText = document.getElementById('calc-state-text');
+      const calcTime = document.getElementById('calc-time');
+      if (detail.calculation_state === 'active') {
+        dot.className = 'active';
+        stateText.textContent = '計算中';
+      } else {
+        dot.className = 'waiting';
+        stateText.textContent = 'データ待ち';
+      }
+      if (detail.calculated_at) {
+        const d = new Date(detail.calculated_at);
+        calcTime.textContent = d.toLocaleTimeString('ja-JP', { hour12: false }) +
+          '.' + String(d.getMilliseconds()).padStart(3, '0');
+      }
 
       const indicators = detail.indicators || [];
       rowsEl.innerHTML = indicators.map(ind => {
@@ -1115,6 +1140,23 @@
       tickerWs.onerror = () => tickerWs.close();
     }
 
+    // ── Signal WebSocket ──────────────────────────────────────────────────────
+
+    const SIGNAL_WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/signal`;
+    let signalWs = null;
+
+    function connectSignalWS() {
+      signalWs = new WebSocket(SIGNAL_WS_URL);
+      signalWs.onmessage = (evt) => {
+        try {
+          const sig = JSON.parse(evt.data);
+          renderSignalPanel(sig, null);
+        } catch (e) { console.warn('signal ws parse error', e); }
+      };
+      signalWs.onclose = () => setTimeout(connectSignalWS, 3000);
+      signalWs.onerror = () => signalWs.close();
+    }
+
     // ── Backtest ──────────────────────────────────────────────────────────────
 
     function renderBacktestResult(report) {
@@ -1427,13 +1469,13 @@
     loadTicker();
     loadBalance();
     loadOrders();
-    loadSignal();
+    loadSignal();  // 初回のみ REST で取得（WS 接続前の初期表示用）
     connectWS();
     connectTickerWS();
+    connectSignalWS();
 
     setInterval(loadBalance, 15000);
     setInterval(loadOrders, 10000);
-    setInterval(loadSignal, 5000);
 
     // Initial resize after layout settles
     setTimeout(resizeCharts, 100);

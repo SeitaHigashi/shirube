@@ -20,7 +20,7 @@ pub struct ZoneConfig {
 
 impl Default for ZoneConfig {
     fn default() -> Self {
-        Self { range_max: 1.0, hold_jpy_below: 0.0, hold_btc_above: 1.0 }
+        Self { range_max: 1.0, hold_jpy_below: 0.2, hold_btc_above: 0.8 }
     }
 }
 

@@ -227,12 +227,18 @@ mod tests {
         }
 
         #[test]
-        fn apply_zone_default_is_identity() {
+        fn apply_zone_default_zones() {
+            // デフォルト: range_max=1.0, hold_jpy_below=0.2, hold_btc_above=0.8
             let zone = ZoneConfig::default();
-            for v in [0.0, 0.25, 0.5, 0.75, 1.0] {
-                let eff = apply_zone(v, &zone);
-                assert!((eff - v).abs() < 1e-9, "v={}, eff={}", v, eff);
-            }
+            // Zone A: < 0.2 → 0.0
+            assert_eq!(apply_zone(0.0, &zone), 0.0);
+            assert_eq!(apply_zone(0.1, &zone), 0.0);
+            // Zone B: 0.2〜0.8 → 線形補間
+            let mid = apply_zone(0.5, &zone);
+            assert!((mid - 0.5).abs() < 1e-9, "mid={}", mid);
+            // Zone C: > 0.8 → 1.0
+            assert_eq!(apply_zone(1.0, &zone), 1.0);
+            assert_eq!(apply_zone(0.9, &zone), 1.0);
         }
     }
 }

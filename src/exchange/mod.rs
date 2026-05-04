@@ -25,6 +25,8 @@ pub trait ExchangeClient: Send + Sync + 'static {
         status: Option<&str>,
         count: Option<u32>,
     ) -> Result<Vec<Order>>;
+    /// 現在の手数料率を返す（bitFlyer Lightning 現物ティア制）。
+    fn fee_pct(&self) -> f64;
 }
 
 /// API キーなしで使えるクライアント。
@@ -87,5 +89,9 @@ impl ExchangeClient for PublicBitFlyerClient {
         count: Option<u32>,
     ) -> Result<Vec<Order>> {
         self.mock.get_orders(product_code, status, count).await
+    }
+
+    fn fee_pct(&self) -> f64 {
+        self.mock.fee_pct()
     }
 }

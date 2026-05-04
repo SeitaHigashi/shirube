@@ -220,6 +220,12 @@ impl ExchangeClient for BitFlyerRestClient {
         let raw: Vec<RawOrder> = self.get_authenticated(&path).await?;
         Ok(raw.into_iter().map(Into::into).collect())
     }
+
+    fn fee_pct(&self) -> f64 {
+        // bitFlyer Lightning 現物: 10万円未満ティア (0.15%)
+        // 実際の手数料は累計取引量で変動するが、REST APIでの取得は非対応
+        0.0015
+    }
 }
 
 #[cfg(test)]

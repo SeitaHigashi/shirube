@@ -25,6 +25,36 @@ pub struct FilledTrade {
     pub fee: Decimal,
 }
 
+// ── bitFlyer Lightning 現物 手数料ティアテーブル ──────────────────────────────
+//
+// 直近30日取引量（JPY）→ 手数料率
+// 公式: https://bitflyer.com/ja-jp/s/commission
+const FEE_TIERS: &[(u64, f64)] = &[
+    (500_000_000, 0.0001), // 5億円以上
+    (100_000_000, 0.0002), // 1〜5億円
+    (50_000_000,  0.0003), // 5000万〜1億円
+    (20_000_000,  0.0005), // 2000万〜5000万円
+    (10_000_000,  0.0007), // 1000万〜2000万円
+    (5_000_000,   0.0009), // 500万〜1000万円
+    (2_000_000,   0.0010), // 200万〜500万円
+    (1_000_000,   0.0011), // 100万〜200万円
+    (500_000,     0.0012), // 50万〜100万円
+    (200_000,     0.0013), // 20万〜50万円
+    (100_000,     0.0014), // 10万〜20万円
+    (0,           0.0015), // 10万円未満
+];
+
+fn fee_from_volume(volume_jpy: Decimal) -> f64 {
+    use rust_decimal::prelude::ToPrimitive;
+    let vol = volume_jpy.to_u64().unwrap_or(0);
+    for &(threshold, rate) in FEE_TIERS {
+        if vol >= threshold {
+            return rate;
+        }
+    }
+    0.0015
+}
+
 // ── MockExchangeClient ────────────────────────────────────────────────────────
 
 pub struct MockExchangeClient {
@@ -33,7 +63,11 @@ pub struct MockExchangeClient {
     orders: Arc<RwLock<Vec<Order>>>,
     filled_trades: Arc<RwLock<Vec<FilledTrade>>>,
     order_counter: Arc<AtomicU64>,
-    fee_pct: f64,
+    /// テスト用に手数料率を固定する場合は Some(rate) を指定する。
+    /// None の場合は累計取引量に基づいてティア制手数料を計算する。
+    override_fee: Option<f64>,
+    /// 累計JPY建て取引量（ティア制手数料の計算に使用）
+    volume_jpy: Arc<RwLock<Decimal>>,
     db: Option<Arc<MockStateRepository>>,
 }
 
@@ -44,13 +78,17 @@ impl Default for MockExchangeClient {
 }
 
 impl MockExchangeClient {
-    /// デフォルト手数料 0.15% でクライアントを生成する。
+    /// ティア制手数料（累計取引量ベース）でクライアントを生成する。
     pub fn new() -> Self {
-        Self::with_fee(0.0015)
+        Self::new_inner(None)
     }
 
-    /// 手数料率を指定してクライアントを生成する（テスト用）。
+    /// 手数料率を固定値で指定してクライアントを生成する（テスト用）。
     pub fn with_fee(fee_pct: f64) -> Self {
+        Self::new_inner(Some(fee_pct))
+    }
+
+    fn new_inner(override_fee: Option<f64>) -> Self {
         let now = Utc::now();
         let ticker = Ticker {
             product_code: "BTC_JPY".to_string(),
@@ -81,7 +119,8 @@ impl MockExchangeClient {
             orders: Arc::new(RwLock::new(Vec::new())),
             filled_trades: Arc::new(RwLock::new(Vec::new())),
             order_counter: Arc::new(AtomicU64::new(1)),
-            fee_pct,
+            override_fee,
+            volume_jpy: Arc::new(RwLock::new(Decimal::ZERO)),
             db: None,
         }
     }
@@ -193,8 +232,13 @@ impl ExchangeClient for MockExchangeClient {
         }
 
         let cost = exec_price * req.size;
-        let fee_rate = Decimal::try_from(self.fee_pct).unwrap_or(Decimal::ZERO);
+        let fee_rate = Decimal::try_from(self.fee_pct()).unwrap_or(Decimal::ZERO);
         let fee = cost * fee_rate;
+
+        // 累計取引量を加算（ティア制手数料の計算に使用）
+        if self.override_fee.is_none() {
+            *self.volume_jpy.write().unwrap() += cost;
+        }
 
         match req.side {
             OrderSide::Buy => {
@@ -295,6 +339,13 @@ impl ExchangeClient for MockExchangeClient {
         }
         Ok(result)
     }
+
+    fn fee_pct(&self) -> f64 {
+        if let Some(rate) = self.override_fee {
+            return rate;
+        }
+        fee_from_volume(*self.volume_jpy.read().unwrap())
+    }
 }
 
 #[cfg(test)]
@@ -393,6 +444,67 @@ mod tests {
         // BTC残高0のまま売ろうとする
         let result = client.send_order(&sell_req(dec!(0.001))).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn tiered_fee_starts_at_max() {
+        // 取引量ゼロ → 最高手数料ティア (0.15%)
+        let client = MockExchangeClient::new();
+        assert_eq!(client.fee_pct(), 0.0015);
+    }
+
+    #[tokio::test]
+    async fn tiered_fee_decreases_with_volume() {
+        // 取引量が増えるにつれ手数料が下がることを確認
+        let client = MockExchangeClient::new();
+        // 初期: 0.15% (10万円未満)
+        assert_eq!(client.fee_pct(), 0.0015);
+
+        // 初期残高を増やしてから取引
+        client.set_balances(vec![
+            crate::types::balance::Balance {
+                currency_code: "JPY".to_string(),
+                amount: dec!(5_000_000),
+                available: dec!(5_000_000),
+            },
+            crate::types::balance::Balance {
+                currency_code: "BTC".to_string(),
+                amount: dec!(0),
+                available: dec!(0),
+            },
+        ]);
+        // 価格を 1,000,000 JPY に設定し、1 BTC 取引 → 累計 1,000,000 JPY
+        client.set_price(dec!(1_000_000));
+        client
+            .send_order(&buy_req(dec!(1)))
+            .await
+            .unwrap();
+        // 累計100万円 → 0.11% ティア
+        assert_eq!(client.fee_pct(), 0.0011);
+    }
+
+    #[tokio::test]
+    async fn override_fee_ignores_volume() {
+        // with_fee() で固定すると取引量に関わらず fee_pct が変わらない
+        let client = MockExchangeClient::with_fee(0.0005);
+        client.set_balances(vec![
+            crate::types::balance::Balance {
+                currency_code: "JPY".to_string(),
+                amount: dec!(20_000_000),
+                available: dec!(20_000_000),
+            },
+            crate::types::balance::Balance {
+                currency_code: "BTC".to_string(),
+                amount: dec!(0),
+                available: dec!(0),
+            },
+        ]);
+        client.set_price(dec!(10_000_000));
+        client
+            .send_order(&buy_req(dec!(1)))
+            .await
+            .unwrap();
+        assert_eq!(client.fee_pct(), 0.0005);
     }
 
     #[tokio::test]

@@ -26,14 +26,12 @@ pub struct RunBacktestRequest {
     pub resolution_secs: u32,
     #[serde(default = "default_slippage")]
     pub slippage_pct: f64,
-    #[serde(default = "default_fee")]
-    pub fee_pct: f64,
+    pub fee_pct: Option<f64>,
     pub initial_jpy: Decimal,
 }
 
 fn default_resolution() -> u32 { 60 }
 fn default_slippage() -> f64 { 0.001 }
-fn default_fee() -> f64 { 0.0015 }
 
 #[derive(Debug, Serialize)]
 pub struct BacktestRunResponse {
@@ -220,7 +218,7 @@ mod tests {
             to: Utc::now(),
             resolution_secs: 60,
             slippage_pct: 0.001,
-            fee_pct: 0.0015,
+            fee_pct: Some(0.0015),
             initial_jpy: dec!(1_000_000),
             zone: crate::config::ZoneConfig::default(),
         };

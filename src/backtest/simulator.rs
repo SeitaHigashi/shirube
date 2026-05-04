@@ -38,7 +38,10 @@ impl Simulator {
         indicators: Vec<Box<dyn Indicator>>,
         risk_params: RiskParams,
     ) -> Result<BacktestReport> {
-        let exchange = Arc::new(MockExchangeClient::with_fee(self.config.fee_pct));
+        let exchange = Arc::new(match self.config.fee_pct {
+            Some(rate) => MockExchangeClient::with_fee(rate),
+            None => MockExchangeClient::new(),
+        });
 
         // 初期残高を設定
         exchange.set_balances(vec![
@@ -473,7 +476,7 @@ mod tests {
             to,
             resolution_secs: 60,
             slippage_pct: 0.0,
-            fee_pct: 0.0,
+            fee_pct: Some(0.0),
             initial_jpy: dec!(1_000_000),
             zone: crate::config::ZoneConfig::default(),
         };

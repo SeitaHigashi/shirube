@@ -24,7 +24,7 @@ impl BacktestRunRepository {
         let to_time = config.to.to_rfc3339();
         let resolution_secs = config.resolution_secs;
         let slippage_pct = config.slippage_pct;
-        let fee_pct = config.fee_pct;
+        let fee_pct = config.fee_pct.unwrap_or(0.0015);
         let initial_jpy = config.initial_jpy.to_string();
         let total_return_pct = report.total_return_pct;
         let sharpe_ratio = report.sharpe_ratio;
@@ -133,7 +133,7 @@ impl BacktestRunRepository {
                     to,
                     resolution_secs,
                     slippage_pct,
-                    fee_pct,
+                    fee_pct: Some(fee_pct),
                     initial_jpy: Decimal::from_str(&initial_jpy).unwrap_or_default(),
                     zone: crate::config::ZoneConfig::default(),
                 },
@@ -165,7 +165,7 @@ mod tests {
             to: now,
             resolution_secs: 60,
             slippage_pct: 0.001,
-            fee_pct: 0.0015,
+            fee_pct: Some(0.0015),
             initial_jpy: dec!(1_000_000),
             zone: crate::config::ZoneConfig::default(),
         }

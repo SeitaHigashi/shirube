@@ -74,21 +74,48 @@ impl TradingEngine {
     }
 
     pub async fn run(mut self) {
-        loop {
-            match self.signal_rx.recv().await {
-                Ok(detail) => {
-                    if let Err(e) = self.handle_signal(detail.aggregate).await {
-                        warn!("TradingEngine error: {}", e);
-                        self.alert.order_error(&e.to_string()).await;
+        // Separate signal reception from order processing so that a slow
+        // handle_signal() call never blocks the broadcast receiver.
+        //
+        // Buffer=1: if the worker is busy when a new signal arrives, the
+        // old queued signal is discarded and only the latest one is kept.
+        // This ensures we always act on the most recent market state.
+        let (work_tx, mut work_rx) = tokio::sync::mpsc::channel::<AllocationSignal>(1);
+
+        // Extract signal_rx from self using channel replacement so that `self`
+        // remains valid (not partially moved) for the worker loop below.
+        // The dummy receiver is immediately dropped and never polled.
+        let (dummy_tx, dummy_rx) = broadcast::channel(1);
+        drop(dummy_tx);
+        let mut signal_rx = std::mem::replace(&mut self.signal_rx, dummy_rx);
+
+        // Receiver task: lightweight, always ready to consume from the broadcast
+        // channel immediately regardless of how long order processing takes.
+        tokio::spawn(async move {
+            loop {
+                match signal_rx.recv().await {
+                    Ok(detail) => {
+                        // try_send drops the signal when the worker is busy
+                        // (buffer full), keeping only the most recent signal.
+                        let _ = work_tx.try_send(detail.aggregate);
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("TradingEngine lagged by {} signals", n);
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        info!("TradingEngine signal channel closed, shutting down");
+                        break;
                     }
                 }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    warn!("TradingEngine lagged by {} signals", n);
-                }
-                Err(broadcast::error::RecvError::Closed) => {
-                    info!("TradingEngine signal channel closed, shutting down");
-                    break;
-                }
+            }
+        });
+
+        // Worker loop: owns all mutable state (risk_manager, last_reset_date)
+        // and processes signals one at a time without racing the receiver.
+        while let Some(signal) = work_rx.recv().await {
+            if let Err(e) = self.handle_signal(signal).await {
+                warn!("TradingEngine error: {}", e);
+                self.alert.order_error(&e.to_string()).await;
             }
         }
     }

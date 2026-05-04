@@ -721,10 +721,12 @@
       }
     }
 
+    // Default values must match TradingConfig::default() in src/config.rs
+    // so that chart indicators are consistent with signal engine before /api/config loads.
     let currentCfg = {
-      sma_period: 20, ema_period: 20, rsi_period: 14,
-      macd_fast: 12, macd_slow: 26, macd_signal: 9,
-      bollinger_period: 20, bollinger_std: 2.0,
+      sma_period: 200, ema_period: 100, rsi_period: 42,
+      macd_fast: 52, macd_slow: 104, macd_signal: 18,
+      bollinger_period: 60, bollinger_std: 2.0,
     };
 
     // partial candle が毎Ticker届くためインジケータ再計算を 500ms debounce する

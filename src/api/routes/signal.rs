@@ -48,6 +48,7 @@ mod tests {
             latest_signal: Arc::new(RwLock::new(sig)),
             news_cache: Arc::new(RwLock::new(vec![])),
             trading_config: Arc::new(RwLock::new(TradingConfig::default())),
+            config_tx: Arc::new(tokio::sync::watch::channel(TradingConfig::default()).0),
         }
     }
 

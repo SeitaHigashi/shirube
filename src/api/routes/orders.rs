@@ -83,6 +83,9 @@ mod tests {
             trading_config: std::sync::Arc::new(tokio::sync::RwLock::new(
                 crate::config::TradingConfig::default(),
             )),
+            config_tx: std::sync::Arc::new(
+                tokio::sync::watch::channel(crate::config::TradingConfig::default()).0
+            ),
         };
         Router::new()
             .route("/api/orders", axum::routing::get(get_orders).post(post_order))

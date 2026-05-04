@@ -40,6 +40,9 @@ mod tests {
             latest_signal: Arc::new(RwLock::new(None)),
             news_cache: Arc::new(RwLock::new(scores)),
             trading_config: Arc::new(RwLock::new(crate::config::TradingConfig::default())),
+            config_tx: Arc::new(
+                tokio::sync::watch::channel(crate::config::TradingConfig::default()).0
+            ),
         }
     }
 

@@ -30,6 +30,9 @@ pub async fn put_config(
 
     *state.trading_config.write().await = new_cfg.clone();
 
+    // SignalEngine にライブ設定変更を通知する（エラーは無視: receiver が Drop されている場合）
+    let _ = state.config_tx.send(new_cfg.clone());
+
     Ok(Json(new_cfg))
 }
 
@@ -61,6 +64,7 @@ mod tests {
             latest_signal: Arc::new(RwLock::new(None)),
             news_cache: Arc::new(RwLock::new(vec![])),
             trading_config: Arc::new(RwLock::new(TradingConfig::default())),
+            config_tx: Arc::new(tokio::sync::watch::channel(TradingConfig::default()).0),
         };
         Router::new()
             .route(

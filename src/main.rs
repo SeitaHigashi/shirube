@@ -125,6 +125,10 @@ async fn main() -> anyhow::Result<()> {
     ];
     let init_risk_params = init_cfg.to_risk_params();
 
+    // SignalEngine へライブ設定変更を配信するチャネル
+    let (config_tx, config_rx) = tokio::sync::watch::channel(init_cfg.clone());
+    let config_tx = std::sync::Arc::new(config_tx);
+
     // インジケータのウォームアップ: 起動前にDBの過去Candleを流し込む
     // 最後のCandleのシグナルを捕捉してキャッシュ事前初期化に使う
     let mut warmup_signals: Vec<IndicatorSignal> = Vec::new();
@@ -160,9 +164,9 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // SignalEngine: Candle → Signal
+    // SignalEngine: Candle → Signal（config_rx 経由でライブ設定変更を受信）
     let (signal_engine, signal_engine_tx, signal_rx) =
-        SignalEngine::new(indicators, market_bus.candle_rx(), init_cfg.signal_threshold);
+        SignalEngine::new(indicators, market_bus.candle_rx(), config_rx);
     tokio::spawn(signal_engine.run());
 
     // 最新シグナルをキャッシュするタスク（API配信用）
@@ -296,6 +300,7 @@ async fn main() -> anyhow::Result<()> {
         latest_signal,
         news_cache,
         trading_config: Arc::clone(&trading_config),
+        config_tx: Arc::clone(&config_tx),
     };
     tokio::spawn(api::server::run(api_state, addr));
 

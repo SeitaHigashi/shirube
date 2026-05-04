@@ -76,6 +76,9 @@ mod tests {
             trading_config: std::sync::Arc::new(tokio::sync::RwLock::new(
                 crate::config::TradingConfig::default(),
             )),
+            config_tx: std::sync::Arc::new(
+                tokio::sync::watch::channel(crate::config::TradingConfig::default()).0
+            ),
         };
         let app = Router::new()
             .route("/api/candles", axum::routing::get(get_candles))

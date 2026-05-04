@@ -4,7 +4,7 @@ pub mod ws_handler;
 
 use std::sync::Arc;
 
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, watch, RwLock};
 
 use crate::config::TradingConfig;
 use crate::exchange::ExchangeClient;
@@ -24,6 +24,8 @@ pub struct AppState {
     pub latest_signal: Arc<RwLock<Option<SignalDetail>>>,
     /// 最新のニュースセンチメントスコアキャッシュ
     pub news_cache: Arc<RwLock<Vec<SentimentScore>>>,
-    /// 取引設定（UIから変更可能）
+    /// 取引設定（UIから変更可能、RwLock経由でAPIが読み書き）
     pub trading_config: Arc<RwLock<TradingConfig>>,
+    /// 設定変更を SignalEngine にライブ配信するチャネル
+    pub config_tx: Arc<watch::Sender<TradingConfig>>,
 }

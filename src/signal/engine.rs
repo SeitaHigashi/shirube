@@ -53,7 +53,7 @@ impl SignalEngine {
     /// キャンドル受信時はインジケータを更新してキャッシュし、
     /// 100ms タイマーで再集計してシグナルをブロードキャストする。
     pub async fn run(mut self) {
-        let mut ticker = interval(Duration::from_millis(100));
+        let mut ticker = interval(Duration::from_millis(250));
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {

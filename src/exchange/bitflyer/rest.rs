@@ -18,11 +18,18 @@ use crate::types::{
 
 const DEFAULT_BASE_URL: &str = "https://api.bitflyer.com";
 
+/// HTTP client for the bitFlyer REST API.
+///
+/// All authenticated requests use HMAC-SHA256 signatures built by
+/// `build_auth_headers` (see `auth.rs`).  A token-bucket `RateLimiter`
+/// is shared across all methods to stay within bitFlyer's 200 req/min
+/// limit for both public and authenticated endpoints.
 pub struct BitFlyerRestClient {
     http: reqwest::Client,
     base_url: String,
     api_key: String,
     api_secret: String,
+    /// Shared across all HTTP methods; enforces 200 req/min rate limit
     rate_limiter: RateLimiter,
 }
 
@@ -54,6 +61,14 @@ impl BitFlyerRestClient {
         self.parse_response(resp).await
     }
 
+    /// Send an authenticated GET request.
+    ///
+    /// Authentication headers follow the bitFlyer spec:
+    ///   ACCESS-KEY       : API key
+    ///   ACCESS-TIMESTAMP : current Unix timestamp (seconds, as a string)
+    ///   ACCESS-SIGN      : HMAC-SHA256(timestamp + method + path + body)
+    ///
+    /// `build_auth_headers` in `auth.rs` constructs these three headers.
     async fn get_authenticated<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         self.rate_limiter.acquire().await;
         let headers = build_auth_headers(&self.api_key, &self.api_secret, "GET", path, "");
@@ -164,6 +179,15 @@ impl BitFlyerRestClient {
         })
     }
 
+    /// Deserialize a successful response or convert an error body into
+    /// `Error::ApiError`.
+    ///
+    /// bitFlyer error responses look like:
+    ///   { "status": -1, "error_message": "...", "data": null }
+    ///
+    /// If the body cannot be parsed as `ApiErrorBody` the raw HTTP status
+    /// code and response text are used instead, so the caller always gets a
+    /// structured error rather than a generic JSON parse failure.
     async fn parse_response<T: DeserializeOwned>(&self, resp: reqwest::Response) -> Result<T> {
         if resp.status().is_success() {
             let value = resp.json::<T>().await?;
@@ -171,6 +195,7 @@ impl BitFlyerRestClient {
         }
         let status_code = resp.status().as_u16() as i32;
         let text = resp.text().await.unwrap_or_default();
+        // Try to extract the structured bitFlyer error body first
         if let Ok(err) = serde_json::from_str::<ApiErrorBody>(&text) {
             return Err(Error::ApiError {
                 code: err.status.unwrap_or(status_code),

@@ -19,7 +19,12 @@ impl AlertLevel {
     }
 }
 
-/// ログ出力 + オプションで Slack Webhook にアラートを送信する。
+/// Unified alert dispatcher: always writes to `tracing` logs and
+/// optionally sends a Slack Webhook notification when `SLACK_WEBHOOK_URL`
+/// is set in the environment.
+///
+/// Slack messages are fire-and-forget; delivery failures are logged but
+/// do not propagate as errors so trading is never blocked by alerting.
 pub struct AlertManager {
     slack_webhook_url: Option<String>,
     client: Client,

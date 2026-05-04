@@ -44,8 +44,17 @@ struct SubscribeParams {
     channel: String,
 }
 
+/// WebSocket client for the bitFlyer Realtime API (JSON-RPC 2.0).
+///
+/// Subscribes to `lightning_ticker_*` and `lightning_executions_*`
+/// channels and publishes deserialized messages on a `broadcast` channel.
+/// Use `run_with_reconnect` for production — it handles server-side
+/// disconnects with exponential backoff.
 pub struct BitFlyerWsClient {
     endpoint: String,
+    // NOTE: api_key / api_secret are stored for future use if bitFlyer
+    // introduces authenticated private channels over WebSocket.
+    // Currently all subscribed channels are public and require no auth.
     #[allow(dead_code)]
     api_key: String,
     #[allow(dead_code)]
@@ -79,7 +88,8 @@ impl BitFlyerWsClient {
         let api_secret = self.api_secret.clone();
 
         loop {
-            // 受信者がいなければ終了（全コンシューマが drop された）
+            // Graceful shutdown: exit when no consumers are left (all
+            // `broadcast::Receiver` handles have been dropped).
             if tx.receiver_count() == 0 {
                 info!("WebSocket: no receivers, shutting down");
                 break;
@@ -92,9 +102,11 @@ impl BitFlyerWsClient {
             );
             match client.run(channels.clone(), tx.clone()).await {
                 Ok(()) => {
-                    // サーバー側からの Close も再接続する
+                    // Server sent a Close frame — treat as a transient
+                    // disconnect and reconnect after the current backoff delay.
                     warn!("WebSocket closed by server. Reconnecting in {:?}", backoff);
                     tokio::time::sleep(backoff).await;
+                    // Exponential backoff: doubles each attempt, capped at max_backoff
                     backoff = (backoff * 2).min(max_backoff);
                 }
                 Err(e) => {
@@ -103,6 +115,10 @@ impl BitFlyerWsClient {
                     backoff = (backoff * 2).min(max_backoff);
                 }
             }
+            // NOTE: backoff is NOT reset to 1s after a successful connection
+            // because a flapping server would saturate the API. It resets only
+            // implicitly when a connection lives long enough (callers that care
+            // can reset by replacing this with a timer-based reset).
         }
     }
 
@@ -165,6 +181,14 @@ impl BitFlyerWsClient {
         Ok(())
     }
 
+    /// Route an incoming `channelMessage` to the appropriate `WsMessage`
+    /// variant based on the channel name prefix.
+    ///
+    /// - `lightning_ticker_*`      → `WsMessage::Ticker`
+    /// - `lightning_executions_*`  → `WsMessage::Executions`
+    ///
+    /// Unknown channels are silently ignored; parse failures are logged at
+    /// DEBUG level to avoid flooding logs on transient malformed frames.
     fn dispatch_channel_message(
         &self,
         cm: ChannelMessage,
@@ -190,6 +214,8 @@ impl BitFlyerWsClient {
                 }
             }
         }
+        // Other channels (e.g. lightning_board_*) are not subscribed and
+        // would only appear if the server sends unsolicited messages.
     }
 }
 

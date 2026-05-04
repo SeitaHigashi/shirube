@@ -143,11 +143,27 @@ impl Simulator {
     }
 }
 
+/// Apply slippage to a price by multiplying by (1 + slippage_pct).
+///
+/// Slippage models the difference between the mid-price and the actual
+/// fill price due to market impact and bid/ask spread. A positive
+/// `slippage_pct` (e.g. 0.001 = 0.1%) always increases the price,
+/// meaning buys cost more and sells receive less than the close price.
 fn apply_slippage(price: Decimal, slippage_pct: f64) -> Decimal {
     let slip = Decimal::try_from(slippage_pct).unwrap_or(Decimal::ZERO);
     price * (Decimal::ONE + slip)
 }
 
+/// Convert an allocation delta into a market order request.
+///
+/// `delta` is the signed difference between the target and current BTC
+/// allocation fraction (e.g. +0.3 means "increase BTC by 30% of
+/// portfolio value"). The BTC order size is derived as:
+///
+///   size = |delta| * total_value / btc_price
+///
+/// Returns `None` when the computed size falls below `min_size` (avoids
+/// placing dust orders that would be rejected by the exchange).
 fn allocation_delta_to_order(
     delta: f64,
     total_value: Decimal,
@@ -157,6 +173,7 @@ fn allocation_delta_to_order(
 ) -> Option<OrderRequest> {
     use rust_decimal::prelude::FromPrimitive;
     let delta_dec = Decimal::from_f64(delta.abs()).unwrap_or(Decimal::ZERO);
+    // Compute BTC size from the JPY delta, rounded to 8 decimal places
     let size = (delta_dec * total_value / btc_price).round_dp(8);
     if size < min_size {
         return None;
@@ -173,6 +190,9 @@ fn allocation_delta_to_order(
     })
 }
 
+/// Aggregate a sequence of filled trades and an equity curve into a
+/// summary `BacktestReport`.  All financial metrics are computed here
+/// from the raw trade log and per-candle portfolio valuations.
 fn compute_report(
     trades: &[FilledTrade],
     equity_curve: &[f64],
@@ -196,6 +216,15 @@ fn compute_report(
     }
 }
 
+/// Calculate the maximum peak-to-trough drawdown as a percentage.
+///
+/// For each point in the equity curve, the drawdown from the running
+/// peak is:
+///
+///   drawdown_pct = (peak - current) / peak * 100
+///
+/// The maximum such value across the entire series is returned.
+/// Returns 0.0 for an empty series.
 fn calculate_max_drawdown(equity: &[f64]) -> f64 {
     if equity.is_empty() {
         return 0.0;
@@ -206,6 +235,7 @@ fn calculate_max_drawdown(equity: &[f64]) -> f64 {
         if e > peak {
             peak = e;
         }
+        // Drawdown from the highest equity seen so far
         let dd = (peak - e) / peak * 100.0;
         if dd > max_dd {
             max_dd = dd;
@@ -214,6 +244,18 @@ fn calculate_max_drawdown(equity: &[f64]) -> f64 {
     max_dd
 }
 
+/// Calculate the annualized Sharpe ratio from a per-candle equity curve.
+///
+/// Per-candle returns are computed as:
+///   r_t = (equity[t] - equity[t-1]) / equity[t-1]
+///
+/// The Sharpe ratio is then:
+///   Sharpe = mean(r) / std(r) * sqrt(periods_per_year)
+///
+/// For 60-second candles the annualization factor is:
+///   sqrt(60 min/hr * 24 hr/day * 365 days/yr) = sqrt(525_600) ≈ 725.0
+///
+/// Returns 0.0 for flat or insufficient equity data.
 fn calculate_sharpe(equity: &[f64]) -> f64 {
     if equity.len() < 2 {
         return 0.0;
@@ -229,12 +271,22 @@ fn calculate_sharpe(equity: &[f64]) -> f64 {
     if std_dev == 0.0 {
         return 0.0;
     }
-    // 年率化: 60秒足 → 1年 = 525_600 本
+    // Annualize: 525_600 = minutes per year (60s candles), sqrt converts
+    // per-candle Sharpe to annualized Sharpe
     let annualize = (525_600.0f64).sqrt();
     mean / std_dev * annualize
 }
 
+/// Calculate the win rate using a LIFO buy-price stack.
+///
+/// Each buy price is pushed onto a stack; each sell is matched against
+/// the most recently pushed buy (last-in first-out pairing).  A "win"
+/// is recorded when the sell price strictly exceeds the matched buy
+/// price.  Unpaired sells (no open position) are ignored.
+///
+/// Returns 0.0 when no round-trips have been completed.
 fn calculate_win_rate(trades: &[FilledTrade]) -> f64 {
+    // Stack of buy prices waiting to be matched with a future sell
     let mut buy_prices: Vec<Decimal> = Vec::new();
     let mut wins = 0u32;
     let mut total_closed = 0u32;
@@ -243,6 +295,7 @@ fn calculate_win_rate(trades: &[FilledTrade]) -> f64 {
         match trade.side {
             OrderSide::Buy => buy_prices.push(trade.price),
             OrderSide::Sell => {
+                // Match sell against the most recent unpaired buy (LIFO)
                 if let Some(buy_price) = buy_prices.pop() {
                     total_closed += 1;
                     if trade.price > buy_price {

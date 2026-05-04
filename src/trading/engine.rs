@@ -17,17 +17,25 @@ use crate::signal::{AllocationSignal, SignalDetail};
 use crate::storage::orders::OrderRepository;
 use crate::types::order::{Order, OrderRequest, OrderSide, OrderStatus, OrderType};
 
+/// Core trading loop that converts allocation signals into real orders.
+///
+/// Listens on a `SignalDetail` broadcast channel and for each received
+/// signal: fetches live balances/positions/price, computes the required
+/// BTC delta, validates through `RiskManager`, and submits a market
+/// order.  Also handles daily UTC midnight resets for the risk manager.
 pub struct TradingEngine {
     signal_rx: broadcast::Receiver<SignalDetail>,
     exchange: Arc<dyn ExchangeClient>,
     risk_manager: RiskManager,
     product_code: String,
     alert: Arc<AlertManager>,
-    /// 最後に日次リセットした UTC 日付
+    /// Last UTC date on which `reset_daily` was called; used to detect
+    /// midnight crossings without a dedicated timer task.
     last_reset_date: Option<NaiveDate>,
-    /// 取引設定（UIから動的変更可能）
+    /// Trading configuration (allocation threshold, risk params) that can
+    /// be updated live from the UI without restarting the engine.
     config: Arc<RwLock<TradingConfig>>,
-    /// 注文をDBに永続化するリポジトリ（オプション）
+    /// Optional repository for persisting placed orders to SQLite.
     order_repo: Option<OrderRepository>,
 }
 
@@ -85,15 +93,23 @@ impl TradingEngine {
         }
     }
 
+    /// Process a single allocation signal: fetch market state, compute
+    /// the required BTC delta, and place an order if the delta exceeds
+    /// the configured threshold.
+    ///
+    /// Also performs a daily reset of the risk manager when the UTC date
+    /// has changed since the last signal (detected lazily here rather
+    /// than via a separate timer task to avoid an extra tokio::spawn).
     async fn handle_signal(&mut self, signal: AllocationSignal) -> crate::error::Result<()> {
-        // 最新の設定を risk_manager に反映
+        // Pull the latest config snapshot and push params into risk manager
         let allocation_threshold = {
             let cfg = self.config.read().await;
             self.risk_manager.update_params(cfg.to_risk_params());
             cfg.allocation_threshold
         };
 
-        // 現在の残高・ポジション・価格を並列取得
+        // Fetch balance, positions, and best price concurrently to
+        // minimise latency between signal receipt and order submission
         let (balances, positions, ticker) = tokio::try_join!(
             self.exchange.get_balance(),
             self.exchange.get_positions(&self.product_code),
@@ -105,7 +121,8 @@ impl TradingEngine {
             .map(|b| b.available)
             .unwrap_or(Decimal::ZERO);
 
-        // 日次リセット（UTC 00:00 をまたいだ場合）
+        // Detect UTC midnight crossing and reset the daily risk baseline.
+        // We use the JPY available balance as the new day's starting value.
         let today = Utc::now().date_naive();
         if self.last_reset_date != Some(today) {
             self.risk_manager.reset_daily(jpy_balance);
@@ -113,9 +130,13 @@ impl TradingEngine {
             info!("RiskManager daily reset: baseline_jpy={}", jpy_balance);
         }
 
+        // Positions represent open CFD/FX exposure; on the spot market
+        // the BTC holding lives in the balance instead.
         let btc_position: Decimal = positions.iter().map(|p| p.size).sum();
 
-        // BTC 残高も考慮（MockExchangeClient では balance で管理）
+        // NOTE: take the maximum of position size and BTC balance so that
+        // both real (bitFlyer spot balance) and mock (MockExchangeClient
+        // which stores BTC in balance, not positions) clients work correctly.
         let btc_balance = balances.iter()
             .find(|b| b.currency_code == "BTC")
             .map(|b| b.available)
@@ -124,18 +145,22 @@ impl TradingEngine {
 
         let btc_price = ticker.ltp;
 
+        // Compute current allocation fraction: BTC value / total portfolio value
         let btc_value = btc_held * btc_price;
         let total_value = btc_value + jpy_balance;
 
         let min_order_size = self.risk_manager.params().min_order_size;
         let order_req = if total_value.is_zero() || btc_price.is_zero() {
+            // Cannot compute allocation without a non-zero price or portfolio
             None
         } else {
             let current_alloc = (btc_value / total_value)
                 .to_f64()
                 .unwrap_or(0.0);
+            // delta > 0 → buy more BTC; delta < 0 → sell BTC
             let delta = signal.target_pct - current_alloc;
             if delta.abs() < allocation_threshold {
+                // Change is too small to warrant a trade (avoids churn)
                 None
             } else {
                 Self::allocation_delta_to_order(
@@ -193,9 +218,16 @@ impl TradingEngine {
         Ok(())
     }
 
-    /// 配分デルタから注文を生成する。
-    /// delta > 0 → 買い, delta < 0 → 売り。
-    /// size = |delta| * total_value / btc_price
+    /// Convert a signed allocation delta into a market `OrderRequest`.
+    ///
+    /// - `delta > 0` → Buy (increase BTC allocation)
+    /// - `delta < 0` → Sell (decrease BTC allocation)
+    ///
+    /// BTC order size formula:
+    ///   size = |delta| * total_value / btc_price  (rounded to 8 d.p.)
+    ///
+    /// Returns `None` if the computed size is below `min_size`, preventing
+    /// dust orders that would be rejected by the exchange API.
     fn allocation_delta_to_order(
         delta: f64,
         total_value: Decimal,

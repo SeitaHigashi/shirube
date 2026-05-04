@@ -56,11 +56,17 @@ impl NewsAnalyzer {
         }
     }
 
+    /// Send a single headline (and optional body snippet) to Ollama and
+    /// return the raw parsed score.
+    ///
+    /// The prompt constrains the model to respond with exactly one of
+    /// BULLISH / BEARISH / NEUTRAL to make `parse_sentiment` reliable.
+    /// Body text is truncated to 500 chars to keep token usage bounded.
     async fn call_ollama(&self, headline: &str, body: Option<&str>) -> anyhow::Result<f64> {
         let body_section = body
             .filter(|s| !s.is_empty())
             .map(|s| {
-                // 長すぎる本文はトークン節約のため500文字に切り詰める
+                // Truncate to 500 chars to avoid excessive token usage
                 let trimmed = if s.len() > 500 { &s[..500] } else { s };
                 format!("\nArticle summary: {}", trimmed)
             })

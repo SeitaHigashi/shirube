@@ -4,6 +4,14 @@
 
 Automated BTC/JPY trading bot using the bitFlyer API. Combines technical analysis with AI-powered news sentiment analysis to generate trading signals.
 
+## Exchange API Reference
+
+bitFlyer の全 REST/Realtime API 仕様（エンドポイント一覧・リクエスト/レスポンス形式・認証方式・実装済み状況）は以下を参照すること:
+
+**`docs/bitflyer-api-spec.md`**
+
+Exchange クライアントの新規実装・拡張・修正を行う際は必ずこのファイルを確認し、仕様と整合性を保つこと。
+
 ## Tech Stack
 
 - **Language**: Rust
@@ -216,3 +224,13 @@ After completing any implementation task:
 **Rules:**
 - Never commit secrets or `.env` files
 - Never use `--force` or `--no-verify`
+
+## Comment Policy
+
+ALWAYS add comments when writing or modifying code:
+- Public structs/traits/functions: `///` doc comment explaining purpose and usage
+- Non-trivial logic blocks (>5 lines): inline `//` comment explaining "what & why"
+- Mathematical formulas: comment the formula name, inputs, and expected range
+- Design decisions: `// NOTE: ...` explaining why this approach was chosen
+- Async coordination patterns: explain task lifecycle and channel semantics
+- All comments in **English**

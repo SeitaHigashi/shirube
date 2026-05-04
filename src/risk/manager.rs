@@ -4,10 +4,18 @@ use rust_decimal::prelude::ToPrimitive;
 use crate::types::order::{OrderRequest, OrderSide};
 use super::{RiskDecision, RiskParams};
 
+/// Stateful guard that validates orders before they reach the exchange.
+///
+/// Maintains per-day state (baseline JPY balance, circuit-breaker flag)
+/// that must be reset each UTC midnight via `reset_daily`.  All order
+/// validation logic in `evaluate` is intentionally pure with respect to
+/// async I/O — it only mutates internal state and returns a decision.
 pub struct RiskManager {
     params: RiskParams,
+    /// `true` after a circuit-breaker event; cleared by `reset_daily`
     circuit_broken: bool,
-    /// 当日始値 JPY 残高
+    /// JPY balance recorded at the start of the current trading day,
+    /// used as the baseline for daily drawdown calculations
     daily_start_jpy: Decimal,
 }
 
@@ -85,6 +93,12 @@ impl RiskManager {
         RiskDecision::Allow(order_req)
     }
 
+    /// Compute the fraction of the day's starting JPY that has been lost.
+    ///
+    ///   drawdown = (daily_start_jpy - current_jpy) / daily_start_jpy
+    ///
+    /// A positive value means losses; a negative value means gains.
+    /// Returns 0.0 when no baseline has been set (zero division guard).
     fn daily_drawdown_pct(&self, current_jpy: Decimal) -> f64 {
         if self.daily_start_jpy == Decimal::ZERO {
             return 0.0;

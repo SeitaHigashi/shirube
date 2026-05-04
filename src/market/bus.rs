@@ -8,6 +8,17 @@ use crate::exchange::bitflyer::ws::WsMessage;
 use crate::storage::db::Database;
 use crate::types::market::{Candle, Ticker};
 
+/// Fanout hub that bridges raw WebSocket messages to higher-level
+/// consumers (signal engine, dashboard WebSocket handler, etc.).
+///
+/// Spawns two independent background tasks:
+///
+/// 1. **WS aggregation task** — subscribes to the raw `WsMessage`
+///    broadcast, feeds trades/tickers into `CandleAggregator`, and
+///    re-publishes finalized and partial candles on `candle_tx`.
+///
+/// 2. **Ticker downsample task** — runs once at startup and then
+///    hourly to compress the ticker table, keeping storage bounded.
 pub struct MarketDataBus {
     candle_tx: broadcast::Sender<Candle>,
     ticker_tx: broadcast::Sender<Ticker>,
@@ -44,14 +55,18 @@ impl MarketDataBus {
                             }
                         }
                         Ok(WsMessage::Ticker(ticker)) => {
+                            // A ticker may finalize the previous bucket
                             if let Some(candle) = agg.feed_ticker(&ticker) {
                                 let _ = tx.send(candle);
                             }
-                            // 確定前の partial candle を即時プッシュ（リアルタイム更新用）
+                            // Also push the in-progress (partial) candle so the
+                            // dashboard chart updates in real-time without waiting
+                            // for the bucket to close.
                             if let Some(partial) = agg.peek_current() {
                                 let _ = tx.send(partial);
                             }
-                            // Ticker を全件 DB に保存（スロットルなし）
+                            // Persist every raw ticker; the downsample task will
+                            // thin them out hourly to keep the DB size bounded.
                             if let Err(e) = db_ws.tickers().insert(&ticker).await {
                                 warn!("Failed to insert ticker: {}", e);
                             }
@@ -66,12 +81,15 @@ impl MarketDataBus {
             });
         }
 
-        // ダウンサンプルタスク: 起動時に即実行 + 1時間ごと
+        // Downsample task: runs once immediately at startup (to handle any
+        // tickers accumulated while the bot was stopped) and then every hour.
+        // This is intentionally a separate task so it does not block the
+        // hot-path WS aggregation loop above.
         {
             let pc = product_code.to_string();
             let db_ds = db.clone();
             tokio::spawn(async move {
-                // 起動直後に一度実行（前回停止中に溜まった分を処理）
+                // Immediate startup run to catch up on any offline accumulation
                 match db_ds.tickers().downsample(&pc).await {
                     Ok(s) => info!(
                         "Ticker downsample (startup): -{} tickers",

@@ -3,9 +3,19 @@ use rust_decimal::Decimal;
 
 use crate::types::market::{Candle, Ticker, Trade};
 
+/// Accumulates raw price events (trades or tickers) into fixed-duration
+/// OHLCV candles.
+///
+/// Time buckets are aligned to UTC epoch boundaries:
+///   bucket_start = floor(unix_timestamp / resolution_secs) * resolution_secs
+///
+/// A candle is finalized (and returned to the caller) when the first event
+/// belonging to a *new* bucket arrives.  Until that point the accumulating
+/// candle is available as a snapshot via `peek_current` without being closed.
 pub struct CandleAggregator {
     product_code: String,
     resolution_secs: u32,
+    /// Candle currently being accumulated; `None` until the first event
     current: Option<PartialCandle>,
 }
 
@@ -65,8 +75,14 @@ impl CandleAggregator {
         }
     }
 
+    /// Truncate `ts` to the nearest preceding bucket boundary.
+    ///
+    /// Uses integer arithmetic on the Unix timestamp so that bucket
+    /// boundaries are always aligned to the UTC epoch, regardless of
+    /// local timezone or DST changes.
     fn bucket_time(&self, ts: DateTime<Utc>) -> DateTime<Utc> {
         let ts_secs = ts.timestamp();
+        // Integer division floors towards zero, giving the bucket start
         let bucket = (ts_secs / self.resolution_secs as i64) * self.resolution_secs as i64;
         Utc.timestamp_opt(bucket, 0).unwrap()
     }
@@ -99,7 +115,13 @@ impl CandleAggregator {
             .map(|pc| pc.clone().finalize(&self.product_code, self.resolution_secs))
     }
 
-    /// 内部の price 更新ロジック。bucket が変わったら旧 Candle を確定する。
+    /// Core price ingestion logic shared by `feed_ticker` and `feed_trades`.
+    ///
+    /// State machine with three cases:
+    /// 1. No candle yet  → open a new partial candle, return `None`
+    /// 2. Same bucket    → update OHLCV of the current partial, return `None`
+    /// 3. New bucket     → finalize the old candle, open a new partial,
+    ///                     return the finalized `Candle`
     fn feed_price(
         &mut self,
         bucket: DateTime<Utc>,
@@ -108,14 +130,17 @@ impl CandleAggregator {
     ) -> Option<Candle> {
         match &mut self.current {
             None => {
+                // First event ever: start accumulating
                 self.current = Some(PartialCandle::new(bucket, price, volume));
                 None
             }
             Some(cur) if cur.open_time == bucket => {
+                // Same time bucket: update high/low/close/volume in place
                 cur.update(price, volume);
                 None
             }
             Some(_) => {
+                // New bucket: close the previous candle and open a fresh one
                 let old = self.current.take().unwrap();
                 let finalized = old.finalize(&self.product_code, self.resolution_secs);
                 self.current = Some(PartialCandle::new(bucket, price, volume));

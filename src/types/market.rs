@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
+use crate::types::order::OrderSide;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ticker {
     pub product_code: String,
@@ -66,6 +68,17 @@ pub struct StoredTicker {
     pub ltp_low: Decimal,
     pub volume: Decimal,
     pub volume_by_product: Decimal,
+}
+
+/// 自分の約定履歴（`GET /v1/me/getexecutions` レスポンス）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MyExecution {
+    pub id: i64,
+    pub exec_date: DateTime<Utc>,
+    pub side: OrderSide,
+    pub price: Decimal,
+    pub size: Decimal,
+    pub commission: Decimal,
 }
 
 #[cfg(test)]

@@ -11,7 +11,7 @@ use crate::exchange::ExchangeClient;
 use crate::storage::mock_state::MockStateRepository;
 use crate::types::{
     balance::{Balance, Position},
-    market::Ticker,
+    market::{MyExecution, Ticker},
     order::{Order, OrderRequest, OrderSide, OrderStatus, OrderType},
 };
 
@@ -344,6 +344,58 @@ impl ExchangeClient for MockExchangeClient {
         Ok(result)
     }
 
+    async fn cancel_order(&self, _product_code: &str, acceptance_id: &str) -> Result<()> {
+        let mut orders = self.orders.write().unwrap();
+        let order = orders
+            .iter_mut()
+            .find(|o| o.acceptance_id == acceptance_id)
+            .ok_or_else(|| {
+                Error::Other(anyhow::anyhow!("order not found: {acceptance_id}"))
+            })?;
+        if order.status != OrderStatus::Active {
+            return Err(Error::Other(anyhow::anyhow!(
+                "order {} is not active (status: {:?})",
+                acceptance_id,
+                order.status
+            )));
+        }
+        order.status = OrderStatus::Canceled;
+        order.updated_at = Utc::now();
+        Ok(())
+    }
+
+    async fn get_executions(
+        &self,
+        _product_code: &str,
+        count: Option<u32>,
+        before: Option<i64>,
+        after: Option<i64>,
+    ) -> Result<Vec<MyExecution>> {
+        let trades = self.filled_trades.read().unwrap();
+        let mut result: Vec<MyExecution> = trades
+            .iter()
+            .enumerate()
+            .map(|(i, t)| MyExecution {
+                id: i as i64 + 1,
+                exec_date: Utc::now(),
+                side: t.side.clone(),
+                price: t.price,
+                size: t.size,
+                commission: t.fee,
+            })
+            .filter(|e| before.map_or(true, |b| e.id < b))
+            .filter(|e| after.map_or(true, |a| e.id > a))
+            .collect();
+        if let Some(c) = count {
+            result.truncate(c as usize);
+        }
+        Ok(result)
+    }
+
+    async fn get_trading_commission(&self, _product_code: &str) -> Result<f64> {
+        Ok(self.fee_pct())
+    }
+
     fn fee_pct(&self) -> f64 {
         if let Some(rate) = self.override_fee {
             return rate;
@@ -485,6 +537,81 @@ mod tests {
             .unwrap();
         // 累計100万円 → 0.11% ティア
         assert_eq!(client.fee_pct(), 0.0011);
+    }
+
+    #[tokio::test]
+    async fn cancel_order_cancels_single() {
+        let client = MockExchangeClient::new();
+        // Active な注文を2件手動挿入
+        {
+            let mut orders = client.orders.write().unwrap();
+            for (i, id) in ["MOCK-A", "MOCK-B"].iter().enumerate() {
+                orders.push(Order {
+                    id: Some(i as i64 + 1),
+                    acceptance_id: id.to_string(),
+                    product_code: "BTC_JPY".to_string(),
+                    side: OrderSide::Buy,
+                    order_type: crate::types::order::OrderType::Limit,
+                    price: Some(dec!(9_000_000)),
+                    size: dec!(0.001),
+                    status: OrderStatus::Active,
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                });
+            }
+        }
+        client.cancel_order("BTC_JPY", "MOCK-A").await.unwrap();
+        let orders = client.placed_orders();
+        assert_eq!(orders[0].status, OrderStatus::Canceled);
+        assert_eq!(orders[1].status, OrderStatus::Active); // MOCK-B はそのまま
+    }
+
+    #[tokio::test]
+    async fn cancel_order_not_found_returns_error() {
+        let client = MockExchangeClient::new();
+        let result = client.cancel_order("BTC_JPY", "NONEXISTENT").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn cancel_order_non_active_returns_error() {
+        let client = MockExchangeClient::new();
+        client.set_price(dec!(9_000_000));
+        let id = client.send_order(&buy_req(dec!(0.001))).await.unwrap();
+        // send_order は即 Completed → キャンセル不可
+        let result = client.cancel_order("BTC_JPY", &id).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn get_executions_returns_filled_trades() {
+        let client = MockExchangeClient::with_fee(0.0);
+        client.set_price(dec!(9_000_000));
+        client.send_order(&buy_req(dec!(0.001))).await.unwrap();
+        client.send_order(&buy_req(dec!(0.001))).await.unwrap();
+
+        let execs = client.get_executions("BTC_JPY", None, None, None).await.unwrap();
+        assert_eq!(execs.len(), 2);
+        assert_eq!(execs[0].price, dec!(9_000_000));
+    }
+
+    #[tokio::test]
+    async fn get_executions_respects_count() {
+        let client = MockExchangeClient::with_fee(0.0);
+        client.set_price(dec!(9_000_000));
+        client.send_order(&buy_req(dec!(0.001))).await.unwrap();
+        client.send_order(&buy_req(dec!(0.001))).await.unwrap();
+        client.send_order(&buy_req(dec!(0.001))).await.unwrap();
+
+        let execs = client.get_executions("BTC_JPY", Some(2), None, None).await.unwrap();
+        assert_eq!(execs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn get_trading_commission_equals_fee_pct() {
+        let client = MockExchangeClient::with_fee(0.0005);
+        let rate = client.get_trading_commission("BTC_JPY").await.unwrap();
+        assert_eq!(rate, 0.0005);
     }
 
     #[tokio::test]

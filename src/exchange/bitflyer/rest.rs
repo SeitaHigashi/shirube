@@ -4,15 +4,15 @@ use tracing::debug;
 
 use super::auth::build_auth_headers;
 use super::models::{
-    ApiErrorBody, CancelAllOrdersRequest, RawBalance, RawOrder, RawPosition, RawTicker,
-    SendOrderRequest, SendOrderResponse,
+    ApiErrorBody, CancelAllOrdersRequest, CancelOrderRequest, RawBalance, RawMyExecution,
+    RawOrder, RawPosition, RawTicker, RawTradingCommission, SendOrderRequest, SendOrderResponse,
 };
 use crate::error::{Error, Result};
 use crate::exchange::rate_limiter::RateLimiter;
 use crate::exchange::ExchangeClient;
 use crate::types::{
     balance::{Balance, Position},
-    market::Ticker,
+    market::{MyExecution, Ticker},
     order::{Order, OrderRequest, OrderSide, OrderType},
 };
 
@@ -129,6 +129,41 @@ impl BitFlyerRestClient {
         })
     }
 
+    /// POST で送信し、レスポンスボディを無視する（空レスポンスの API 向け）。
+    async fn post_authenticated_void<B: Serialize>(&self, path: &str, body: &B) -> Result<()> {
+        self.rate_limiter.acquire().await;
+        let body_str = serde_json::to_string(body)?;
+        let headers =
+            build_auth_headers(&self.api_key, &self.api_secret, "POST", path, &body_str);
+        let url = format!("{}{}", self.base_url, path);
+        debug!("POST (auth, void) {}", url);
+        let resp = self
+            .http
+            .post(&url)
+            .header("ACCESS-KEY", &headers.access_key)
+            .header("ACCESS-TIMESTAMP", &headers.access_timestamp)
+            .header("ACCESS-SIGN", &headers.access_sign)
+            .header("Content-Type", "application/json")
+            .body(body_str)
+            .send()
+            .await?;
+        if resp.status().is_success() {
+            return Ok(());
+        }
+        let status_code = resp.status().as_u16() as i32;
+        let text = resp.text().await.unwrap_or_default();
+        if let Ok(err) = serde_json::from_str::<ApiErrorBody>(&text) {
+            return Err(Error::ApiError {
+                code: err.status.unwrap_or(status_code),
+                message: err.error_message.unwrap_or_else(|| text.clone()),
+            });
+        }
+        Err(Error::ApiError {
+            code: status_code,
+            message: text,
+        })
+    }
+
     async fn parse_response<T: DeserializeOwned>(&self, resp: reqwest::Response) -> Result<T> {
         if resp.status().is_success() {
             let value = resp.json::<T>().await?;
@@ -219,6 +254,41 @@ impl ExchangeClient for BitFlyerRestClient {
         }
         let raw: Vec<RawOrder> = self.get_authenticated(&path).await?;
         Ok(raw.into_iter().map(Into::into).collect())
+    }
+
+    async fn cancel_order(&self, product_code: &str, acceptance_id: &str) -> Result<()> {
+        let body = CancelOrderRequest {
+            product_code: product_code.to_string(),
+            child_order_acceptance_id: acceptance_id.to_string(),
+        };
+        self.post_authenticated_void("/v1/me/cancelchildorder", &body).await
+    }
+
+    async fn get_executions(
+        &self,
+        product_code: &str,
+        count: Option<u32>,
+        before: Option<i64>,
+        after: Option<i64>,
+    ) -> Result<Vec<MyExecution>> {
+        let mut path = format!("/v1/me/getexecutions?product_code={}", product_code);
+        if let Some(c) = count {
+            path.push_str(&format!("&count={}", c));
+        }
+        if let Some(b) = before {
+            path.push_str(&format!("&before={}", b));
+        }
+        if let Some(a) = after {
+            path.push_str(&format!("&after={}", a));
+        }
+        let raw: Vec<RawMyExecution> = self.get_authenticated(&path).await?;
+        Ok(raw.into_iter().map(Into::into).collect())
+    }
+
+    async fn get_trading_commission(&self, product_code: &str) -> Result<f64> {
+        let path = format!("/v1/me/gettradingcommission?product_code={}", product_code);
+        let raw: RawTradingCommission = self.get_authenticated(&path).await?;
+        Ok(raw.commission_rate)
     }
 
     fn fee_pct(&self) -> f64 {
@@ -319,6 +389,80 @@ mod tests {
         };
         let id = client.send_order(&req).await.unwrap();
         assert_eq!(id, "JRF20240101-000000-123456");
+    }
+
+    #[tokio::test]
+    async fn cancel_order_sends_post() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/me/cancelchildorder"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(""))
+            .mount(&server)
+            .await;
+
+        let client = make_client(&server).await;
+        let result = client.cancel_order("BTC_JPY", "JRF20240101-000000-123456").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn cancel_order_api_error_returns_err() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/me/cancelchildorder"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "status": -1,
+                "error_message": "Order not found",
+                "data": null
+            })))
+            .mount(&server)
+            .await;
+
+        let client = make_client(&server).await;
+        let result = client.cancel_order("BTC_JPY", "NONEXISTENT").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn get_executions_parses_correctly() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/me/getexecutions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "id": 12345,
+                    "exec_date": "2024-01-01T00:00:00.000",
+                    "side": "BUY",
+                    "price": "9000000",
+                    "size": "0.001",
+                    "commission": "13.5"
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = make_client(&server).await;
+        let execs = client.get_executions("BTC_JPY", None, None, None).await.unwrap();
+        assert_eq!(execs.len(), 1);
+        assert_eq!(execs[0].id, 12345);
+        assert_eq!(execs[0].price, dec!(9_000_000));
+        assert_eq!(execs[0].commission, dec!(13.5));
+    }
+
+    #[tokio::test]
+    async fn get_trading_commission_returns_rate() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/me/gettradingcommission"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "commission_rate": 0.0015
+            })))
+            .mount(&server)
+            .await;
+
+        let client = make_client(&server).await;
+        let rate = client.get_trading_commission("BTC_JPY").await.unwrap();
+        assert!((rate - 0.0015).abs() < 1e-9);
     }
 
     #[tokio::test]

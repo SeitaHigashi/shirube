@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::types::{
     balance::{Balance, Position},
-    market::{Ticker, Trade, TradeSide},
+    market::{MyExecution, Ticker, Trade, TradeSide},
     order::{Order, OrderSide, OrderStatus, OrderType},
 };
 
@@ -215,6 +215,51 @@ impl From<RawExecution> for Trade {
             sell_child_order_acceptance_id: r.sell_child_order_acceptance_id,
         }
     }
+}
+
+// ---- Cancel single order request ----
+
+#[derive(Debug, Serialize)]
+pub struct CancelOrderRequest {
+    pub product_code: String,
+    pub child_order_acceptance_id: String,
+}
+
+// ---- My executions (GET /v1/me/getexecutions) ----
+
+#[derive(Debug, Deserialize)]
+pub struct RawMyExecution {
+    pub id: i64,
+    #[serde(deserialize_with = "deserialize_bitflyer_timestamp")]
+    pub exec_date: DateTime<Utc>,
+    pub side: String,
+    pub price: Decimal,
+    pub size: Decimal,
+    pub commission: Decimal,
+}
+
+impl From<RawMyExecution> for MyExecution {
+    fn from(r: RawMyExecution) -> Self {
+        let side = match r.side.as_str() {
+            "BUY" => OrderSide::Buy,
+            _ => OrderSide::Sell,
+        };
+        Self {
+            id: r.id,
+            exec_date: r.exec_date,
+            side,
+            price: r.price,
+            size: r.size,
+            commission: r.commission,
+        }
+    }
+}
+
+// ---- Trading commission (GET /v1/me/gettradingcommission) ----
+
+#[derive(Debug, Deserialize)]
+pub struct RawTradingCommission {
+    pub commission_rate: f64,
 }
 
 // ---- API error ----

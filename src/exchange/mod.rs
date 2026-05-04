@@ -8,7 +8,7 @@ use crate::error::Result;
 use crate::storage::mock_state::MockStateRepository;
 use crate::types::{
     balance::{Balance, Position},
-    market::Ticker,
+    market::{MyExecution, Ticker},
     order::{Order, OrderRequest},
 };
 
@@ -25,6 +25,18 @@ pub trait ExchangeClient: Send + Sync + 'static {
         status: Option<&str>,
         count: Option<u32>,
     ) -> Result<Vec<Order>>;
+    /// 個別注文をキャンセルする（`POST /v1/me/cancelchildorder`）。
+    async fn cancel_order(&self, product_code: &str, acceptance_id: &str) -> Result<()>;
+    /// 自分の約定履歴を取得する（`GET /v1/me/getexecutions`）。
+    async fn get_executions(
+        &self,
+        product_code: &str,
+        count: Option<u32>,
+        before: Option<i64>,
+        after: Option<i64>,
+    ) -> Result<Vec<MyExecution>>;
+    /// 取引手数料率を取得する（`GET /v1/me/gettradingcommission`）。
+    async fn get_trading_commission(&self, product_code: &str) -> Result<f64>;
     /// 現在の手数料率を返す（bitFlyer Lightning 現物ティア制）。
     fn fee_pct(&self) -> f64;
 }
@@ -89,6 +101,24 @@ impl ExchangeClient for PublicBitFlyerClient {
         count: Option<u32>,
     ) -> Result<Vec<Order>> {
         self.mock.get_orders(product_code, status, count).await
+    }
+
+    async fn cancel_order(&self, product_code: &str, acceptance_id: &str) -> Result<()> {
+        self.mock.cancel_order(product_code, acceptance_id).await
+    }
+
+    async fn get_executions(
+        &self,
+        product_code: &str,
+        count: Option<u32>,
+        before: Option<i64>,
+        after: Option<i64>,
+    ) -> Result<Vec<MyExecution>> {
+        self.mock.get_executions(product_code, count, before, after).await
+    }
+
+    async fn get_trading_commission(&self, product_code: &str) -> Result<f64> {
+        self.mock.get_trading_commission(product_code).await
     }
 
     fn fee_pct(&self) -> f64 {

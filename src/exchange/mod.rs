@@ -45,10 +45,10 @@ impl PublicBitFlyerClient {
         }
     }
 
-    pub async fn new_with_db(repo: MockStateRepository, fee_pct: f64) -> Result<Self> {
+    pub async fn new_with_db(repo: MockStateRepository) -> Result<Self> {
         Ok(Self {
             rest: bitflyer::rest::BitFlyerRestClient::new(String::new(), String::new()),
-            mock: mock::MockExchangeClient::new_with_db(repo, fee_pct).await?,
+            mock: mock::MockExchangeClient::new_with_db(repo).await?,
         })
     }
 }

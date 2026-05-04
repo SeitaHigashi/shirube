@@ -83,7 +83,7 @@ async fn main() -> anyhow::Result<()> {
             mock_db_path
         );
         let public_client =
-            exchange::PublicBitFlyerClient::new_with_db(mock_db.mock_state(), 0.0015).await?;
+            exchange::PublicBitFlyerClient::new_with_db(mock_db.mock_state()).await?;
         Arc::new(public_client)
     };
 

@@ -127,8 +127,9 @@ impl MockExchangeClient {
 
     /// DBリポジトリを渡してDB永続化を有効にしたクライアントを生成する。
     /// 既存の残高・注文カウンター・約定履歴をDBから復元する。
-    pub async fn new_with_db(repo: MockStateRepository, fee_pct: f64) -> Result<Self> {
-        let mut client = Self::with_fee(fee_pct);
+    /// 手数料はティア制（volume_jpy ベース）を使用する。
+    pub async fn new_with_db(repo: MockStateRepository) -> Result<Self> {
+        let mut client = Self::new();
 
         let saved_balances = repo.load_balances().await?;
         if !saved_balances.is_empty() {

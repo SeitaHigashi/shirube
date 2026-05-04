@@ -1,6 +1,5 @@
 mod alert;
 mod api;
-mod backtest;
 mod config;
 mod error;
 mod exchange;

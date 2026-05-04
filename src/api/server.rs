@@ -9,7 +9,7 @@ use tower_http::services::ServeDir;
 use tracing::info;
 
 use super::{
-    routes::{balance, backtest, candles, config, news, orders, signal, ticker},
+    routes::{balance, candles, config, news, orders, signal, ticker},
     ws_handler, AppState,
 };
 
@@ -26,7 +26,6 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/balance", get(balance::get_balance))
         .route("/api/fee", get(balance::get_fee))
         .route("/api/orders", get(orders::get_orders).post(orders::post_order))
-        .route("/api/backtest", get(backtest::list_backtests).post(backtest::run_backtest))
         .route("/api/news/latest", get(news::get_latest_news))
         .route("/api/signal/latest", get(signal::get_latest_signal))
         .route("/api/config", get(config::get_config).put(config::put_config))
@@ -110,32 +109,6 @@ mod tests {
         let req = Request::builder().uri("/api/orders").body(Body::empty()).unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn router_has_backtest_route() {
-        let app = build_router(make_state().await);
-        let req = Request::builder().uri("/api/backtest").body(Body::empty()).unwrap();
-        let resp = app.oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn router_post_backtest_returns_422_on_empty_db() {
-        let app = build_router(make_state().await);
-        let body = serde_json::json!({
-            "from": "2024-01-01T00:00:00Z",
-            "to": "2024-01-02T00:00:00Z",
-            "initial_jpy": "1000000"
-        });
-        let req = Request::builder()
-            .method("POST")
-            .uri("/api/backtest")
-            .header("content-type", "application/json")
-            .body(Body::from(body.to_string()))
-            .unwrap();
-        let resp = app.oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[tokio::test]

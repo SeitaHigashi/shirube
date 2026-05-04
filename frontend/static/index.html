@@ -964,13 +964,14 @@
         const data = await res.json();
         const pct = (data.fee_pct * 100).toFixed(4);
         document.getElementById('fee-pct').textContent = `${pct}%`;
+        feeRate = data.fee_pct;
       } catch (e) { console.warn('fee load failed', e); }
     }
 
     // ── Trade markers ─────────────────────────────────────────────────────────
 
     let currentPrice = null;
-    const FEE_RATE = 0.0015;  // bitFlyer taker fee 0.15%
+    let feeRate = 0.0015;  // bitFlyer taker fee (updated from /api/fee)
     let bepUpperLine = null;
     let bepLowerLine = null;
     let jpyAvailable = null;
@@ -1165,8 +1166,8 @@
 
     function updateBepLines(price) {
       if (!price || price <= 0) return;
-      const upper = price * (1 + FEE_RATE * 2);
-      const lower = price * (1 - FEE_RATE * 2);
+      const upper = price * (1 + feeRate * 2);
+      const lower = price * (1 - feeRate * 2);
       if (!bepUpperLine) {
         bepUpperLine = candleSeries.createPriceLine({
           price: upper, color: '#26a69a', lineWidth: 1, lineStyle: 2,

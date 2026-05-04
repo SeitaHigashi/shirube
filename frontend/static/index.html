@@ -259,8 +259,8 @@
     <div class="panel" id="orders-panel">
       <h2>最近の注文</h2>
       <table>
-        <thead><tr><th>方向</th><th>サイズ</th><th>価格</th><th>状態</th></tr></thead>
-        <tbody id="orders-body"><tr><td colspan="4" style="color:#888;text-align:center">データなし</td></tr></tbody>
+        <thead><tr><th>時刻</th><th>方向</th><th>サイズ</th><th>価格</th><th>状態</th></tr></thead>
+        <tbody id="orders-body"><tr><td colspan="5" style="color:#888;text-align:center">データなし</td></tr></tbody>
       </table>
     </div>
   </main>
@@ -1002,17 +1002,26 @@
     }
 
     function updateTradeMarkers(orders) {
-      tradeMarkers = orders
-        .map(o => ({
-          time: toChartTime(o.created_at),
-          position: o.side === 'BUY' ? 'belowBar' : 'aboveBar',
-          color: o.side === 'BUY' ? '#26a69a' : '#ef5350',
-          shape: o.side === 'BUY' ? 'arrowUp' : 'arrowDown',
-          text: o.side === 'BUY'
-            ? `買 ${Number(o.size).toFixed(4)}`
-            : `売 ${Number(o.size).toFixed(4)}`,
-        }))
-        .sort((a, b) => a.time - b.time);
+      // 同一時刻の注文をグループ化して1マーカーに集約
+      const groups = new Map();
+      for (const o of orders) {
+        const t = toChartTime(o.created_at);
+        if (!groups.has(t)) groups.set(t, []);
+        groups.get(t).push(o);
+      }
+      tradeMarkers = Array.from(groups.entries()).map(([t, group]) => {
+        const hasBuy  = group.some(o => o.side === 'BUY');
+        const hasSell = group.some(o => o.side === 'SELL');
+        const dominant = group[group.length - 1].side;
+        return {
+          time: t,
+          position: dominant === 'BUY' ? 'belowBar' : 'aboveBar',
+          color: hasBuy && hasSell ? '#ffb300'
+               : dominant === 'BUY' ? '#26a69a' : '#ef5350',
+          shape: dominant === 'BUY' ? 'arrowUp' : 'arrowDown',
+          text: hasBuy && hasSell ? '売買' : dominant === 'BUY' ? '買' : '売',
+        };
+      }).sort((a, b) => a.time - b.time);
       applyAllMarkers();
     }
 
@@ -1067,17 +1076,23 @@
         const orders = await res.json();
         const tbody = document.getElementById('orders-body');
         if (orders.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="4" style="color:#888;text-align:center">データなし</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="5" style="color:#888;text-align:center">データなし</td></tr>';
           updateTradeMarkers([]);
           return;
         }
-        tbody.innerHTML = orders.slice(0, 20).map(o => `
-          <tr>
+        tbody.innerHTML = orders.slice(0, 20).map(o => {
+          const d = new Date(o.created_at);
+          const timeStr = useJST
+            ? new Date(d.getTime() + JST_OFFSET * 1000).toISOString().slice(11, 16)
+            : d.toISOString().slice(11, 16);
+          return `<tr>
+            <td style="color:#666;font-size:11px;white-space:nowrap">${timeStr}</td>
             <td class="${o.side.toLowerCase()}">${o.side === 'BUY' ? '買' : '売'}</td>
             <td>${Number(o.size).toFixed(4)}</td>
             <td>${o.price ? Number(o.price).toLocaleString('ja-JP') : 'MARKET'}</td>
             <td style="color:#888;font-size:11px">${o.status}</td>
-          </tr>`).join('');
+          </tr>`;
+        }).join('');
         updateTradeMarkers(orders);
       } catch (e) { console.warn('orders load failed', e); }
     }

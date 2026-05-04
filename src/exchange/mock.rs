@@ -139,6 +139,9 @@ impl MockExchangeClient {
         client.order_counter.store(counter, Ordering::SeqCst);
 
         let trades = repo.load_filled_trades().await?;
+        // 累計取引量を約定履歴から再計算してティア制手数料を正しく復元する
+        let volume: Decimal = trades.iter().map(|t| t.price * t.size).sum();
+        *client.volume_jpy.write().unwrap() = volume;
         *client.filled_trades.write().unwrap() = trades;
 
         client.db = Some(Arc::new(repo));

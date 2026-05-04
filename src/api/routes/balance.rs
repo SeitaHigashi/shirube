@@ -14,6 +14,10 @@ pub async fn get_balance(
         .map_err(|_| StatusCode::BAD_GATEWAY)
 }
 
+pub async fn get_fee(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "fee_pct": state.exchange.fee_pct() }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

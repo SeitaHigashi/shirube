@@ -50,6 +50,13 @@
     .balance-amount { font-size: 18px; font-weight: bold; margin-top: 2px; }
     .balance-btc-jpy { font-size: 11px; color: #aaa; margin-top: 2px; }
     .balance-pct { font-size: 11px; color: #888; margin-top: 1px; }
+    .balance-row { display: flex; justify-content: space-between; align-items: baseline; margin-top: 3px; }
+    .balance-row .lbl { font-size: 10px; color: #666; }
+    .balance-row span:last-child { font-size: 13px; font-weight: bold; color: #e0e0e0; }
+    .balance-row.locked span:last-child { font-size: 12px; color: #ef9a9a; font-weight: normal; }
+    .balance-fee { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; padding-top: 8px; border-top: 1px solid #333; }
+    .fee-label { color: #888; font-size: 0.82em; }
+    #fee-pct { font-size: 0.95em; color: #ffd54f; font-weight: bold; }
     table { width: 100%; border-collapse: collapse; font-size: 12px; }
     th { color: #888; font-weight: normal; text-align: left; padding: 4px 6px; border-bottom: 1px solid #0f3460; }
     td { padding: 4px 6px; border-bottom: 1px solid #1a1a2e; }
@@ -226,12 +233,16 @@
       <div class="balance-grid">
         <div class="balance-item">
           <div class="balance-currency">JPY</div>
-          <div class="balance-amount neutral" id="jpy-balance">---</div>
+          <div class="balance-row"><span class="lbl">保有</span><span id="jpy-amount">---</span></div>
+          <div class="balance-row"><span class="lbl">利用可</span><span id="jpy-balance">---</span></div>
+          <div class="balance-row locked"><span class="lbl">ロック中</span><span id="jpy-locked">---</span></div>
           <div class="balance-pct" id="jpy-pct">--.--%</div>
         </div>
         <div class="balance-item">
           <div class="balance-currency">BTC</div>
-          <div class="balance-amount neutral" id="btc-balance">---</div>
+          <div class="balance-row"><span class="lbl">保有</span><span id="btc-amount">---</span></div>
+          <div class="balance-row"><span class="lbl">利用可</span><span id="btc-balance">---</span></div>
+          <div class="balance-row locked"><span class="lbl">ロック中</span><span id="btc-locked">---</span></div>
           <div class="balance-btc-jpy" id="btc-jpy">≈ ---円</div>
           <div class="balance-pct" id="btc-pct">--.--%</div>
         </div>
@@ -239,6 +250,10 @@
       <div class="balance-total">
         <span class="balance-total-label">総残高（円）</span>
         <span class="balance-total-amount" id="total-balance-jpy">---</span>
+      </div>
+      <div class="balance-fee">
+        <span class="fee-label">取引手数料（Taker）</span>
+        <span id="fee-pct">---%</span>
       </div>
     </div>
     <div class="panel" id="orders-panel">
@@ -918,17 +933,38 @@
         const jpy = balances.find(b => b.currency_code === 'JPY');
         const btc = balances.find(b => b.currency_code === 'BTC');
         if (jpy) {
+          const amount = Number(jpy.amount);
+          const avail = Number(jpy.available);
+          const locked = amount - avail;
+          document.getElementById('jpy-amount').textContent =
+            amount.toLocaleString('ja-JP', { maximumFractionDigits: 0 });
           document.getElementById('jpy-balance').textContent =
-            Number(jpy.available).toLocaleString('ja-JP', { maximumFractionDigits: 0 });
-          jpyAvailable = Number(jpy.available);
+            avail.toLocaleString('ja-JP', { maximumFractionDigits: 0 });
+          document.getElementById('jpy-locked').textContent =
+            locked > 0 ? locked.toLocaleString('ja-JP', { maximumFractionDigits: 0 }) : '0';
+          jpyAvailable = avail;
         }
         if (btc) {
-          document.getElementById('btc-balance').textContent =
-            Number(btc.available).toFixed(6);
-          btcAvailable = Number(btc.available);
+          const amount = Number(btc.amount);
+          const avail = Number(btc.available);
+          const locked = amount - avail;
+          document.getElementById('btc-amount').textContent = amount.toFixed(6);
+          document.getElementById('btc-balance').textContent = avail.toFixed(6);
+          document.getElementById('btc-locked').textContent =
+            locked > 0 ? locked.toFixed(6) : '0.000000';
+          btcAvailable = avail;
         }
         updateTotalBalance();
       } catch (e) { console.warn('balance load failed', e); }
+    }
+
+    async function loadFee() {
+      try {
+        const res = await fetch(`${BASE}/api/fee`);
+        const data = await res.json();
+        const pct = (data.fee_pct * 100).toFixed(4);
+        document.getElementById('fee-pct').textContent = `${pct}%`;
+      } catch (e) { console.warn('fee load failed', e); }
     }
 
     // ── Trade markers ─────────────────────────────────────────────────────────
@@ -1483,6 +1519,7 @@
     loadCandles();
     loadTicker();
     loadBalance();
+    loadFee();
     loadOrders();
     loadSignal();  // 初回のみ REST で取得（WS 接続前の初期表示用）
     connectWS();

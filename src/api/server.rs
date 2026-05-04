@@ -24,6 +24,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/ticker", get(ticker::get_ticker))
         .route("/api/candles", get(candles::get_candles))
         .route("/api/balance", get(balance::get_balance))
+        .route("/api/fee", get(balance::get_fee))
         .route("/api/orders", get(orders::get_orders).post(orders::post_order))
         .route("/api/backtest", get(backtest::list_backtests).post(backtest::run_backtest))
         .route("/api/news/latest", get(news::get_latest_news))

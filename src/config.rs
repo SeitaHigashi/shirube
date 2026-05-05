@@ -54,6 +54,16 @@ pub struct TradingConfig {
     /// ゾーン制配分の設定。デフォルトは現行互換（[0.0, 1.0]）
     #[serde(default)]
     pub zone: ZoneConfig,
+
+    /// 定期リバランスチェックの間隔（秒）。
+    /// 価格変動による配分ドリフトを検出するため、シグナル受信とは独立して定期的に
+    /// 現在配分 vs 目標配分を確認する。デフォルト: 60秒。
+    #[serde(default = "default_rebalance_interval")]
+    pub rebalance_interval_secs: u64,
+}
+
+fn default_rebalance_interval() -> u64 {
+    60
 }
 
 impl Default for TradingConfig {
@@ -76,6 +86,7 @@ impl Default for TradingConfig {
             ta_weight: 0.7,
             sentiment_weight: 0.3,
             zone: ZoneConfig::default(),
+            rebalance_interval_secs: 60,
         }
     }
 }

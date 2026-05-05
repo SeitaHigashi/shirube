@@ -1,8 +1,10 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{NaiveDate, Utc};
 use tokio::sync::{broadcast, RwLock};
-use tracing::{info, warn};
+use tokio::time::{interval, MissedTickBehavior};
+use tracing::{debug, info, warn};
 
 use rust_decimal::Decimal;
 
@@ -23,6 +25,15 @@ use crate::types::order::{Order, OrderRequest, OrderSide, OrderStatus, OrderType
 /// signal: fetches live balances/positions/price, computes the required
 /// BTC delta, validates through `RiskManager`, and submits a market
 /// order.  Also handles daily UTC midnight resets for the risk manager.
+///
+/// # Sticky Target Allocation
+///
+/// To prevent churning (e.g. buying to 70% then immediately selling back
+/// to 50% when indicators go neutral), this engine maintains a
+/// `sticky_target` — the last BTC allocation target set by a *directional*
+/// signal (`confidence > 0`).  When all indicators are Hold
+/// (`confidence == 0`), the sticky target is preserved and used for the
+/// rebalance delta calculation instead of the raw 50% neutral value.
 pub struct TradingEngine {
     signal_rx: broadcast::Receiver<SignalDetail>,
     exchange: Arc<dyn ExchangeClient>,
@@ -37,6 +48,12 @@ pub struct TradingEngine {
     config: Arc<RwLock<TradingConfig>>,
     /// Optional repository for persisting placed orders to SQLite.
     order_repo: Option<OrderRepository>,
+    /// The most recent target BTC allocation established by a directional
+    /// signal (`confidence > 0`).  None until the first directional signal
+    /// arrives (warm-up phase); used as-is when subsequent signals have
+    /// `confidence == 0` so that neutral indicators do not force a rebalance
+    /// back to 50%.
+    sticky_target: Option<f64>,
 }
 
 impl TradingEngine {
@@ -55,6 +72,7 @@ impl TradingEngine {
             last_reset_date: None,
             config: Arc::new(RwLock::new(TradingConfig::default())),
             order_repo: None,
+            sticky_target: None,
         }
     }
 
@@ -110,12 +128,44 @@ impl TradingEngine {
             }
         });
 
-        // Worker loop: owns all mutable state (risk_manager, last_reset_date)
+        // Set up a periodic rebalance timer to catch allocation drift caused
+        // by price movements even when no new signals are arriving.
+        // Interval is read once from config at startup.
+        let rebalance_interval_secs = self.config.read().await.rebalance_interval_secs;
+        let mut rebalance_ticker = interval(Duration::from_secs(rebalance_interval_secs));
+        rebalance_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        // Worker loop: owns all mutable state (risk_manager, last_reset_date, sticky_target)
         // and processes signals one at a time without racing the receiver.
-        while let Some(signal) = work_rx.recv().await {
-            if let Err(e) = self.handle_signal(signal).await {
-                warn!("TradingEngine error: {}", e);
-                self.alert.order_error(&e.to_string()).await;
+        loop {
+            tokio::select! {
+                result = work_rx.recv() => {
+                    match result {
+                        Some(signal) => {
+                            if let Err(e) = self.handle_signal(signal).await {
+                                warn!("TradingEngine error: {}", e);
+                                self.alert.order_error(&e.to_string()).await;
+                            }
+                        }
+                        None => break, // channel closed; shut down
+                    }
+                }
+                _ = rebalance_ticker.tick() => {
+                    // Periodic rebalance: re-evaluate the sticky target against the
+                    // current allocation to catch drift from price movements.
+                    // Uses confidence=0 so that sticky_target is not overwritten.
+                    if let Some(target) = self.sticky_target {
+                        debug!(target, "Periodic rebalance check");
+                        let rebalance_signal = AllocationSignal {
+                            raw_signal: target,
+                            target_pct: target,
+                            confidence: 0.0,
+                        };
+                        if let Err(e) = self.handle_signal(rebalance_signal).await {
+                            warn!("TradingEngine rebalance error: {}", e);
+                        }
+                    }
+                }
             }
         }
     }
@@ -127,7 +177,33 @@ impl TradingEngine {
     /// Also performs a daily reset of the risk manager when the UTC date
     /// has changed since the last signal (detected lazily here rather
     /// than via a separate timer task to avoid an extra tokio::spawn).
+    ///
+    /// # Sticky target logic
+    ///
+    /// Only signals with `confidence > 0` (at least one directional indicator)
+    /// update `sticky_target`.  When `confidence == 0` (all indicators Hold),
+    /// the existing `sticky_target` is used unchanged so that a neutral market
+    /// does not force a rebalance back to 50%.  If no `sticky_target` has been
+    /// set yet (warm-up period), the signal is silently skipped.
     async fn handle_signal(&mut self, signal: AllocationSignal) -> crate::error::Result<()> {
+        // Update sticky_target only when there is directional conviction.
+        // confidence == 0.0 means all indicators returned Hold; in that case we
+        // preserve the previously established target to avoid churning back to 50%.
+        if signal.confidence > 0.0 {
+            self.sticky_target = Some(signal.target_pct);
+            debug!(target = signal.target_pct, confidence = signal.confidence, "Sticky target updated");
+        }
+
+        // Skip rebalancing until the first directional signal establishes a target.
+        // This prevents spurious 50% rebalances during indicator warm-up.
+        let target_pct = match self.sticky_target {
+            Some(t) => t,
+            None => {
+                debug!("No sticky target yet, skipping rebalance");
+                return Ok(());
+            }
+        };
+
         // Pull the latest config snapshot and push params into risk manager
         let allocation_threshold = {
             let cfg = self.config.read().await;
@@ -185,7 +261,10 @@ impl TradingEngine {
                 .to_f64()
                 .unwrap_or(0.0);
             // delta > 0 → buy more BTC; delta < 0 → sell BTC
-            let delta = signal.target_pct - current_alloc;
+            // NOTE: use sticky_target (not signal.target_pct) so that
+            // neutral signals (confidence=0) do not pull the allocation
+            // back to 50% when the engine is already at the intended level.
+            let delta = target_pct - current_alloc;
             if delta.abs() < allocation_threshold {
                 // Change is too small to warrant a trade (avoids churn)
                 None
@@ -310,14 +389,14 @@ mod tests {
         let mock_exchange = Arc::new(MockExchangeClient::new());
         let (tx, _) = broadcast::channel::<SignalDetail>(16);
         let params = RiskParams::default();
-        let mut engine = TradingEngine::new(
+        let engine = TradingEngine::new(
             tx.subscribe(),
             mock_exchange.clone(),
             RiskManager::new(params),
             "BTC_JPY".into(),
         );
 
-        // target_pct = 0.02 → delta ≈ 0.02 < allocation_threshold(0.05)
+        // target_pct = 0.02 → delta ≈ 0.02 < allocation_threshold(0.15)
         tx.send(detail(0.02, 0.1)).unwrap();
         drop(tx);
 
@@ -338,7 +417,7 @@ mod tests {
             min_order_size: dec!(0.001),
             circuit_breaker_enabled: true,
         };
-        let mut engine = TradingEngine::new(
+        let engine = TradingEngine::new(
             tx.subscribe(),
             mock_exchange.clone(),
             RiskManager::new(params),
@@ -374,7 +453,7 @@ mod tests {
 
         let (tx, _) = broadcast::channel::<SignalDetail>(16);
         let params = RiskParams::default();
-        let mut engine = TradingEngine::new(
+        let engine = TradingEngine::new(
             tx.subscribe(),
             mock_exchange.clone(),
             RiskManager::new(params),
@@ -387,5 +466,69 @@ mod tests {
         engine.run().await;
         assert_eq!(mock_exchange.placed_orders().len(), 1);
         assert_eq!(mock_exchange.placed_orders()[0].side, OrderSide::Sell);
+    }
+
+    #[tokio::test]
+    async fn neutral_signal_after_bullish_does_not_rebalance_to_50pct() {
+        // Regression test for sticky target behaviour:
+        // 1. Bullish signal (confidence=0.8) establishes sticky_target=0.8 → Buy
+        // 2. Neutral signal (confidence=0.0) must NOT reset target to 0.5 and sell
+        //
+        // MockExchangeClient: JPY=1_000_000, BTC=0, price=9_000_500
+        // After the Buy we don't actually update the mock balance here, so
+        // for the neutral signal the mock still has BTC=0.
+        // sticky_target=0.8, current_alloc≈0.0, delta=0.8 > threshold → only 1 Buy.
+        // Then neutral signal: confidence=0, sticky_target stays 0.8, delta unchanged → no sell.
+        let mock_exchange = Arc::new(MockExchangeClient::new());
+        let (tx, _) = broadcast::channel::<SignalDetail>(16);
+        let params = RiskParams {
+            max_position_btc: dec!(1.0),
+            max_daily_drawdown: 0.5,
+            stop_loss_pct: 0.5,
+            min_order_size: dec!(0.001),
+            circuit_breaker_enabled: false,
+        };
+        let engine = TradingEngine::new(
+            tx.subscribe(),
+            mock_exchange.clone(),
+            RiskManager::new(params),
+            "BTC_JPY".into(),
+        );
+
+        // Bullish signal: sticky_target = 0.8 → Buy
+        tx.send(detail(0.8, 0.8)).unwrap();
+        // Neutral signal: confidence=0 → sticky_target stays 0.8, no sell to 50%
+        tx.send(detail(0.5, 0.0)).unwrap();
+        drop(tx);
+
+        engine.run().await;
+
+        let orders = mock_exchange.placed_orders();
+        // Only the initial Buy should have been placed; no sell-back to 50%
+        assert_eq!(orders.len(), 1, "expected 1 order, got {}: {:?}", orders.len(), orders);
+        assert_eq!(orders[0].side, OrderSide::Buy);
+    }
+
+    #[tokio::test]
+    async fn no_directional_signal_skips_rebalance() {
+        // When only confidence=0 signals arrive (e.g. warm-up with all Hold),
+        // sticky_target remains None and no order should be placed.
+        let mock_exchange = Arc::new(MockExchangeClient::new());
+        let (tx, _) = broadcast::channel::<SignalDetail>(16);
+        let params = RiskParams::default();
+        let engine = TradingEngine::new(
+            tx.subscribe(),
+            mock_exchange.clone(),
+            RiskManager::new(params),
+            "BTC_JPY".into(),
+        );
+
+        // Only neutral signals (confidence=0) — no sticky_target established
+        tx.send(detail(0.5, 0.0)).unwrap();
+        tx.send(detail(0.5, 0.0)).unwrap();
+        drop(tx);
+
+        engine.run().await;
+        assert!(mock_exchange.placed_orders().is_empty(), "should not trade without a directional signal");
     }
 }

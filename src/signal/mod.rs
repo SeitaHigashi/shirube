@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::Serialize;
 
+use crate::config::TradingConfig;
 use crate::types::market::Candle;
 
 // ---- Signal ----
@@ -82,6 +83,65 @@ pub struct SignalDetail {
     pub calculated_at: DateTime<Utc>,
     /// 計算エンジンの状態: "active" | "waiting_for_data"
     pub calculation_state: String,
+}
+
+// ---- IndicatorPoint — 1本のキャンドルに対する全インジケーター値 ----
+
+/// 1本のキャンドル時点における全インジケーターの計算値。
+/// ウォームアップ中のフィールドは None。
+#[derive(Debug, Clone, Serialize)]
+pub struct IndicatorPoint {
+    pub time: DateTime<Utc>,
+    pub sma: Option<f64>,
+    pub ema: Option<f64>,
+    pub rsi: Option<f64>,
+    pub macd_line: Option<f64>,
+    pub signal_line: Option<f64>,
+    pub histogram: Option<f64>,
+    pub bb_upper: Option<f64>,
+    pub bb_middle: Option<f64>,
+    pub bb_lower: Option<f64>,
+}
+
+/// キャンドル列にインジケーターを順次適用し、各時点の値を返す。
+/// シグナルエンジンと同一ロジックを使用する純粋関数。
+pub fn compute_indicators(candles: &[Candle], cfg: &TradingConfig) -> Vec<IndicatorPoint> {
+    use indicators::{bollinger::Bollinger, ema::Ema, macd::Macd, rsi::Rsi, sma::Sma};
+
+    let mut sma = Sma::new(cfg.sma_period);
+    let mut ema = Ema::new(cfg.ema_period);
+    let mut rsi = Rsi::new(cfg.rsi_period);
+    let mut macd = Macd::new(cfg.macd_fast, cfg.macd_slow, cfg.macd_signal);
+    let mut bb = Bollinger::new(cfg.bollinger_period, cfg.bollinger_std);
+
+    candles.iter().map(|c| {
+        // 各インジケーターを更新（戻り値は Signal なので無視し、value/band_values を使う）
+        sma.update(c);
+        ema.update(c);
+        rsi.update(c);
+        macd.update(c);
+        bb.update(c);
+
+        let (macd_line, signal_line, histogram) = macd.macd_components()
+            .map(|(ml, sl, h)| (Some(ml), Some(sl), Some(h)))
+            .unwrap_or((None, None, None));
+        let (bb_upper, bb_middle, bb_lower) = bb.band_values()
+            .map(|(u, m, l)| (Some(u), Some(m), Some(l)))
+            .unwrap_or((None, None, None));
+
+        IndicatorPoint {
+            time: c.open_time,
+            sma: sma.value(),
+            ema: ema.value(),
+            rsi: rsi.value(),
+            macd_line,
+            signal_line,
+            histogram,
+            bb_upper,
+            bb_middle,
+            bb_lower,
+        }
+    }).collect()
 }
 
 // ---- Indicator trait ----

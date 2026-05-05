@@ -9,6 +9,8 @@ pub struct Macd {
     slow: Ema,
     signal_ema: Ema,
     prev_histogram: Option<f64>,
+    /// 最後に計算した (macd_line, signal_line, histogram)。API 向けに保持。
+    last_components: Option<(f64, f64, f64)>,
 }
 
 impl Macd {
@@ -18,7 +20,13 @@ impl Macd {
             slow: Ema::new(slow_period),
             signal_ema: Ema::new(signal_period),
             prev_histogram: None,
+            last_components: None,
         }
+    }
+
+    /// 最後に計算した (macd_line, signal_line, histogram) を返す。ウォームアップ中は None。
+    pub fn macd_components(&self) -> Option<(f64, f64, f64)> {
+        self.last_components
     }
 }
 
@@ -63,6 +71,7 @@ impl Indicator for Macd {
         };
 
         self.prev_histogram = Some(histogram);
+        self.last_components = Some((macd_line, signal_val, histogram));
         Some(signal)
     }
 
@@ -75,6 +84,7 @@ impl Indicator for Macd {
         self.slow.reset();
         self.signal_ema.reset();
         self.prev_histogram = None;
+        self.last_components = None;
     }
 
     fn min_periods(&self) -> usize {

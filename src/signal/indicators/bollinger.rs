@@ -102,6 +102,17 @@ impl Indicator for Bollinger {
     }
 }
 
+impl Bollinger {
+    /// 現在のバンド値を返す: (upper, middle, lower)。ウォームアップ中は None。
+    pub fn band_values(&self) -> Option<(f64, f64, f64)> {
+        if self.buffer.len() < self.period {
+            return None;
+        }
+        let (mean, std) = self.stats();
+        Some((mean + self.multiplier * std, mean, mean - self.multiplier * std))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

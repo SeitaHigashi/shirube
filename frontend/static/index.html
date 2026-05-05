@@ -443,90 +443,6 @@
 
     window.addEventListener('resize', resizeCharts);
 
-    // ── Indicator calculations ─────────────────────────────────────────────────
-
-    function calcSMA(closes, period) {
-      const result = [];
-      for (let i = period - 1; i < closes.length; i++) {
-        let sum = 0;
-        for (let j = 0; j < period; j++) sum += closes[i - j];
-        result.push({ idx: i, value: sum / period });
-      }
-      return result;
-    }
-
-    function calcEMA(closes, period) {
-      if (closes.length < period) return [];
-      const k = 2 / (period + 1);
-      let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
-      const result = [{ idx: period - 1, value: ema }];
-      for (let i = period; i < closes.length; i++) {
-        ema = closes[i] * k + ema * (1 - k);
-        result.push({ idx: i, value: ema });
-      }
-      return result;
-    }
-
-    function calcBB(closes, period, stdK) {
-      const sma = calcSMA(closes, period);
-      return sma.map(({ idx, value: mean }) => {
-        let variance = 0;
-        for (let j = 0; j < period; j++) variance += Math.pow(closes[idx - j] - mean, 2);
-        const sd = Math.sqrt(variance / period);
-        return { idx, upper: mean + stdK * sd, middle: mean, lower: mean - stdK * sd };
-      });
-    }
-
-    function calcRSI(closes, period) {
-      if (closes.length < period + 1) return [];
-      let gains = 0, losses = 0;
-      for (let i = 1; i <= period; i++) {
-        const diff = closes[i] - closes[i - 1];
-        if (diff >= 0) gains += diff; else losses -= diff;
-      }
-      let avgGain = gains / period;
-      let avgLoss = losses / period;
-      const result = [];
-      const rsiVal = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
-      result.push({ idx: period, value: rsiVal });
-      for (let i = period + 1; i < closes.length; i++) {
-        const diff = closes[i] - closes[i - 1];
-        const gain = diff > 0 ? diff : 0;
-        const loss = diff < 0 ? -diff : 0;
-        avgGain = (avgGain * (period - 1) + gain) / period;
-        avgLoss = (avgLoss * (period - 1) + loss) / period;
-        const rsi = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
-        result.push({ idx: i, value: rsi });
-      }
-      return result;
-    }
-
-    function calcMACD(closes, fast, slow, signal) {
-      const emaFast = calcEMA(closes, fast);
-      const emaSlow = calcEMA(closes, slow);
-      const slowStart = slow - 1;
-      const macdLine = [];
-      emaSlow.forEach(({ idx, value: slowVal }) => {
-        const fastEntry = emaFast.find(e => e.idx === idx);
-        if (fastEntry) macdLine.push({ idx, value: fastEntry.value - slowVal });
-      });
-      if (macdLine.length < signal) return { macd: macdLine, sig: [], hist: [] };
-      const macdValues = macdLine.map(e => e.value);
-      const k = 2 / (signal + 1);
-      let sigEma = macdValues.slice(0, signal).reduce((a, b) => a + b, 0) / signal;
-      const sigLine = [{ idx: macdLine[signal - 1].idx, value: sigEma }];
-      for (let i = signal; i < macdLine.length; i++) {
-        sigEma = macdValues[i] * k + sigEma * (1 - k);
-        sigLine.push({ idx: macdLine[i].idx, value: sigEma });
-      }
-      const hist = sigLine.map((s, i) => {
-        const m = macdLine.find(e => e.idx === s.idx);
-        const diff = m ? m.value - s.value : 0;
-        return { idx: s.idx, value: diff };
-      });
-      return { macd: macdLine, sig: sigLine, hist };
-    }
-
     // ── Signal panel (Rust SignalEngine API) ──────────────────────────────────
 
     function signalClass(s) {
@@ -639,7 +555,6 @@
     // ── Global state ──────────────────────────────────────────────────────────
 
     let candleData = [];
-    let indicatorCandles = []; // Always 1-minute candles for indicator calculation (matches signal engine)
     let isLoadingHistory = false;
     let hasMoreHistory = true;
     let currentResolution = 60; // 現在選択中の足種（秒）
@@ -706,7 +621,7 @@
         if (newData.length === 0) { hasMoreHistory = false; return; }
         candleData = [...newData, ...candleData];
         candleSeries.setData(candleData);
-        renderIndicators();
+        loadAndRenderIndicators();
       } catch (e) {
         console.warn('History load error', e);
       } finally {
@@ -714,121 +629,80 @@
       }
     }
 
-    // Default values must match TradingConfig::default() in src/config.rs
-    // so that chart indicators are consistent with signal engine before /api/config loads.
-    let currentCfg = {
-      sma_period: 200, ema_period: 100, rsi_period: 42,
-      macd_fast: 52, macd_slow: 104, macd_signal: 18,
-      bollinger_period: 60, bollinger_std: 2.0,
-    };
+    // ── Indicator rendering from backend IndicatorPoint[] ─────────────────────
 
-    // partial candle が毎Ticker届くためインジケータ再計算を 500ms debounce する
-    let renderIndicatorsTimer = null;
-    function debouncedRenderIndicators() {
-      if (renderIndicatorsTimer) clearTimeout(renderIndicatorsTimer);
-      renderIndicatorsTimer = setTimeout(renderIndicators, 500);
-    }
+    // API から取得した IndicatorPoint[] をチャートシリーズにセットする。
+    // バックエンドと同一ロジックで計算された値を使用するため、JS での再計算は不要。
+    function renderIndicators(points) {
+      if (!points || points.length === 0) return;
 
-    function renderIndicators() {
-      if (indicatorCandles.length === 0) return;
-
-      // Capture current visible logical range BEFORE setData() calls, and block subscriptions
-      // to prevent circular range corruption while data is being updated.
+      // setData() 呼び出し前に現在の表示範囲を保存し、範囲同期を一時停止
       const savedRange = chart.timeScale().getVisibleLogicalRange();
       syncingRange = true;
 
-      // Use 1-minute candles for indicator calculation to match the signal engine
-      const closes = indicatorCandles.map(c => c.close);
-      const times  = indicatorCandles.map(c => c.time);
-
-      // Chart reference timestamps — indicator series must align to these for logical range sync.
-      // resampleToChart() maps each chart candle time to the latest 1m indicator value at or before it,
-      // ensuring data point count matches the main chart regardless of resolution mismatch.
-      const chartTimes = candleData.map(c => c.time);
-      function resampleToChart(seriesPoints) {
-        const result = [];
-        let iPtr = 0;
-        for (const cTime of chartTimes) {
-          let best = null;
-          while (iPtr < seriesPoints.length && seriesPoints[iPtr].time <= cTime) {
-            best = seriesPoints[iPtr];
-            iPtr++;
-          }
-          if (best !== null) result.push({ time: cTime, value: best.value });
-        }
-        return result;
-      }
-
-      // All indicators are always visible — no toggle
-      const showSMA  = true;
-      const showEMA  = true;
-      const showBB   = true;
-      // RSI and MACD are always visible — no checkbox toggle
-      const showRSI  = true;
-      const showMACD = true;
+      // IndicatorPoint の time (ISO 8601) をチャート用タイムスタンプに変換
+      const toT = p => toChartTime(p.time);
 
       // SMA
-      smaSeries.applyOptions({ visible: showSMA });
-      if (showSMA) {
-        const sma = calcSMA(closes, currentCfg.sma_period);
-        smaSeries.setData(resampleToChart(sma.map(({ idx, value }) => ({ time: times[idx], value }))));
-      }
+      smaSeries.setData(points.filter(p => p.sma != null).map(p => ({ time: toT(p), value: p.sma })));
 
       // EMA
-      emaSeries.applyOptions({ visible: showEMA });
-      if (showEMA) {
-        const ema = calcEMA(closes, currentCfg.ema_period);
-        emaSeries.setData(resampleToChart(ema.map(({ idx, value }) => ({ time: times[idx], value }))));
-      }
+      emaSeries.setData(points.filter(p => p.ema != null).map(p => ({ time: toT(p), value: p.ema })));
 
       // Bollinger Bands
-      bbUpperSeries.applyOptions({ visible: showBB });
-      bbMiddleSeries.applyOptions({ visible: showBB });
-      bbLowerSeries.applyOptions({ visible: showBB });
-      if (showBB) {
-        const bb = calcBB(closes, currentCfg.bollinger_period, currentCfg.bollinger_std);
-        bbUpperSeries.setData(resampleToChart(bb.map(({ idx, upper })  => ({ time: times[idx], value: upper }))));
-        bbMiddleSeries.setData(resampleToChart(bb.map(({ idx, middle }) => ({ time: times[idx], value: middle }))));
-        bbLowerSeries.setData(resampleToChart(bb.map(({ idx, lower })  => ({ time: times[idx], value: lower }))));
-      }
+      bbUpperSeries.setData(points.filter(p => p.bb_upper != null).map(p => ({ time: toT(p), value: p.bb_upper })));
+      bbMiddleSeries.setData(points.filter(p => p.bb_middle != null).map(p => ({ time: toT(p), value: p.bb_middle })));
+      bbLowerSeries.setData(points.filter(p => p.bb_lower != null).map(p => ({ time: toT(p), value: p.bb_lower })));
 
       // RSI sub-chart
-      rsiEl.style.display = showRSI ? 'block' : 'none';
-      rsiLabelEl.style.display = showRSI ? 'block' : 'none';
-      if (showRSI) {
-        const rsi = calcRSI(closes, currentCfg.rsi_period);
-        rsiSeries.setData(resampleToChart(rsi.map(({ idx, value }) => ({ time: times[idx], value }))));
-        // OB/OS reference lines span all chart times for consistent x-axis alignment
-        rsiOBSeries.setData(chartTimes.map(t => ({ time: t, value: 70 })));
-        rsiOSSeries.setData(chartTimes.map(t => ({ time: t, value: 30 })));
-      }
+      rsiEl.style.display = 'block';
+      rsiLabelEl.style.display = 'block';
+      const rsiData = points.filter(p => p.rsi != null).map(p => ({ time: toT(p), value: p.rsi }));
+      rsiSeries.setData(rsiData);
+      // OB/OS 基準線は RSI データ範囲のタイムスタンプに合わせる
+      const rsiTimes = rsiData.map(d => d.time);
+      rsiOBSeries.setData(rsiTimes.map(t => ({ time: t, value: 70 })));
+      rsiOSSeries.setData(rsiTimes.map(t => ({ time: t, value: 30 })));
 
       // MACD sub-chart
-      macdEl.style.display = showMACD ? 'block' : 'none';
-      macdLabelEl.style.display = showMACD ? 'block' : 'none';
-      if (showMACD) {
-        const { macd, sig, hist } = calcMACD(
-          closes,
-          currentCfg.macd_fast, currentCfg.macd_slow, currentCfg.macd_signal
-        );
-        macdLineSeries.setData(resampleToChart(macd.map(({ idx, value }) => ({ time: times[idx], value }))));
-        macdSignalSeries.setData(resampleToChart(sig.map(({ idx, value }) => ({ time: times[idx], value }))));
-        macdHistSeries.setData(resampleToChart(hist.map(({ idx, value }) => ({
-          time: times[idx], value,
-          color: value >= 0 ? '#26a69a' : '#ef5350',
-        }))));
-      }
+      macdEl.style.display = 'block';
+      macdLabelEl.style.display = 'block';
+      macdLineSeries.setData(points.filter(p => p.macd_line != null).map(p => ({ time: toT(p), value: p.macd_line })));
+      macdSignalSeries.setData(points.filter(p => p.signal_line != null).map(p => ({ time: toT(p), value: p.signal_line })));
+      macdHistSeries.setData(points.filter(p => p.histogram != null).map(p => ({
+        time: toT(p), value: p.histogram,
+        color: p.histogram >= 0 ? '#26a69a' : '#ef5350',
+      })));
 
-      // Restore blocked subscriptions and apply the saved logical range to all charts
+      // 保存した表示範囲を全チャートに復元
       syncingRange = false;
       if (savedRange) {
         syncingRange = true;
         chart.timeScale().setVisibleLogicalRange(savedRange);
-        if (showRSI)  rsiChart.timeScale().setVisibleLogicalRange(savedRange);
-        if (showMACD) macdChart.timeScale().setVisibleLogicalRange(savedRange);
+        rsiChart.timeScale().setVisibleLogicalRange(savedRange);
+        macdChart.timeScale().setVisibleLogicalRange(savedRange);
         syncingRange = false;
       }
       resizeCharts();
+    }
+
+    // バックエンド API からインジケーター値を取得してチャートに反映する
+    async function loadAndRenderIndicators() {
+      try {
+        const count = RES_COUNT[currentResolution] || 200;
+        const url = `${BASE}/api/indicators?resolution=${currentResolution}&count=${count}`;
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const points = await res.json();
+        renderIndicators(points);
+      } catch (e) { console.warn('indicator load failed', e); }
+    }
+
+    // WS で新しいキャンドルが届くたびに呼ばれる debounce 版（500ms）
+    let renderIndicatorsTimer = null;
+    function debouncedRenderIndicators() {
+      if (renderIndicatorsTimer) clearTimeout(renderIndicatorsTimer);
+      renderIndicatorsTimer = setTimeout(loadAndRenderIndicators, 500);
     }
 
     // ── Load historical candles ───────────────────────────────────────────────
@@ -848,31 +722,12 @@
         if (data.length > 0) {
           candleData = data;
           candleSeries.setData(data);
-          loadIndicatorCandles(); // Fetch 1m candles for indicators, then calls renderIndicators()
+          loadAndRenderIndicators();
           chart.timeScale().fitContent();
           rsiChart.timeScale().fitContent();
           macdChart.timeScale().fitContent();
         }
       } catch (e) { console.warn('candles load failed', e); }
-    }
-
-    // ── Load 1-minute candles for indicator calculation ───────────────────────
-    // Always uses resolution=60 to match the signal engine, regardless of chart resolution.
-    // Fetches enough 1m candles to cover the same time span as the current chart resolution.
-    async function loadIndicatorCandles() {
-      try {
-        const chartCount = RES_COUNT[currentResolution] || 200;
-        // Fetch enough 1m candles to cover same time range as the chart (capped at 1000)
-        const count = Math.min(1000, chartCount * Math.ceil(currentResolution / 60));
-        const res = await fetch(`${BASE}/api/candles?resolution=60&count=${count}`);
-        const candles = await res.json();
-        indicatorCandles = candles.map(c => ({
-          time: toChartTime(c.open_time),
-          open: parseFloat(c.open), high: parseFloat(c.high),
-          low: parseFloat(c.low), close: parseFloat(c.close),
-        })).sort((a, b) => a.time - b.time);
-        renderIndicators();
-      } catch (e) { console.warn('indicator candles load failed', e); }
     }
 
     // ── Load ticker ───────────────────────────────────────────────────────────
@@ -1106,20 +961,7 @@
               candleSeries.update(latestAgg);
             }
           }
-          // Update 1-minute indicator buffer regardless of chart resolution.
-          // Cap size matches loadIndicatorCandles() fetch count for the current resolution.
-          const iidx = indicatorCandles.findIndex(d => d.time === bar1m.time);
-          if (iidx >= 0) {
-            indicatorCandles[iidx] = bar1m;
-          } else {
-            indicatorCandles.push(bar1m);
-            indicatorCandles.sort((a, b) => a.time - b.time);
-            const chartCount = RES_COUNT[currentResolution] || 200;
-            const maxIndicator = Math.min(1000, chartCount * Math.ceil(currentResolution / 60));
-            if (indicatorCandles.length > maxIndicator * 2) {
-              indicatorCandles = indicatorCandles.slice(-maxIndicator);
-            }
-          }
+          // インジケーターをバックエンド API から再取得（debounce で 500ms 待機）
           debouncedRenderIndicators();
           document.getElementById('price').textContent = Number(c.close).toLocaleString('ja-JP');
           currentPrice = Number(c.close);
@@ -1275,18 +1117,7 @@
         document.getElementById('s-macd-signal').value = cfg.macd_signal;
         document.getElementById('s-bollinger-period').value = cfg.bollinger_period;
         document.getElementById('s-bollinger-std').value = cfg.bollinger_std;
-        // Sync indicator periods to global cfg
-        currentCfg = {
-          sma_period:      cfg.sma_period,
-          ema_period:      cfg.ema_period,
-          rsi_period:      cfg.rsi_period,
-          macd_fast:       cfg.macd_fast,
-          macd_slow:       cfg.macd_slow,
-          macd_signal:     cfg.macd_signal,
-          bollinger_period: cfg.bollinger_period,
-          bollinger_std:   cfg.bollinger_std,
-        };
-        renderIndicators();
+        loadAndRenderIndicators();
       } catch (e) { setSettingsMsg('設定の読み込みに失敗しました: ' + e.message, false); }
     }
 
@@ -1323,18 +1154,8 @@
           return;
         }
         setSettingsMsg('保存しました', true);
-        // Update global cfg and re-render indicators
-        currentCfg = {
-          sma_period:      cfg.sma_period,
-          ema_period:      cfg.ema_period,
-          rsi_period:      cfg.rsi_period,
-          macd_fast:       cfg.macd_fast,
-          macd_slow:       cfg.macd_slow,
-          macd_signal:     cfg.macd_signal,
-          bollinger_period: cfg.bollinger_period,
-          bollinger_std:   cfg.bollinger_std,
-        };
-        renderIndicators();
+        // バックエンドの設定変更に合わせてインジケーターを再取得
+        loadAndRenderIndicators();
       } catch (e) {
         setSettingsMsg('通信エラー: ' + e.message, false);
       } finally {

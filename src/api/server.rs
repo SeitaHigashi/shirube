@@ -9,7 +9,7 @@ use tower_http::services::ServeDir;
 use tracing::info;
 
 use super::{
-    routes::{balance, candles, config, news, orders, signal, ticker},
+    routes::{balance, candles, config, indicators, news, orders, signal, ticker},
     ws_handler, AppState,
 };
 
@@ -29,6 +29,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/news/latest", get(news::get_latest_news))
         .route("/api/signal/latest", get(signal::get_latest_signal))
         .route("/api/config", get(config::get_config).put(config::put_config))
+        .route("/api/indicators", get(indicators::get_indicators))
         // WebSocket endpoints
         .route("/ws/candles", get(ws_handler::ws_candles))
         .route("/ws/tickers", get(ws_handler::ws_tickers))

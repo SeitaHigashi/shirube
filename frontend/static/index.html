@@ -619,8 +619,21 @@
           .filter(c => c.time < candleData[0].time)
           .sort((a, b) => a.time - b.time);
         if (newData.length === 0) { hasMoreHistory = false; return; }
+        // Save visible range before setData() resets the chart position.
+        // New candles are prepended, so logical indices shift by newData.length.
+        const savedRange = chart.timeScale().getVisibleLogicalRange();
         candleData = [...newData, ...candleData];
         candleSeries.setData(candleData);
+        // Restore range with offset so the viewport stays at the same position.
+        if (savedRange) {
+          const offset = newData.length;
+          const restoredRange = { from: savedRange.from + offset, to: savedRange.to + offset };
+          syncingRange = true;
+          chart.timeScale().setVisibleLogicalRange(restoredRange);
+          rsiChart.timeScale().setVisibleLogicalRange(restoredRange);
+          macdChart.timeScale().setVisibleLogicalRange(restoredRange);
+          syncingRange = false;
+        }
         loadAndRenderIndicators();
       } catch (e) {
         console.warn('History load error', e);

@@ -10,7 +10,6 @@ use rust_decimal::Decimal;
 
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 
-use crate::alert::AlertManager;
 use crate::config::TradingConfig;
 use crate::exchange::ExchangeClient;
 use crate::risk::manager::RiskManager;
@@ -39,7 +38,6 @@ pub struct TradingEngine {
     exchange: Arc<dyn ExchangeClient>,
     risk_manager: RiskManager,
     product_code: String,
-    alert: Arc<AlertManager>,
     /// Last UTC date on which `reset_daily` was called; used to detect
     /// midnight crossings without a dedicated timer task.
     last_reset_date: Option<NaiveDate>,
@@ -68,7 +66,6 @@ impl TradingEngine {
             exchange,
             risk_manager,
             product_code,
-            alert: Arc::new(AlertManager::new()),
             last_reset_date: None,
             config: Arc::new(RwLock::new(TradingConfig::default())),
             order_repo: None,
@@ -83,11 +80,6 @@ impl TradingEngine {
 
     pub fn with_config(mut self, config: Arc<RwLock<TradingConfig>>) -> Self {
         self.config = config;
-        self
-    }
-
-    pub fn with_alert(mut self, alert: Arc<AlertManager>) -> Self {
-        self.alert = alert;
         self
     }
 
@@ -144,7 +136,6 @@ impl TradingEngine {
                         Some(signal) => {
                             if let Err(e) = self.handle_signal(signal).await {
                                 warn!("TradingEngine error: {}", e);
-                                self.alert.order_error(&e.to_string()).await;
                             }
                         }
                         None => break, // channel closed; shut down
@@ -317,7 +308,6 @@ impl TradingEngine {
             }
             RiskDecision::CircuitBreaker { drawdown_pct } => {
                 warn!(drawdown_pct, "Circuit breaker triggered");
-                self.alert.circuit_breaker_triggered(drawdown_pct).await;
             }
         }
 

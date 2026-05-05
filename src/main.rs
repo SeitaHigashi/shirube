@@ -1,4 +1,3 @@
-mod alert;
 mod api;
 mod config;
 mod error;
@@ -40,9 +39,6 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     info!("導 starting");
-
-    // アラートマネージャー初期化（SLACK_WEBHOOK_URL があれば Slack 通知）
-    let alert = std::sync::Arc::new(alert::AlertManager::new());
 
     let db_path = std::env::var("DATABASE_PATH").unwrap_or_else(|_| "shirube.db".to_string());
     let db = Database::open(&db_path).await?;
@@ -208,7 +204,6 @@ async fn main() -> anyhow::Result<()> {
         RiskManager::new(init_risk_params),
         "BTC_JPY".to_string(),
     )
-    .with_alert(Arc::clone(&alert))
     .with_config(Arc::clone(&trading_config))
     .with_order_repo(db.orders());
     tokio::spawn(trading_engine.run());

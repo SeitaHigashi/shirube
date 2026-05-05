@@ -639,6 +639,7 @@
     // ── Global state ──────────────────────────────────────────────────────────
 
     let candleData = [];
+    let indicatorCandles = []; // Always 1-minute candles for indicator calculation (matches signal engine)
     let isLoadingHistory = false;
     let hasMoreHistory = true;
     let currentResolution = 60; // 現在選択中の足種（秒）
@@ -729,15 +730,16 @@
     }
 
     function renderIndicators() {
-      if (candleData.length === 0) return;
+      if (indicatorCandles.length === 0) return;
 
       // Capture current visible logical range BEFORE setData() calls, and block subscriptions
       // to prevent circular range corruption while data is being updated.
       const savedRange = chart.timeScale().getVisibleLogicalRange();
       syncingRange = true;
 
-      const closes = candleData.map(c => c.close);
-      const times  = candleData.map(c => c.time);
+      // Use 1-minute candles for indicator calculation to match the signal engine
+      const closes = indicatorCandles.map(c => c.close);
+      const times  = indicatorCandles.map(c => c.time);
 
       // All indicators are always visible — no toggle
       const showSMA  = true;
@@ -834,12 +836,28 @@
         if (data.length > 0) {
           candleData = data;
           candleSeries.setData(data);
-          renderIndicators();
+          loadIndicatorCandles(); // Fetch 1m candles for indicators, then calls renderIndicators()
           chart.timeScale().fitContent();
           rsiChart.timeScale().fitContent();
           macdChart.timeScale().fitContent();
         }
       } catch (e) { console.warn('candles load failed', e); }
+    }
+
+    // ── Load 1-minute candles for indicator calculation ───────────────────────
+    // Always uses resolution=60 to match the signal engine, regardless of chart resolution.
+    async function loadIndicatorCandles() {
+      try {
+        const count = RES_COUNT[60]; // 200
+        const res = await fetch(`${BASE}/api/candles?resolution=60&count=${count}`);
+        const candles = await res.json();
+        indicatorCandles = candles.map(c => ({
+          time: toChartTime(c.open_time),
+          open: parseFloat(c.open), high: parseFloat(c.high),
+          low: parseFloat(c.low), close: parseFloat(c.close),
+        })).sort((a, b) => a.time - b.time);
+        renderIndicators();
+      } catch (e) { console.warn('indicator candles load failed', e); }
     }
 
     // ── Load ticker ───────────────────────────────────────────────────────────
@@ -1071,6 +1089,17 @@
               const aidx = candleData.findIndex(d => d.time === latestAgg.time);
               if (aidx >= 0) { candleData[aidx] = latestAgg; } else { candleData.push(latestAgg); candleData.sort((a, b) => a.time - b.time); }
               candleSeries.update(latestAgg);
+            }
+          }
+          // Update 1-minute indicator buffer regardless of chart resolution
+          const iidx = indicatorCandles.findIndex(d => d.time === bar1m.time);
+          if (iidx >= 0) {
+            indicatorCandles[iidx] = bar1m;
+          } else {
+            indicatorCandles.push(bar1m);
+            indicatorCandles.sort((a, b) => a.time - b.time);
+            if (indicatorCandles.length > RES_COUNT[60] * 2) {
+              indicatorCandles = indicatorCandles.slice(-RES_COUNT[60]);
             }
           }
           debouncedRenderIndicators();

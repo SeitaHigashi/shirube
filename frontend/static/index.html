@@ -313,6 +313,7 @@
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
       rightPriceScale: { borderColor: '#0f3460', minimumWidth: 90 },
       timeScale: { borderColor: '#0f3460', timeVisible: true, secondsVisible: false },
+      handleScale: { mouseWheel: false },
       localization: { timeFormatter: makeTzFormatter(useJST) },
     };
 
@@ -421,6 +422,47 @@
       chart.timeScale().setVisibleLogicalRange(range);
       rsiChart.timeScale().setVisibleLogicalRange(range);
       syncingRange = false;
+    });
+
+    // ── Cursor-anchored zoom (wheel) ──────────────────────────────────────────
+    // lightweight-charts' built-in wheel zoom does not anchor to the cursor
+    // position correctly (zooms from left on zoom-in, from center on zoom-out).
+    // We disable the built-in handler and implement cursor-anchored zoom here.
+    function applyZoom(e) {
+      const range = chart.timeScale().getVisibleLogicalRange();
+      if (!range) return;
+
+      // The price-scale area is on the right; only the candle area matters.
+      const priceScaleWidth = 90; // matches rightPriceScale.minimumWidth
+      const chartWidth = chartEl.clientWidth - priceScaleWidth;
+      const cursorX = Math.max(0, Math.min(e.offsetX, chartWidth));
+      const fraction = cursorX / chartWidth;
+
+      const visibleBars = range.to - range.from;
+      // Logical index under the cursor — this becomes the zoom anchor.
+      const cursorLogical = range.from + fraction * visibleBars;
+
+      // deltaY > 0 → scroll down → zoom out (more bars visible)
+      //           < 0 → scroll up   → zoom in  (fewer bars visible)
+      const zoomFactor = e.deltaY > 0 ? 1.12 : 0.88;
+      const newVisibleBars = visibleBars * zoomFactor;
+
+      // Keep cursorLogical at the same screen fraction after zoom.
+      const newFrom = cursorLogical - fraction * newVisibleBars;
+      const newTo   = cursorLogical + (1 - fraction) * newVisibleBars;
+
+      syncingRange = true;
+      chart.timeScale().setVisibleLogicalRange({ from: newFrom, to: newTo });
+      rsiChart.timeScale().setVisibleLogicalRange({ from: newFrom, to: newTo });
+      macdChart.timeScale().setVisibleLogicalRange({ from: newFrom, to: newTo });
+      syncingRange = false;
+
+      if (newFrom <= 10) loadMoreHistory();
+    }
+
+    // Attach to all three chart containers so sub-charts also respond.
+    [chartEl, rsiEl, macdEl].forEach(el => {
+      el.addEventListener('wheel', e => { e.preventDefault(); applyZoom(e); }, { passive: false });
     });
 
     // ── Resize ────────────────────────────────────────────────────────────────

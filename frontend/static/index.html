@@ -741,6 +741,24 @@
       const closes = indicatorCandles.map(c => c.close);
       const times  = indicatorCandles.map(c => c.time);
 
+      // Chart reference timestamps — indicator series must align to these for logical range sync.
+      // resampleToChart() maps each chart candle time to the latest 1m indicator value at or before it,
+      // ensuring data point count matches the main chart regardless of resolution mismatch.
+      const chartTimes = candleData.map(c => c.time);
+      function resampleToChart(seriesPoints) {
+        const result = [];
+        let iPtr = 0;
+        for (const cTime of chartTimes) {
+          let best = null;
+          while (iPtr < seriesPoints.length && seriesPoints[iPtr].time <= cTime) {
+            best = seriesPoints[iPtr];
+            iPtr++;
+          }
+          if (best !== null) result.push({ time: cTime, value: best.value });
+        }
+        return result;
+      }
+
       // All indicators are always visible — no toggle
       const showSMA  = true;
       const showEMA  = true;
@@ -753,14 +771,14 @@
       smaSeries.applyOptions({ visible: showSMA });
       if (showSMA) {
         const sma = calcSMA(closes, currentCfg.sma_period);
-        smaSeries.setData(sma.map(({ idx, value }) => ({ time: times[idx], value })));
+        smaSeries.setData(resampleToChart(sma.map(({ idx, value }) => ({ time: times[idx], value }))));
       }
 
       // EMA
       emaSeries.applyOptions({ visible: showEMA });
       if (showEMA) {
         const ema = calcEMA(closes, currentCfg.ema_period);
-        emaSeries.setData(ema.map(({ idx, value }) => ({ time: times[idx], value })));
+        emaSeries.setData(resampleToChart(ema.map(({ idx, value }) => ({ time: times[idx], value }))));
       }
 
       // Bollinger Bands
@@ -769,9 +787,9 @@
       bbLowerSeries.applyOptions({ visible: showBB });
       if (showBB) {
         const bb = calcBB(closes, currentCfg.bollinger_period, currentCfg.bollinger_std);
-        bbUpperSeries.setData(bb.map(({ idx, upper })  => ({ time: times[idx], value: upper })));
-        bbMiddleSeries.setData(bb.map(({ idx, middle }) => ({ time: times[idx], value: middle })));
-        bbLowerSeries.setData(bb.map(({ idx, lower })  => ({ time: times[idx], value: lower })));
+        bbUpperSeries.setData(resampleToChart(bb.map(({ idx, upper })  => ({ time: times[idx], value: upper }))));
+        bbMiddleSeries.setData(resampleToChart(bb.map(({ idx, middle }) => ({ time: times[idx], value: middle }))));
+        bbLowerSeries.setData(resampleToChart(bb.map(({ idx, lower })  => ({ time: times[idx], value: lower }))));
       }
 
       // RSI sub-chart
@@ -779,14 +797,10 @@
       rsiLabelEl.style.display = showRSI ? 'block' : 'none';
       if (showRSI) {
         const rsi = calcRSI(closes, currentCfg.rsi_period);
-        // Pad with null for missing initial periods so logical indices align with main chart
-        const rsiPad = times.slice(0, times.length - rsi.length).map(t => ({ time: t, value: null }));
-        rsiSeries.setData([...rsiPad, ...rsi.map(({ idx, value }) => ({ time: times[idx], value }))]);
-        const obPad = rsiPad.map(({ time }) => ({ time, value: null }));
-        const obData = rsi.map(({ idx }) => ({ time: times[idx], value: 70 }));
-        const osData = rsi.map(({ idx }) => ({ time: times[idx], value: 30 }));
-        rsiOBSeries.setData([...obPad, ...obData]);
-        rsiOSSeries.setData([...obPad, ...osData]);
+        rsiSeries.setData(resampleToChart(rsi.map(({ idx, value }) => ({ time: times[idx], value }))));
+        // OB/OS reference lines span all chart times for consistent x-axis alignment
+        rsiOBSeries.setData(chartTimes.map(t => ({ time: t, value: 70 })));
+        rsiOSSeries.setData(chartTimes.map(t => ({ time: t, value: 30 })));
       }
 
       // MACD sub-chart
@@ -797,14 +811,12 @@
           closes,
           currentCfg.macd_fast, currentCfg.macd_slow, currentCfg.macd_signal
         );
-        const macdPad = times.slice(0, times.length - macd.length).map(t => ({ time: t, value: null }));
-        const sigPad  = times.slice(0, times.length - sig.length).map(t => ({ time: t, value: null }));
-        macdLineSeries.setData([...macdPad, ...macd.map(({ idx, value }) => ({ time: times[idx], value }))]);
-        macdSignalSeries.setData([...sigPad, ...sig.map(({ idx, value }) => ({ time: times[idx], value }))]);
-        macdHistSeries.setData([...sigPad, ...hist.map(({ idx, value }) => ({
+        macdLineSeries.setData(resampleToChart(macd.map(({ idx, value }) => ({ time: times[idx], value }))));
+        macdSignalSeries.setData(resampleToChart(sig.map(({ idx, value }) => ({ time: times[idx], value }))));
+        macdHistSeries.setData(resampleToChart(hist.map(({ idx, value }) => ({
           time: times[idx], value,
           color: value >= 0 ? '#26a69a' : '#ef5350',
-        }))]);
+        }))));
       }
 
       // Restore blocked subscriptions and apply the saved logical range to all charts
@@ -846,9 +858,12 @@
 
     // ── Load 1-minute candles for indicator calculation ───────────────────────
     // Always uses resolution=60 to match the signal engine, regardless of chart resolution.
+    // Fetches enough 1m candles to cover the same time span as the current chart resolution.
     async function loadIndicatorCandles() {
       try {
-        const count = RES_COUNT[60]; // 200
+        const chartCount = RES_COUNT[currentResolution] || 200;
+        // Fetch enough 1m candles to cover same time range as the chart (capped at 1000)
+        const count = Math.min(1000, chartCount * Math.ceil(currentResolution / 60));
         const res = await fetch(`${BASE}/api/candles?resolution=60&count=${count}`);
         const candles = await res.json();
         indicatorCandles = candles.map(c => ({
@@ -1091,15 +1106,18 @@
               candleSeries.update(latestAgg);
             }
           }
-          // Update 1-minute indicator buffer regardless of chart resolution
+          // Update 1-minute indicator buffer regardless of chart resolution.
+          // Cap size matches loadIndicatorCandles() fetch count for the current resolution.
           const iidx = indicatorCandles.findIndex(d => d.time === bar1m.time);
           if (iidx >= 0) {
             indicatorCandles[iidx] = bar1m;
           } else {
             indicatorCandles.push(bar1m);
             indicatorCandles.sort((a, b) => a.time - b.time);
-            if (indicatorCandles.length > RES_COUNT[60] * 2) {
-              indicatorCandles = indicatorCandles.slice(-RES_COUNT[60]);
+            const chartCount = RES_COUNT[currentResolution] || 200;
+            const maxIndicator = Math.min(1000, chartCount * Math.ceil(currentResolution / 60));
+            if (indicatorCandles.length > maxIndicator * 2) {
+              indicatorCandles = indicatorCandles.slice(-maxIndicator);
             }
           }
           debouncedRenderIndicators();

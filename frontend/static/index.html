@@ -25,14 +25,9 @@
     .res-btn { background: #1e2d4a; color: #aaa; border: 1px solid #2a3f60; border-radius: 4px; padding: 2px 10px; cursor: pointer; font-size: 11px; }
     .res-btn.active { background: #2a5298; color: #fff; border-color: #4a80d4; }
     .res-btn:hover:not(.active) { background: #253a5e; }
-    #indicator-bar { display: flex; gap: 12px; padding: 4px 0 6px; flex-wrap: wrap; }
-    #indicator-bar label { font-size: 12px; color: #aaa; cursor: pointer; user-select: none; display: flex; align-items: center; gap: 4px; }
-    #indicator-bar input[type=checkbox] { cursor: pointer; accent-color: #26a69a; }
-    #indicator-bar .ind-sma  { color: #f9c74f; }
-    #indicator-bar .ind-ema  { color: #90e0ef; }
-    #indicator-bar .ind-bb   { color: #c77dff; }
-
-    #indicator-bar .ind-news { color: #ffd166; }
+    #indicator-legend { display: flex; gap: 14px; padding: 4px 0 6px; flex-wrap: wrap; }
+    .leg-item { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #aaa; }
+    .leg-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
     #chart { width: 100%; flex: 1; min-height: 0; }
     #rsi-chart  { width: 100%; height: 100px; display: block; margin-top: 4px; }
     #macd-chart { width: 100%; height: 110px; display: block; margin-top: 4px; }
@@ -165,12 +160,11 @@
           <button id="btn-1d"  class="res-btn">日足</button>
         </div>
       </div>
-      <div id="indicator-bar">
-        <label><input type="checkbox" id="cb-sma"><span class="ind-sma">SMA</span></label>
-        <label><input type="checkbox" id="cb-ema"><span class="ind-ema">EMA</span></label>
-        <label><input type="checkbox" id="cb-bb"><span class="ind-bb">ボリンジャーバンド</span></label>
-
-        <label><input type="checkbox" id="cb-news" checked><span class="ind-news">ニュース</span></label>
+      <div id="indicator-legend">
+        <span class="leg-item"><span class="leg-dot" style="background:#f9c74f"></span>SMA</span>
+        <span class="leg-item"><span class="leg-dot" style="background:#90e0ef"></span>EMA</span>
+        <span class="leg-item"><span class="leg-dot" style="background:#c77dff"></span>BB</span>
+        <span class="leg-item"><span class="leg-dot" style="background:#ffd166"></span>ニュース</span>
       </div>
       <div id="chart"></div>
       <div id="rsi-label">RSI</div>
@@ -434,7 +428,7 @@
     function resizeCharts() {
       const container = document.getElementById('chart-container');
       const headerH = document.getElementById('chart-header').offsetHeight;
-      const indBarH = document.getElementById('indicator-bar').offsetHeight;
+      const indBarH = document.getElementById('indicator-legend').offsetHeight;
       const rsiVisible = rsiEl.style.display !== 'none';
       const macdVisible = macdEl.style.display !== 'none';
       const rsiH = rsiVisible ? rsiEl.offsetHeight + rsiLabelEl.offsetHeight + 4 : 0;
@@ -745,9 +739,10 @@
       const closes = candleData.map(c => c.close);
       const times  = candleData.map(c => c.time);
 
-      const showSMA  = document.getElementById('cb-sma').checked;
-      const showEMA  = document.getElementById('cb-ema').checked;
-      const showBB   = document.getElementById('cb-bb').checked;
+      // All indicators are always visible — no toggle
+      const showSMA  = true;
+      const showEMA  = true;
+      const showBB   = true;
       // RSI and MACD are always visible — no checkbox toggle
       const showRSI  = true;
       const showMACD = true;
@@ -937,8 +932,8 @@
 
     function applyAllMarkers() {
       candleSeries.setMarkers(tradeMarkers);
-      const showNews = document.getElementById('cb-news').checked;
-      newsFixedSeries.setMarkers(showNews ? newsMarkers : []);
+      // News markers are always shown
+      newsFixedSeries.setMarkers(newsMarkers);
     }
 
     function updateTradeMarkers(orders) {
@@ -1302,14 +1297,6 @@
 
     document.getElementById('settings-save-btn').addEventListener('click', saveSettings);
     loadSettings();
-
-    // ── Indicator checkbox listeners ──────────────────────────────────────────
-
-    ['cb-sma', 'cb-ema', 'cb-bb'].forEach(id => {
-      document.getElementById(id).addEventListener('change', renderIndicators);
-    });
-
-    document.getElementById('cb-news').addEventListener('change', applyAllMarkers);
 
     // ── Resolution buttons ────────────────────────────────────────────────────
 

@@ -400,28 +400,17 @@
     // so all charts share the same logical index count and setVisibleLogicalRange
     // produces accurate alignment without zoom drift.
     // syncingRange flag prevents circular re-entrancy.
-    let syncingRange = false;
     chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-      if (syncingRange || !range) return;
-      syncingRange = true;
       rsiChart.timeScale().setVisibleLogicalRange(range);
       macdChart.timeScale().setVisibleLogicalRange(range);
-      syncingRange = false;
-      if (range.from <= 10) loadMoreHistory();
     });
     rsiChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-      if (syncingRange || !range) return;
-      syncingRange = true;
       chart.timeScale().setVisibleLogicalRange(range);
       macdChart.timeScale().setVisibleLogicalRange(range);
-      syncingRange = false;
     });
     macdChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-      if (syncingRange || !range) return;
-      syncingRange = true;
       chart.timeScale().setVisibleLogicalRange(range);
       rsiChart.timeScale().setVisibleLogicalRange(range);
-      syncingRange = false;
     });
 
     // ── Cursor-anchored zoom (wheel) ──────────────────────────────────────────

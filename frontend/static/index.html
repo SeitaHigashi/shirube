@@ -35,10 +35,10 @@
     #indicator-bar .ind-macd { color: #a8dadc; }
     #indicator-bar .ind-news { color: #ffd166; }
     #chart { width: 100%; flex: 1; min-height: 0; }
-    #rsi-chart  { width: 100%; height: 100px; display: none; margin-top: 4px; }
-    #macd-chart { width: 100%; height: 110px; display: none; margin-top: 4px; }
-    #rsi-label  { font-size: 10px; color: #ff9e6d; margin-top: 4px; display: none; }
-    #macd-label { font-size: 10px; color: #a8dadc; margin-top: 4px; display: none; }
+    #rsi-chart  { width: 100%; height: 100px; display: block; margin-top: 4px; }
+    #macd-chart { width: 100%; height: 110px; display: block; margin-top: 4px; }
+    #rsi-label  { font-size: 10px; color: #ff9e6d; margin-top: 4px; display: block; }
+    #macd-label { font-size: 10px; color: #a8dadc; margin-top: 4px; display: block; }
     .panel { background: #16213e; border-radius: 8px; padding: 12px; overflow-y: auto; }
     .panel h2 { font-size: 13px; color: #888; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
     .balance-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -170,8 +170,8 @@
         <label><input type="checkbox" id="cb-sma"><span class="ind-sma">SMA</span></label>
         <label><input type="checkbox" id="cb-ema"><span class="ind-ema">EMA</span></label>
         <label><input type="checkbox" id="cb-bb"><span class="ind-bb">ボリンジャーバンド</span></label>
-        <label><input type="checkbox" id="cb-rsi"><span class="ind-rsi">RSI</span></label>
-        <label><input type="checkbox" id="cb-macd"><span class="ind-macd">MACD</span></label>
+        <span class="ind-rsi">RSI</span>
+        <span class="ind-macd">MACD</span>
         <label><input type="checkbox" id="cb-news" checked><span class="ind-news">ニュース</span></label>
       </div>
       <div id="chart"></div>
@@ -750,8 +750,9 @@
       const showSMA  = document.getElementById('cb-sma').checked;
       const showEMA  = document.getElementById('cb-ema').checked;
       const showBB   = document.getElementById('cb-bb').checked;
-      const showRSI  = document.getElementById('cb-rsi').checked;
-      const showMACD = document.getElementById('cb-macd').checked;
+      // RSI and MACD are always visible — no checkbox toggle
+      const showRSI  = true;
+      const showMACD = true;
 
       // SMA
       smaSeries.applyOptions({ visible: showSMA });
@@ -842,8 +843,8 @@
           candleSeries.setData(data);
           renderIndicators();
           chart.timeScale().fitContent();
-          if (document.getElementById('cb-rsi').checked)  rsiChart.timeScale().fitContent();
-          if (document.getElementById('cb-macd').checked) macdChart.timeScale().fitContent();
+          rsiChart.timeScale().fitContent();
+          macdChart.timeScale().fitContent();
         }
       } catch (e) { console.warn('candles load failed', e); }
     }
@@ -1306,7 +1307,7 @@
 
     // ── Indicator checkbox listeners ──────────────────────────────────────────
 
-    ['cb-sma', 'cb-ema', 'cb-bb', 'cb-rsi', 'cb-macd'].forEach(id => {
+    ['cb-sma', 'cb-ema', 'cb-bb'].forEach(id => {
       document.getElementById(id).addEventListener('change', renderIndicators);
     });
 

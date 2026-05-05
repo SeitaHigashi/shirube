@@ -643,13 +643,18 @@
       // IndicatorPoint の time (ISO 8601) をチャート用タイムスタンプに変換
       const toT = p => toChartTime(p.time);
 
-      // SMA
+      // SMA (初回は visible: false で作成されているため、ここで表示する)
+      smaSeries.applyOptions({ visible: true });
       smaSeries.setData(points.filter(p => p.sma != null).map(p => ({ time: toT(p), value: p.sma })));
 
       // EMA
+      emaSeries.applyOptions({ visible: true });
       emaSeries.setData(points.filter(p => p.ema != null).map(p => ({ time: toT(p), value: p.ema })));
 
       // Bollinger Bands
+      bbUpperSeries.applyOptions({ visible: true });
+      bbMiddleSeries.applyOptions({ visible: true });
+      bbLowerSeries.applyOptions({ visible: true });
       bbUpperSeries.setData(points.filter(p => p.bb_upper != null).map(p => ({ time: toT(p), value: p.bb_upper })));
       bbMiddleSeries.setData(points.filter(p => p.bb_middle != null).map(p => ({ time: toT(p), value: p.bb_middle })));
       bbLowerSeries.setData(points.filter(p => p.bb_lower != null).map(p => ({ time: toT(p), value: p.bb_lower })));
@@ -698,11 +703,13 @@
       } catch (e) { console.warn('indicator load failed', e); }
     }
 
-    // WS で新しいキャンドルが届くたびに呼ばれる debounce 版（500ms）
+    // WS で新しいキャンドルが届くたびに呼ばれる debounce 版。
+    // インジケーターはローソク足レベルの更新で十分なため、3秒でデバウンスして
+    // 連続した WS メッセージによる API 過呼び出しを防ぐ。
     let renderIndicatorsTimer = null;
     function debouncedRenderIndicators() {
       if (renderIndicatorsTimer) clearTimeout(renderIndicatorsTimer);
-      renderIndicatorsTimer = setTimeout(loadAndRenderIndicators, 500);
+      renderIndicatorsTimer = setTimeout(loadAndRenderIndicators, 3000);
     }
 
     // ── Load historical candles ───────────────────────────────────────────────

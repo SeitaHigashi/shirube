@@ -15,10 +15,10 @@ It combines multi-indicator technical analysis with AI-powered news sentiment vi
 - **Technical analysis** — SMA, EMA, RSI, MACD, Bollinger Bands → composite signal
 - **AI news sentiment** — RSS feeds analyzed by local LLM (Ollama), score −1.0 to +1.0
 - **Combined signal** — `confidence = TA × 0.7 + |sentiment| × 0.3`
+- **Zone-based allocation** — configurable BTC/JPY allocation zones with live updates
 - **Risk management** — position limits, daily drawdown circuit breaker, auto daily reset
 - **Backtesting engine** — historical simulation with Sharpe ratio, max drawdown, win rate
 - **Real-time dashboard** — candlestick chart, balance, orders, news panel (lightweight-charts)
-- **Slack alerts** — circuit breaker and critical events
 - **Paper trading** — runs without API keys using live public prices
 
 ## Architecture
@@ -35,7 +35,6 @@ API Server (axum)
 Market Data Bus (tokio broadcast channel)
 bitFlyer Exchange Client (REST + WS, rate limiter 200 req/min)
 Storage (SQLite WAL)
-Alert Manager (log + Slack Webhook)
 ```
 
 ## Tech Stack
@@ -90,28 +89,14 @@ Without `BITFLYER_API_KEY`, the bot runs in **paper trading mode** using live pu
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama server URL |
 | `OLLAMA_MODEL` | `llama3` | Ollama model name |
 | `NEWS_FEED_URLS` | CoinDesk, CoinTelegraph | Comma-separated RSS URLs |
-| `SLACK_WEBHOOK_URL` | — | Slack alert webhook (optional) |
 
 ## Development
 
 ```bash
 cargo build        # build
-cargo test         # run all tests (164 tests)
+cargo test         # run all tests
 cargo watch -x run # auto-reload on file change (requires cargo-watch)
 ```
-
-## API Endpoints
-
-| Method | Path | Description |
-|---|---|---|
-| GET | `/api/ticker` | Latest ticker |
-| GET | `/api/candles?resolution=60&count=200` | Candlestick data |
-| GET | `/api/balance` | Account balance |
-| GET | `/api/orders` | Order list |
-| POST | `/api/orders` | Place order |
-| GET | `/api/backtest` | Run backtest |
-| GET | `/api/news/latest` | Latest news sentiment scores |
-| WS | `/ws/candles` | Real-time candle stream |
 
 ## License
 

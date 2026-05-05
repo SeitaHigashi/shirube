@@ -38,7 +38,6 @@ API Server (axum)
 Market Data Bus (tokio broadcast channel)
 bitFlyer Exchange Client (REST + WS, rate limiter)
 Storage (SQLite)
-Alert Manager (log + Slack Webhook)
 ```
 
 ## Trading Strategy
@@ -46,139 +45,116 @@ Alert Manager (log + Slack Webhook)
 - **Technical Analysis**: SMA, EMA, RSI, MACD, Bollinger Bands → composite signal
 - **AI News Analysis**: RSS feeds → Ollama (local LLM) sentiment score (-1.0 to +1.0)
 - **Combined Signal**: `confidence = ta * 0.7 + |sentiment| * 0.3`
-
-## Implementation Status — All Phases Complete ✅
-
-| Phase | Content | Tests |
-|-------|---------|-------|
-| 1 | Foundation (BitFlyer REST/WS, Storage, common types) | 27 |
-| 2 | Analysis + Strategy (TA indicators, SignalEngine, RiskManager, TradingEngine) | 77 |
-| 3 | Backtesting (Downloader, Simulator, Report, DB persistence) | 93 |
-| 4 | Dashboard (axum API, WebSocket Push, frontend) | 110 |
-| 5 | News AI (RSS fetch, Ollama sentiment, /api/news/latest, dashboard panel) | 133 |
-| 6 | Hardening (WS reconnect, rate limiter, alerts, circuit breaker, daily reset) | **152** |
-
-**Current: 152 tests, all passing**
+- **Zone-based Allocation**: `TradingConfig` + `ZoneConfig` で BTC 配分率をゾーン補間
 
 ---
 
-## Phase 1 — Foundation ✅
-
-- `src/types/` — Ticker, Trade, Candle, Order, Balance and other common types
-- `src/exchange/bitflyer/` — REST client (public API requires no key), WebSocket client, HMAC-SHA256 auth
-- `src/exchange/mock.rs` — MockExchangeClient (for tests and paper trading)
-- `src/exchange/mod.rs` — ExchangeClient trait, PublicBitFlyerClient (real prices without API key)
-- `src/storage/` — SQLite WAL mode, CandleRepository, OrderRepository, TradeRepository
-- `src/main.rs` — startup entry point (auto-switches based on API key presence)
-
----
-
-## Phase 2 — Analysis + Strategy ✅
+## Module Structure
 
 ```
 src/
+  config.rs           # TradingConfig + ZoneConfig (zone-based BTC allocation, DB-persisted)
+  error.rs            # unified error type
+  main.rs             # startup entry point (auto-switches based on API key presence)
+
+  types/
+    market.rs         # Ticker, Trade, Candle
+    order.rs          # Order, Balance
+    mod.rs
+
+  exchange/
+    bitflyer/
+      rest.rs         # REST client + rate_limiter.acquire() on all HTTP methods
+      ws.rs           # WebSocket client + run_with_reconnect() (exponential backoff)
+      auth.rs         # HMAC-SHA256 signature
+      models.rs       # bitFlyer-specific response structs
+      mod.rs
+    mock.rs           # MockExchangeClient (for tests and paper trading)
+    rate_limiter.rs   # Token bucket (200 req/min)
+    mod.rs            # ExchangeClient trait, PublicBitFlyerClient
+
   market/
-    bus.rs              # MarketDataBus — WS + REST → Candle broadcast + DB save
-    candle_aggregator.rs # WS executions / REST ticker → Candle aggregation (bucket mgmt)
+    bus.rs            # MarketDataBus — WS + REST → Candle broadcast + DB save
+    candle_aggregator.rs  # WS executions / REST ticker → Candle aggregation (bucket mgmt)
+    mod.rs
+
   signal/
-    mod.rs              # Signal type, Indicator trait, MockIndicator
+    mod.rs            # Signal type, Indicator trait, MockIndicator, SignalDetail, AllocationSignal
+    engine.rs         # SignalEngine — multi-indicator aggregation → Signal broadcast
     indicators/
       sma.rs / ema.rs / rsi.rs / macd.rs / bollinger.rs
-    engine.rs           # SignalEngine — multi-indicator aggregation → Signal broadcast
+      mod.rs
+
   risk/
-    mod.rs              # RiskParams, RiskDecision (Allow/Reject/CircuitBreaker)
-    manager.rs          # RiskManager — position limit / daily drawdown / circuit breaker
+    mod.rs            # RiskParams, RiskDecision (Allow/Reject/CircuitBreaker)
+    manager.rs        # RiskManager — position limit / daily drawdown / circuit breaker
+
   trading/
-    engine.rs           # TradingEngine — Signal → RiskManager → send_order
-```
+    engine.rs         # TradingEngine — Signal → RiskManager → send_order
+                      # last_reset_date detects UTC date change → auto reset_daily()
+    mod.rs
 
-Design notes:
-- `SignalEngine::aggregate()` is a pure function for easy testing
-- `RiskManager::evaluate()` is pure logic with no async
-
----
-
-## Phase 3 — Backtesting ✅
-
-```
-src/
   backtest/
-    mod.rs          # BacktestConfig, BacktestReport type definitions
-    downloader.rs   # ExecutionSource trait + Downloader (DB cache first)
-    simulator.rs    # SimulatedExchange (ExchangeClient impl) + Simulator
-    report.rs       # format_report() statistics output utility
-  storage/
-    backtest_runs.rs # BacktestRunRepository (DB persistence)
-```
+    mod.rs            # BacktestConfig, BacktestReport type definitions
+    downloader.rs     # ExecutionSource trait + Downloader (DB cache first)
+    simulator.rs      # SimulatedExchange (ExchangeClient impl) + Simulator
+    report.rs         # format_report() statistics output utility
 
-Statistics: total return, annualized Sharpe ratio, max drawdown, win rate
-
----
-
-## Phase 4 — Dashboard ✅
-
-```
-src/
-  api/
-    mod.rs          # AppState (db, exchange, candle_tx, signal_tx, news_cache)
-    server.rs       # axum server + build_router() + ServeDir
-    routes/
-      ticker.rs     # GET /api/ticker
-      candles.rs    # GET /api/candles?resolution=60&count=200
-      orders.rs     # GET/POST /api/orders
-      balance.rs    # GET /api/balance
-      backtest.rs   # GET /api/backtest
-      news.rs       # GET /api/news/latest
-    ws_handler.rs   # WebSocket /ws/candles (Candle broadcast → JSON push)
-frontend/
-  static/
-    index.html      # lightweight-charts SPA (candlestick + balance + orders + news)
-```
-
----
-
-## Phase 5 — News AI ✅
-
-```
-src/
   news/
     mod.rs
-    fetcher.rs      # FeedSource trait + NewsFetcher (feed-rs, dedup)
-    analyzer.rs     # NewsAnalyzer (Ollama HTTP API, fallback score=0.0)
-    scorer.rs       # NewsScorer (combined_confidence, sentiment_to_signal)
+    fetcher.rs        # FeedSource trait + NewsFetcher (feed-rs, dedup)
+    analyzer.rs       # NewsAnalyzer (Ollama HTTP API, fallback score=0.0)
+    scorer.rs         # NewsScorer (combined_confidence, sentiment_to_signal)
+
+  storage/
+    db.rs             # Database wrapper (WAL mode)
+    schema.rs         # CREATE TABLE definitions
+    candles.rs        # CandleRepository
+    tickers.rs        # TickerRepository
+    orders.rs         # OrderRepository
+    trades.rs         # TradeRepository
+    news_sentiments.rs # NewsSentimentRepository
+    config.rs         # ConfigRepository (TradingConfig persistence)
+    mock_state.rs     # MockStateRepository (paper trading balance/order state)
+    mod.rs
+
+  api/
+    mod.rs            # AppState (db, exchange, candle_tx, signal_tx, news_cache, trading_config, latest_signal)
+    server.rs         # axum server + build_router() + ServeDir
+    ws_handler.rs     # WebSocket /ws/candles (Candle broadcast → JSON push)
+    routes/
+      ticker.rs       # GET /api/ticker
+      candles.rs      # GET /api/candles
+      orders.rs       # GET/POST /api/orders
+      balance.rs      # GET /api/balance
+      backtest.rs     # GET /api/backtest
+      news.rs         # GET /api/news/latest
+      config.rs       # GET/PUT /api/config (TradingConfig)
+      signal.rs       # GET /api/signal (latest SignalDetail)
+      mod.rs
+
+  bin/
+    migrate_candles_to_tickers.rs  # one-off migration utility
 ```
 
-- Sentiment scored via `POST {OLLAMA_URL}/api/generate`
-- Falls back to `score = 0.0` when Ollama is unavailable
-- Fetched and analyzed in background every hour
-- `GET /api/news/latest` → returns `Vec<SentimentScore>`
-- Duplicate articles skipped via DB URL lookup; cache refreshed from DB each cycle
+```
+frontend/
+  static/
+    index.html        # lightweight-charts SPA (candlestick + balance + orders + news)
+```
 
 ---
 
-## Phase 6 — Hardening ✅
+## Key Design Decisions
 
-```
-src/
-  exchange/
-    rate_limiter.rs   # Token bucket (200 req/min)
-    bitflyer/
-      ws.rs           # run_with_reconnect() (exponential backoff, 1s initial / 60s max)
-      rest.rs         # rate_limiter.acquire() integrated into all HTTP methods
-  alert/
-    mod.rs            # AlertManager (log + Slack Webhook notification)
-  risk/
-    mod.rs            # RiskDecision::CircuitBreaker { drawdown_pct } added
-  trading/
-    engine.rs         # CircuitBreaker → alert.circuit_breaker_triggered()
-                      # last_reset_date detects UTC date change → auto reset_daily()
-```
-
-Key design decisions:
+- `SignalEngine::aggregate()` is a pure function for easy testing
+- `RiskManager::evaluate()` is pure logic with no async
 - WS reconnect: reconnects on both server Close and errors; exits only when `tx.receiver_count() == 0`
 - Rate limiter: `RateLimiter::new(200)` built into BitFlyerRestClient
-- Alerts: Slack notifications enabled via `SLACK_WEBHOOK_URL` env var
 - Daily reset: TradingEngine detects UTC date change and calls reset automatically
+- `TradingConfig` / `ZoneConfig` persisted to DB via `ConfigRepository`; loaded at startup and held in `RwLock` for live updates
+- Sentiment: `POST {OLLAMA_URL}/api/generate`; falls back to `score = 0.0` when Ollama unavailable
+- News dedup: skips duplicate articles via DB URL lookup; cache refreshed from DB each cycle
 
 ---
 
@@ -193,7 +169,6 @@ Key design decisions:
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama LLM server |
 | `OLLAMA_MODEL` | `llama3` | Model to use |
 | `NEWS_FEED_URLS` | CoinDesk, CoinTelegraph | RSS feed URLs (comma-separated) |
-| `SLACK_WEBHOOK_URL` | — | Slack alert webhook (optional) |
 
 ---
 

@@ -678,79 +678,77 @@
 
     // API から取得した IndicatorPoint[] をチャートシリーズにセットする。
     // バックエンドと同一ロジックで計算された値を使用するため、JS での再計算は不要。
-    //function renderIndicators(points) {
-    //  if (!points || points.length === 0) return;
+    function renderIndicators(points) {
+      if (!points || points.length === 0) return;
 
-    //  // setData() 呼び出し前に現在の表示範囲を保存し、範囲同期を一時停止
-    //  const savedRange = chart.timeScale().getVisibleLogicalRange();
+      // setData() 呼び出し前に現在の表示範囲を保存し、範囲同期を一時停止
+      const savedRange = chart.timeScale().getVisibleLogicalRange();
 
-    //  // IndicatorPoint の time (ISO 8601) をチャート用タイムスタンプに変換
-    //  const toT = p => toChartTime(p.time);
+      // IndicatorPoint の time (ISO 8601) をチャート用タイムスタンプに変換
+      const toT = p => toChartTime(p.time);
 
-    //  // SMA (初回は visible: false で作成されているため、ここで表示する)
-    //  smaSeries.applyOptions({ visible: true });
-    //  smaSeries.setData(points.filter(p => p.sma != null).map(p => ({ time: toT(p), value: p.sma })));
+      // SMA (初回は visible: false で作成されているため、ここで表示する)
+      smaSeries.applyOptions({ visible: true });
+      smaSeries.setData(points.filter(p => p.sma != null).map(p => ({ time: toT(p), value: p.sma })));
 
-    //  // EMA
-    //  emaSeries.applyOptions({ visible: true });
-    //  emaSeries.setData(points.filter(p => p.ema != null).map(p => ({ time: toT(p), value: p.ema })));
+      // EMA
+      emaSeries.applyOptions({ visible: true });
+      emaSeries.setData(points.filter(p => p.ema != null).map(p => ({ time: toT(p), value: p.ema })));
 
-    //  // Bollinger Bands
-    //  bbUpperSeries.applyOptions({ visible: true });
-    //  bbMiddleSeries.applyOptions({ visible: true });
-    //  bbLowerSeries.applyOptions({ visible: true });
-    //  bbUpperSeries.setData(points.filter(p => p.bb_upper != null).map(p => ({ time: toT(p), value: p.bb_upper })));
-    //  bbMiddleSeries.setData(points.filter(p => p.bb_middle != null).map(p => ({ time: toT(p), value: p.bb_middle })));
-    //  bbLowerSeries.setData(points.filter(p => p.bb_lower != null).map(p => ({ time: toT(p), value: p.bb_lower })));
+      // Bollinger Bands
+      bbUpperSeries.applyOptions({ visible: true });
+      bbMiddleSeries.applyOptions({ visible: true });
+      bbLowerSeries.applyOptions({ visible: true });
+      bbUpperSeries.setData(points.filter(p => p.bb_upper != null).map(p => ({ time: toT(p), value: p.bb_upper })));
+      bbMiddleSeries.setData(points.filter(p => p.bb_middle != null).map(p => ({ time: toT(p), value: p.bb_middle })));
+      bbLowerSeries.setData(points.filter(p => p.bb_lower != null).map(p => ({ time: toT(p), value: p.bb_lower })));
 
-    //  // RSI sub-chart
-    //  rsiEl.style.display = 'block';
-    //  rsiLabelEl.style.display = 'block';
-    //  const rsiData = points.filter(p => p.rsi != null).map(p => ({ time: toT(p), value: p.rsi }));
-    //  rsiSeries.setData(rsiData);
-    //  // OB/OS 基準線は RSI データ範囲のタイムスタンプに合わせる
-    //  const rsiTimes = rsiData.map(d => d.time);
-    //  rsiOBSeries.setData(rsiTimes.map(t => ({ time: t, value: 70 })));
-    //  rsiOSSeries.setData(rsiTimes.map(t => ({ time: t, value: 30 })));
+      //  // RSI sub-chart
+      //  rsiEl.style.display = 'block';
+      //  rsiLabelEl.style.display = 'block';
+      //  const rsiData = points.filter(p => p.rsi != null).map(p => ({ time: toT(p), value: p.rsi }));
+      //  rsiSeries.setData(rsiData);
+      //  // OB/OS 基準線は RSI データ範囲のタイムスタンプに合わせる
+      //  const rsiTimes = rsiData.map(d => d.time);
+      //  rsiOBSeries.setData(rsiTimes.map(t => ({ time: t, value: 70 })));
+      //  rsiOSSeries.setData(rsiTimes.map(t => ({ time: t, value: 30 })));
 
-    //  // MACD sub-chart
-    //  macdEl.style.display = 'block';
-    //  macdLabelEl.style.display = 'block';
-    //  macdLineSeries.setData(points.filter(p => p.macd_line != null).map(p => ({ time: toT(p), value: p.macd_line })));
-    //  macdSignalSeries.setData(points.filter(p => p.signal_line != null).map(p => ({ time: toT(p), value: p.signal_line })));
-    //  macdHistSeries.setData(points.filter(p => p.histogram != null).map(p => ({
-    //    time: toT(p), value: p.histogram,
-    //    color: p.histogram >= 0 ? '#26a69a' : '#ef5350',
-    //  })));
+      //  // MACD sub-chart
+      //  macdEl.style.display = 'block';
+      //  macdLabelEl.style.display = 'block';
+      //  macdLineSeries.setData(points.filter(p => p.macd_line != null).map(p => ({ time: toT(p), value: p.macd_line })));
+      //  macdSignalSeries.setData(points.filter(p => p.signal_line != null).map(p => ({ time: toT(p), value: p.signal_line })));
+      //  macdHistSeries.setData(points.filter(p => p.histogram != null).map(p => ({
+      //    time: toT(p), value: p.histogram,
+      //    color: p.histogram >= 0 ? '#26a69a' : '#ef5350',
+      //  })));
 
-    //  // 保存した表示範囲を全チャートに復元
-    //  if (savedRange) {
-    //    chart.timeScale().setVisibleLogicalRange(savedRange);
-    //    rsiChart.timeScale().setVisibleLogicalRange(savedRange);
-    //    macdChart.timeScale().setVisibleLogicalRange(savedRange);
-    //  }
-    //  resizeCharts();
-    //}
+      // 保存した表示範囲をメインチャートに復元
+      if (savedRange) {
+        chart.timeScale().setVisibleLogicalRange(savedRange);
+      }
+      resizeCharts();
+    }
 
     // バックエンド API からインジケーター値を取得してチャートに反映する
     async function loadAndRenderIndicators() {
-    //  try {
-    //    const count = RES_COUNT[currentResolution] || 200;
-    //    const url = `${BASE}/api/indicators?resolution=${currentResolution}&count=${count}`;
-    //    const res = await fetch(url);
-    //    if (!res.ok) return;
-    //    const points = await res.json();
-    //    //renderIndicators(points);
-    //  } catch (e) { console.warn('indicator load failed', e); }
-    //}
+      try {
+        const count = RES_COUNT[currentResolution] || 200;
+        const url = `${BASE}/api/indicators?resolution=${currentResolution}&count=${count}`;
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const points = await res.json();
+        renderIndicators(points);
+      } catch (e) { console.warn('indicator load failed', e); }
+    }
 
-    //// WS で新しいキャンドルが届くたびに呼ばれる debounce 版。
-    //// インジケーターはローソク足レベルの更新で十分なため、3秒でデバウンスして
-    //// 連続した WS メッセージによる API 過呼び出しを防ぐ。
-    //let renderIndicatorsTimer = null;
-    //function debouncedRenderIndicators() {
-    //  if (renderIndicatorsTimer) clearTimeout(renderIndicatorsTimer);
-    //  renderIndicatorsTimer = setTimeout(loadAndRenderIndicators, 3000);
+    // WS で新しいキャンドルが届くたびに呼ばれる debounce 版。
+    // インジケーターはローソク足レベルの更新で十分なため、3秒でデバウンスして
+    // 連続した WS メッセージによる API 過呼び出しを防ぐ。
+    let renderIndicatorsTimer = null;
+    function debouncedRenderIndicators() {
+      if (renderIndicatorsTimer) clearTimeout(renderIndicatorsTimer);
+      renderIndicatorsTimer = setTimeout(loadAndRenderIndicators, 3000);
     }
 
     // ── Load historical candles ───────────────────────────────────────────────

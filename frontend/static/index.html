@@ -403,14 +403,26 @@
     chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
       rsiChart.timeScale().setVisibleLogicalRange(range);
       macdChart.timeScale().setVisibleLogicalRange(range);
+      if (range === null) return;
+      if (range.from < 15) {
+        loadMoreHistory();
+      } 
     });
     rsiChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
       chart.timeScale().setVisibleLogicalRange(range);
       macdChart.timeScale().setVisibleLogicalRange(range);
+      if (range === null) return;
+      if (range.from < 15) {
+        loadMoreHistory();
+      } 
     });
     macdChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
       chart.timeScale().setVisibleLogicalRange(range);
       rsiChart.timeScale().setVisibleLogicalRange(range);
+      if (range === null) return;
+      if (range.from < 15) {
+        loadMoreHistory();
+      } 
     });
 
     // ── Cursor-anchored zoom (wheel) ──────────────────────────────────────────

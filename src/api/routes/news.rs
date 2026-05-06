@@ -38,6 +38,7 @@ mod tests {
             ticker_tx,
             signal_tx,
             aggregator_registry: std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            ws_tx: { let (tx, _) = broadcast::channel(16); tx },
             latest_signal: Arc::new(RwLock::new(None)),
             news_cache: Arc::new(RwLock::new(scores)),
             trading_config: Arc::new(RwLock::new(crate::config::TradingConfig::default())),

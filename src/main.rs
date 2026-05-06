@@ -102,6 +102,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // MarketDataBus: WS + REST → Candle broadcast + DB 保存
+    let ws_tx_for_api = ws_tx.clone();
     let market_bus = MarketDataBus::start(
         ws_tx,
         db.clone(),
@@ -292,6 +293,7 @@ async fn main() -> anyhow::Result<()> {
         candle_tx: market_bus.candle_tx(),
         ticker_tx: market_bus.ticker_tx(),
         signal_tx: signal_engine_tx,
+        ws_tx: ws_tx_for_api,
         aggregator_registry: std::sync::Arc::new(tokio::sync::Mutex::new(
             std::collections::HashMap::new(),
         )),

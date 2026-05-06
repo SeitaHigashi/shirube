@@ -13,6 +13,7 @@ use tokio::sync::broadcast::{self, error::RecvError};
 use tracing::{info, warn};
 
 use crate::api::AppState;
+use crate::exchange::bitflyer::ws::WsMessage;
 use crate::market::candle_aggregator::CandleAggregator;
 use crate::types::market::Candle;
 
@@ -51,8 +52,10 @@ async fn get_aggregator(
     registry.insert(resolution_secs, Arc::downgrade(&arc_tx));
 
     // バックグラウンドタスク: Weak<Sender> を持ち、upgrade 失敗時に自動終了
+    // NOTE: ticker_tx (ltp のみ) ではなく ws_tx (Executions + Ticker) を購読することで
+    // MarketDataBus と同じ方式で個別約定価格から正確な high/low を計算する
     let weak_tx = Arc::downgrade(&arc_tx);
-    let mut ticker_rx = state.ticker_tx.subscribe();
+    let mut ws_rx = state.ws_tx.subscribe();
     tokio::spawn(async move {
         let mut agg = CandleAggregator::new("BTC_JPY".to_string(), resolution_secs);
         info!("CandleAggregator task started (resolution={}s)", resolution_secs);
@@ -63,25 +66,33 @@ async fn get_aggregator(
                 break;
             };
 
-            match ticker_rx.recv().await {
-                Ok(ticker) => {
-                    // 確定した Candle を broadcast（受信者がいなければ無視）
-                    if let Some(candle) = agg.feed_ticker(&ticker) {
+            match ws_rx.recv().await {
+                Ok(WsMessage::Executions(trades)) => {
+                    // 個別約定価格で high/low を正確に更新（MarketDataBus と同じ処理）
+                    for candle in agg.feed_trades(&trades) {
                         let _ = tx.send(candle);
                     }
-                    // Partial candle（進行中の未確定ローソク）もリアルタイムで push
                     if let Some(partial) = agg.peek_current() {
                         let _ = tx.send(partial);
                     }
-                    // Arc を明示的に drop して次の upgrade まで保持しない
+                    drop(tx);
+                }
+                Ok(WsMessage::Ticker(ticker)) => {
+                    // バケット確定トリガー + partial candle 更新
+                    if let Some(candle) = agg.feed_ticker(&ticker) {
+                        let _ = tx.send(candle);
+                    }
+                    if let Some(partial) = agg.peek_current() {
+                        let _ = tx.send(partial);
+                    }
                     drop(tx);
                 }
                 Err(RecvError::Lagged(n)) => {
-                    warn!("CandleAggregator ticker stream lagged by {} (resolution={}s)", n, resolution_secs);
+                    warn!("CandleAggregator ws stream lagged by {} (resolution={}s)", n, resolution_secs);
                     drop(tx);
                 }
                 Err(RecvError::Closed) => {
-                    info!("Ticker broadcast channel closed (resolution={}s)", resolution_secs);
+                    info!("WS broadcast channel closed (resolution={}s)", resolution_secs);
                     break;
                 }
             }

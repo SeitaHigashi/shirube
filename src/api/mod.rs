@@ -8,6 +8,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, watch, Mutex, RwLock};
 
 use crate::config::TradingConfig;
+use crate::exchange::bitflyer::ws::WsMessage;
 use crate::exchange::ExchangeClient;
 use crate::news::analyzer::SentimentScore;
 use crate::signal::SignalDetail;
@@ -31,6 +32,8 @@ pub struct AppState {
     pub candle_tx: broadcast::Sender<Candle>,
     pub ticker_tx: broadcast::Sender<Ticker>,
     pub signal_tx: broadcast::Sender<SignalDetail>,
+    /// Raw WS messages (Executions + Ticker) for accurate OHLCV aggregation
+    pub ws_tx: broadcast::Sender<WsMessage>,
     /// Per-resolution CandleAggregator レジストリ（Arc/Weak による自動 cleanup）
     pub aggregator_registry: AggregatorRegistry,
     /// Rust SignalEngine が最後に出した最新シグナルのキャッシュ（集計 + 各インジケータ）

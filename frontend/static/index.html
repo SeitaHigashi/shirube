@@ -127,7 +127,7 @@
   <header>
     <h1>導</h1>
     <span style="color:#888; font-size:12px;">BTC/JPY</span>
-    <button id="tz-toggle">JST</button>
+    <span style="color:#888; font-size:11px;">UTC</span>
     <div id="ticker-info">
       <div class="stat">
         <div class="stat-label">最終価格</div>
@@ -288,20 +288,28 @@
   <script>
     const BASE = `${location.protocol}//${location.host}`;
     const WS_CANDLE_BASE = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/candles`;
+    // JST_OFFSET is kept for supplementary JST display alongside UTC
     const JST_OFFSET = 9 * 3600;
-    let useJST = true;
 
+    // Always return UTC unix timestamp from ISO string
     function toChartTime(isoStr) {
-      const ts = Math.floor(new Date(isoStr).getTime() / 1000);
-      return useJST ? ts + JST_OFFSET : ts;
+      return Math.floor(new Date(isoStr).getTime() / 1000);
     }
 
-    function makeTzFormatter(jst) {
-      const offset = jst ? JST_OFFSET : 0;
+    // Chart axis labels: compact UTC format "HH:MMZ"
+    function makeTzFormatter() {
       return (ts) => {
-        const d = new Date((ts + offset) * 1000);
-        return d.toISOString().slice(11, 16);
+        const d = new Date(ts * 1000);
+        return d.toISOString().slice(11, 16) + 'Z';
       };
+    }
+
+    // Format time as "HH:MM UTC (HH:MM JST)" for supplementary display
+    function formatTimeBoth(isoStr) {
+      const d = new Date(isoStr);
+      const utc = d.toISOString().slice(11, 16);
+      const jst = new Date(d.getTime() + JST_OFFSET * 1000).toISOString().slice(11, 16);
+      return `${utc}Z (${jst} JST)`;
     }
 
     // ── Chart setup ───────────────────────────────────────────────────────────
@@ -314,7 +322,7 @@
       rightPriceScale: { borderColor: '#0f3460', minimumWidth: 90 },
       timeScale: { borderColor: '#0f3460', timeVisible: true, secondsVisible: false },
       handleScale: { mouseWheel: false },
-      localization: { timeFormatter: makeTzFormatter(useJST) },
+      localization: { timeFormatter: makeTzFormatter() },
     };
 
     const chart = LightweightCharts.createChart(chartEl, {
@@ -626,9 +634,8 @@
     async function loadMoreHistory() {
       if (isLoadingHistory || !hasMoreHistory || candleData.length === 0) return;
       isLoadingHistory = true;
-      // candleData[0].time may include JST offset; strip it to get real UTC unix time
-      const jstOffset = useJST ? JST_OFFSET : 0;
-      const oldestUtc = candleData[0].time - jstOffset;
+      // candleData[0].time is UTC unix timestamp (toChartTime always returns UTC)
+      const oldestUtc = candleData[0].time;
       const to = new Date(oldestUtc * 1000).toISOString();
       const count = RES_COUNT[currentResolution] || 200;
       const url = `${BASE}/api/candles?resolution=${currentResolution}&count=${count}&to=${encodeURIComponent(to)}`;
@@ -945,10 +952,7 @@
           return;
         }
         tbody.innerHTML = orders.slice(0, 20).map(o => {
-          const d = new Date(o.created_at);
-          const timeStr = useJST
-            ? new Date(d.getTime() + JST_OFFSET * 1000).toISOString().slice(11, 16)
-            : d.toISOString().slice(11, 16);
+          const timeStr = formatTimeBoth(o.created_at);
           return `<tr>
             <td style="color:#666;font-size:11px;white-space:nowrap">${timeStr}</td>
             <td class="${o.side.toLowerCase()}">${o.side === 'BUY' ? '買' : '売'}</td>
@@ -1004,10 +1008,7 @@
           document.getElementById('price').textContent = Number(c.close).toLocaleString('ja-JP');
           currentPrice = Number(c.close);
           updateTotalBalance();
-          const nowStr = useJST
-            ? new Date().toLocaleTimeString('ja-JP')
-            : new Date().toUTCString().slice(17, 25) + ' UTC';
-          document.getElementById('last-update').textContent = '最終更新: ' + nowStr;
+          document.getElementById('last-update').textContent = '最終更新: ' + formatTimeBoth(new Date().toISOString());
         } catch (e) { console.warn('ws parse error', e); }
       };
 
@@ -1057,10 +1058,7 @@
           currentPrice = Number(t.ltp);
           updateBepLines(currentPrice);
           updateTotalBalance();
-          const nowStr = useJST
-            ? new Date().toLocaleTimeString('ja-JP')
-            : new Date().toUTCString().slice(17, 25) + ' UTC';
-          document.getElementById('last-update').textContent = '最終更新: ' + nowStr;
+          document.getElementById('last-update').textContent = '最終更新: ' + formatTimeBoth(new Date().toISOString());
         } catch (e) { console.warn('ticker ws parse error', e); }
       };
 
@@ -1111,8 +1109,11 @@
           const s = item.score;
           const badgeClass = s > 0.1 ? 'news-score-bullish' : s < -0.1 ? 'news-score-bearish' : 'news-score-neutral';
           const label = s > 0.1 ? '強気' : s < -0.1 ? '弱気' : '中立';
-          const t = new Date(item.published_at || item.analyzed_at);
-          const timeStr = `${t.getMonth()+1}/${t.getDate()} ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}`;
+          const isoSrc = item.published_at || item.analyzed_at;
+          const t = new Date(isoSrc);
+          const utcStr = t.toISOString().slice(5, 16).replace('T', ' ');  // MM-DD HH:MM
+          const jstStr = new Date(t.getTime() + JST_OFFSET * 1000).toISOString().slice(11, 16);
+          const timeStr = `${utcStr}Z (${jstStr} JST)`;
           return `<div class="news-item">
             <span class="news-score-badge ${badgeClass}">${label}</span>
             <span class="news-headline">${item.headline}</span>
@@ -1212,20 +1213,6 @@
     document.getElementById('btn-1h' ).addEventListener('click', () => switchResolution(3600));
     document.getElementById('btn-1d' ).addEventListener('click', () => switchResolution(86400));
 
-    // ── Timezone toggle ───────────────────────────────────────────────────────
-
-    document.getElementById('tz-toggle').addEventListener('click', () => {
-      useJST = !useJST;
-      document.getElementById('tz-toggle').textContent = useJST ? 'JST' : 'UTC';
-      const tzFmt = makeTzFormatter(useJST);
-      chart.applyOptions({ localization: { timeFormatter: tzFmt } });
-      rsiChart.applyOptions({ localization: { timeFormatter: tzFmt } });
-      macdChart.applyOptions({ localization: { timeFormatter: tzFmt } });
-      loadCandles();
-      loadOrders();
-      loadNews();
-      loadSignal();
-    });
 
     // ── Init ──────────────────────────────────────────────────────────────────
 

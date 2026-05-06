@@ -68,6 +68,7 @@ mod tests {
         let (ticker_tx, _) = broadcast::channel(16);
         let (signal_tx, _) = broadcast::channel(16);
         AppState {
+            product_code: "BTC_JPY".to_string(),
             db,
             exchange: mock,
             candle_tx,

@@ -288,6 +288,7 @@ async fn main() -> anyhow::Result<()> {
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], api_port));
 
     let api_state = api::AppState {
+        product_code: "BTC_JPY".to_string(),
         db: db.clone(),
         exchange: Arc::clone(&client),
         candle_tx: market_bus.candle_tx(),

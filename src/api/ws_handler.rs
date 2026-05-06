@@ -14,7 +14,7 @@ use tracing::{info, warn};
 
 use crate::api::AppState;
 use crate::exchange::bitflyer::ws::WsMessage;
-use crate::market::candle_aggregator::CandleAggregator;
+use crate::market::candle_aggregator::build_seeded_aggregator;
 use crate::types::market::Candle;
 
 /// WS /ws/candles のクエリパラメータ
@@ -56,8 +56,13 @@ async fn get_aggregator(
     // MarketDataBus と同じ方式で個別約定価格から正確な high/low を計算する
     let weak_tx = Arc::downgrade(&arc_tx);
     let mut ws_rx = state.ws_tx.subscribe();
+    // NOTE: state.db を clone して spawn 内で pre-seed に使用する
+    let db_clone = state.db.clone();
+    let pc = state.product_code.clone();
     tokio::spawn(async move {
-        let mut agg = CandleAggregator::new("BTC_JPY".to_string(), resolution_secs);
+        // 起動時バケット内の保存済み Ticker を DB から取得して pre-seed し、
+        // 接続タイミングがバケット途中でも OHLCV が欠損しないようにする。
+        let mut agg = build_seeded_aggregator(&pc, resolution_secs, &db_clone).await;
         info!("CandleAggregator task started (resolution={}s)", resolution_secs);
         loop {
             // 全接続が切れた（Arc refcount=0）ならタスク終了

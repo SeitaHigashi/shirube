@@ -1,6 +1,8 @@
 use chrono::{DateTime, TimeZone, Utc};
 use rust_decimal::Decimal;
+use tracing::{info, warn};
 
+use crate::storage::db::Database;
 use crate::types::market::{Candle, Ticker, Trade};
 
 /// Accumulates raw price events (trades or tickers) into fixed-duration
@@ -148,6 +150,52 @@ impl CandleAggregator {
             }
         }
     }
+}
+
+/// `CandleAggregator` を生成し、起動時バケット内の保存済み Ticker を DB から
+/// 取得して事前投入（pre-seed）する。
+///
+/// 起動タイミングがバケットの途中であっても、バケット先頭からのデータを
+/// アグリゲーターに反映させることで OHLCV の欠損を防ぐ。
+///
+/// DB 取得に失敗した場合は警告ログを出力し、空の状態でアグリゲーターを返す。
+pub async fn build_seeded_aggregator(
+    product_code: &str,
+    resolution_secs: u32,
+    db: &Database,
+) -> CandleAggregator {
+    let mut agg = CandleAggregator::new(product_code.to_string(), resolution_secs);
+
+    // 現在バケットの開始・終了時刻を計算する
+    let now = Utc::now();
+    let bucket_start_ts =
+        (now.timestamp() / resolution_secs as i64) * resolution_secs as i64;
+    let bucket_start = Utc.timestamp_opt(bucket_start_ts, 0).unwrap();
+    let bucket_end_ts = bucket_start_ts + resolution_secs as i64;
+    let bucket_end = Utc.timestamp_opt(bucket_end_ts, 0).unwrap();
+
+    match db.tickers().range(product_code, bucket_start, bucket_end).await {
+        Ok(stored) => {
+            let count = stored.len();
+            for st in &stored {
+                agg.feed_ticker(&Ticker::from(st));
+            }
+            if count > 0 {
+                info!(
+                    "Pre-seeded {} tickers into CandleAggregator for bucket {}",
+                    count, bucket_start
+                );
+            }
+        }
+        Err(e) => {
+            warn!(
+                "Failed to pre-seed CandleAggregator from DB: {}. Starting from scratch.",
+                e
+            );
+        }
+    }
+
+    agg
 }
 
 #[cfg(test)]

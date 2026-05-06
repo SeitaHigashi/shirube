@@ -66,6 +66,7 @@ mod tests {
         let (ticker_tx, _) = broadcast::channel(16);
         let (signal_tx, _) = broadcast::channel(16);
         let state = AppState {
+            product_code: "BTC_JPY".to_string(),
             db: db.clone(),
             exchange: mock,
             candle_tx,

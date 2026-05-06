@@ -27,6 +27,8 @@ pub type AggregatorRegistry =
 
 #[derive(Clone)]
 pub struct AppState {
+    /// 取引対象のプロダクトコード（例: "BTC_JPY"）
+    pub product_code: String,
     pub db: Database,
     pub exchange: Arc<dyn ExchangeClient>,
     pub candle_tx: broadcast::Sender<Candle>,

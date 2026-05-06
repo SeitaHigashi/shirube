@@ -292,6 +292,9 @@ async fn main() -> anyhow::Result<()> {
         candle_tx: market_bus.candle_tx(),
         ticker_tx: market_bus.ticker_tx(),
         signal_tx: signal_engine_tx,
+        aggregator_registry: std::sync::Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
         latest_signal,
         news_cache,
         trading_config: Arc::clone(&trading_config),

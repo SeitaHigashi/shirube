@@ -287,7 +287,7 @@
 
   <script>
     const BASE = `${location.protocol}//${location.host}`;
-    const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/candles`;
+    const WS_CANDLE_BASE = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/candles`;
     const JST_OFFSET = 9 * 3600;
     let useJST = true;
 
@@ -605,27 +605,6 @@
     let isLoadingHistory = false;
     let hasMoreHistory = true;
     let currentResolution = 60; // 現在選択中の足種（秒）
-    let ws1mBuffer = [];        // 1分足より長い足表示時のWS受信バッファ
-
-    // 任意のresolutionSecs単位でキャンドルを集約する汎用関数
-    function aggregateCandles(candles, resolutionSecs) {
-      const buckets = new Map();
-      for (const c of candles) {
-        const jstOffset = useJST ? JST_OFFSET : 0;
-        const utcTime = c.time - jstOffset;
-        const bucketUtc = Math.floor(utcTime / resolutionSecs) * resolutionSecs;
-        const bucketTime = bucketUtc + jstOffset;
-        if (!buckets.has(bucketTime)) {
-          buckets.set(bucketTime, { time: bucketTime, open: c.open, high: c.high, low: c.low, close: c.close });
-        } else {
-          const b = buckets.get(bucketTime);
-          b.high = Math.max(b.high, c.high);
-          b.low  = Math.min(b.low, c.low);
-          b.close = c.close;
-        }
-      }
-      return Array.from(buckets.values()).sort((a, b) => a.time - b.time);
-    }
 
     const RES_BTN_ID = { 60: 'btn-1m', 300: 'btn-5m', 900: 'btn-15m', 3600: 'btn-1h', 86400: 'btn-1d' };
     const RES_LABEL  = { 60: '1分足', 300: '5分足', 900: '15分足', 3600: '1時間足', 86400: '日足' };
@@ -638,9 +617,10 @@
       if (btnId) document.getElementById(btnId).classList.add('active');
       document.getElementById('chart-title').textContent = `BTC/JPY — ${RES_LABEL[res] || res + '秒足'}`;
       candleData = [];
-      ws1mBuffer = [];
       hasMoreHistory = true;
       loadCandles();
+      // 新しい解像度で WS を再接続（バックエンドが指定解像度のローソク足を配信する）
+      reconnectCandleWS();
     }
 
     async function loadMoreHistory() {
@@ -984,8 +964,21 @@
     // ── WebSocket for real-time candles ───────────────────────────────────────
 
     let ws = null;
+
+    // 現在の resolution で WS を（再）接続する。
+    // switchResolution() 呼び出し時も再接続するため、旧接続を先に閉じる。
+    function reconnectCandleWS() {
+      if (ws) {
+        ws.onclose = null; // 自動再接続を抑制してから閉じる
+        ws.close();
+        ws = null;
+      }
+      connectWS();
+    }
+
     function connectWS() {
-      ws = new WebSocket(WS_URL);
+      const wsUrl = `${WS_CANDLE_BASE}?resolution=${currentResolution}`;
+      ws = new WebSocket(wsUrl);
       const statusEl = document.getElementById('ws-status');
 
       ws.onopen = () => {
@@ -996,32 +989,16 @@
       ws.onmessage = (evt) => {
         try {
           const c = JSON.parse(evt.data);
-          const bar1m = {
+          // バックエンドが currentResolution の解像度で集約済みのローソク足を送信するため、
+          // クライアント側での集計は不要。そのままチャートに反映する。
+          const bar = {
             time: toChartTime(c.open_time),
             open: parseFloat(c.open), high: parseFloat(c.high),
             low: parseFloat(c.low), close: parseFloat(c.close),
           };
-
-          if (currentResolution === 60) {
-            // 1分足モード: 従来通りの処理
-            candleSeries.update(bar1m);
-            const idx = candleData.findIndex(d => d.time === bar1m.time);
-            if (idx >= 0) { candleData[idx] = bar1m; } else { candleData.push(bar1m); candleData.sort((a, b) => a.time - b.time); }
-          } else {
-            // 長い足モード: 1分足をバッファに蓄積し集約してチャートを更新
-            const idx = ws1mBuffer.findIndex(d => d.time === bar1m.time);
-            if (idx >= 0) { ws1mBuffer[idx] = bar1m; } else { ws1mBuffer.push(bar1m); ws1mBuffer.sort((a, b) => a.time - b.time); }
-            // 最新N本だけ保持してメモリを節約
-            if (ws1mBuffer.length > 1000) ws1mBuffer = ws1mBuffer.slice(-1000);
-            // 集約結果でcandleDataの末尾を更新
-            const aggregated = aggregateCandles([...candleData.slice(-currentResolution), ...ws1mBuffer], currentResolution);
-            if (aggregated.length > 0) {
-              const latestAgg = aggregated[aggregated.length - 1];
-              const aidx = candleData.findIndex(d => d.time === latestAgg.time);
-              if (aidx >= 0) { candleData[aidx] = latestAgg; } else { candleData.push(latestAgg); candleData.sort((a, b) => a.time - b.time); }
-              candleSeries.update(latestAgg);
-            }
-          }
+          candleSeries.update(bar);
+          const idx = candleData.findIndex(d => d.time === bar.time);
+          if (idx >= 0) { candleData[idx] = bar; } else { candleData.push(bar); }
           // インジケーターをバックエンド API から再取得（debounce で 500ms 待機）
           debouncedRenderIndicators();
           document.getElementById('price').textContent = Number(c.close).toLocaleString('ja-JP');

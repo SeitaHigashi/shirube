@@ -37,6 +37,7 @@ mod tests {
             candle_tx,
             ticker_tx,
             signal_tx,
+            aggregator_registry: std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
             latest_signal: Arc::new(RwLock::new(None)),
             news_cache: Arc::new(RwLock::new(scores)),
             trading_config: Arc::new(RwLock::new(crate::config::TradingConfig::default())),

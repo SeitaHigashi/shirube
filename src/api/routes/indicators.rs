@@ -81,6 +81,7 @@ mod tests {
             candle_tx,
             ticker_tx,
             signal_tx,
+            aggregator_registry: std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
             latest_signal: Arc::new(tokio::sync::RwLock::new(None)),
             news_cache: Arc::new(tokio::sync::RwLock::new(vec![])),
             trading_config: Arc::new(tokio::sync::RwLock::new(

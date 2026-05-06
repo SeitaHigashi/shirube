@@ -1,16 +1,96 @@
+use std::sync::Arc;
+
 use axum::{
     extract::{
         ws::{Message, WebSocket},
-        State, WebSocketUpgrade,
+        Query, State, WebSocketUpgrade,
     },
     response::Response,
 };
 use futures_util::{SinkExt, StreamExt};
-use tokio::sync::broadcast::error::RecvError;
+use serde::Deserialize;
+use tokio::sync::broadcast::{self, error::RecvError};
 use tracing::{info, warn};
 
 use crate::api::AppState;
-use crate::signal::SignalDetail;
+use crate::market::candle_aggregator::CandleAggregator;
+use crate::types::market::Candle;
+
+/// WS /ws/candles のクエリパラメータ
+#[derive(Deserialize)]
+pub struct CandleQuery {
+    /// ローソク足の解像度（秒）。省略時は 60（1分足）
+    pub resolution: Option<u32>,
+}
+
+/// AggregatorRegistry からエントリを取得、または新規作成する。
+///
+/// - 既存の Arc<Sender> が生きていれば subscribe() して返す
+/// - 死んでいれば（全接続が切れていれば）新規 CandleAggregator タスクを spawn する
+///
+/// 返却した Arc<Sender> を WS接続が保持することで、接続中は Sender が生存し続ける。
+/// 最後の接続が Arc を drop した時点で Sender が自動 drop され、
+/// タスク内の Weak::upgrade() が None を返してタスクが自動終了する。
+async fn get_aggregator(
+    state: &AppState,
+    resolution_secs: u32,
+) -> (Arc<broadcast::Sender<Candle>>, broadcast::Receiver<Candle>) {
+    let mut registry = state.aggregator_registry.lock().await;
+
+    // 既存エントリの Weak が生きているか確認
+    if let Some(weak) = registry.get(&resolution_secs) {
+        if let Some(strong) = weak.upgrade() {
+            let rx = strong.subscribe();
+            return (strong, rx);
+        }
+    }
+
+    // 新規: broadcast チャンネルと Arc<Sender> を作成してレジストリに登録
+    let (tx, rx) = broadcast::channel::<Candle>(256);
+    let arc_tx = Arc::new(tx);
+    registry.insert(resolution_secs, Arc::downgrade(&arc_tx));
+
+    // バックグラウンドタスク: Weak<Sender> を持ち、upgrade 失敗時に自動終了
+    let weak_tx = Arc::downgrade(&arc_tx);
+    let mut ticker_rx = state.ticker_tx.subscribe();
+    tokio::spawn(async move {
+        let mut agg = CandleAggregator::new("BTC_JPY".to_string(), resolution_secs);
+        info!("CandleAggregator task started (resolution={}s)", resolution_secs);
+        loop {
+            // 全接続が切れた（Arc refcount=0）ならタスク終了
+            let Some(tx) = weak_tx.upgrade() else {
+                info!("CandleAggregator task stopping (resolution={}s, no active connections)", resolution_secs);
+                break;
+            };
+
+            match ticker_rx.recv().await {
+                Ok(ticker) => {
+                    // 確定した Candle を broadcast（受信者がいなければ無視）
+                    if let Some(candle) = agg.feed_ticker(&ticker) {
+                        let _ = tx.send(candle);
+                    }
+                    // Partial candle（進行中の未確定ローソク）もリアルタイムで push
+                    if let Some(partial) = agg.peek_current() {
+                        let _ = tx.send(partial);
+                    }
+                    // Arc を明示的に drop して次の upgrade まで保持しない
+                    drop(tx);
+                }
+                Err(RecvError::Lagged(n)) => {
+                    warn!("CandleAggregator ticker stream lagged by {} (resolution={}s)", n, resolution_secs);
+                    drop(tx);
+                }
+                Err(RecvError::Closed) => {
+                    info!("Ticker broadcast channel closed (resolution={}s)", resolution_secs);
+                    break;
+                }
+            }
+        }
+        // agg はここで自動 drop
+    });
+
+    (arc_tx, rx)
+}
 
 pub async fn ws_tickers(
     ws: WebSocketUpgrade,
@@ -112,15 +192,25 @@ async fn handle_signal_socket(socket: WebSocket, state: AppState) {
     }
 }
 
+/// WebSocket エンドポイント: /ws/candles?resolution=<秒>
+///
+/// resolution パラメータで要求された解像度の CandleAggregator を
+/// AggregatorRegistry から取得（または新規作成）してリアルタイムに配信する。
+/// Arc<Sender> を保持することで接続中はアグリゲーターが生存し続け、
+/// 全接続切断時は Sender が自動 drop されてバックグラウンドタスクも終了する。
 pub async fn ws_candles(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
+    Query(params): Query<CandleQuery>,
 ) -> Response {
-    ws.on_upgrade(move |socket| handle_candle_socket(socket, state))
+    let resolution = params.resolution.unwrap_or(60);
+    ws.on_upgrade(move |socket| handle_candle_socket(socket, state, resolution))
 }
 
-async fn handle_candle_socket(socket: WebSocket, state: AppState) {
-    let mut rx = state.candle_tx.subscribe();
+async fn handle_candle_socket(socket: WebSocket, state: AppState, resolution_secs: u32) {
+    // Arc<Sender> を受け取ることで接続中は Sender（とタスク）が生存し続ける
+    let (arc_sender, mut rx) = get_aggregator(&state, resolution_secs).await;
+
     let (mut sender, mut receiver) = socket.split();
 
     // クライアントからのメッセージを受け取るタスク（ping-pong / close 検出）
@@ -150,11 +240,11 @@ async fn handle_candle_socket(socket: WebSocket, state: AppState) {
                             break;
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("WS candle stream lagged by {}", n);
+                    Err(RecvError::Lagged(n)) => {
+                        warn!("WS candle stream lagged by {} (resolution={}s)", n, resolution_secs);
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        info!("Candle broadcast channel closed");
+                    Err(RecvError::Closed) => {
+                        info!("Candle broadcast channel closed (resolution={}s)", resolution_secs);
                         break;
                     }
                 }
@@ -162,4 +252,7 @@ async fn handle_candle_socket(socket: WebSocket, state: AppState) {
             _ = &mut recv_task => break,
         }
     }
+
+    // arc_sender がここで drop → 最後の接続なら Sender の refcount=0 → タスク自動終了
+    drop(arc_sender);
 }

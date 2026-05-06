@@ -269,4 +269,24 @@ mod tests {
         let candle = agg.feed_ticker(&ticker(60, dec!(9005000))).unwrap();
         assert_eq!(candle.high, dec!(9010000));
     }
+
+    /// 起動前のバケット内データを事前投入した場合、最初の確定 Candle が
+    /// 事前投入分のデータを含むことを確認する。
+    /// DB からウォームアップした Ticker を feed_ticker で投入するシナリオを模擬する。
+    #[test]
+    fn pre_seeded_tickers_are_reflected_in_first_candle() {
+        let mut agg = CandleAggregator::new("BTC_JPY".into(), 60);
+        // バケット前半（0〜29秒）: 起動前に DB に保存済みのデータとして事前投入
+        agg.feed_ticker(&ticker(0, dec!(9000000)));
+        agg.feed_ticker(&ticker(15, dec!(9010000)));
+        agg.feed_ticker(&ticker(29, dec!(8990000)));
+        // バケット後半（30〜59秒）: WS 受信後のデータ
+        agg.feed_ticker(&ticker(45, dec!(9005000)));
+        // 新バケット到着で旧バケット確定
+        let candle = agg.feed_ticker(&ticker(60, dec!(9020000))).unwrap();
+        assert_eq!(candle.open, dec!(9000000));  // 事前投入の最初
+        assert_eq!(candle.high, dec!(9010000));  // 事前投入の高値
+        assert_eq!(candle.low, dec!(8990000));   // 事前投入の安値
+        assert_eq!(candle.close, dec!(9005000)); // WS 受信の最後
+    }
 }

@@ -70,6 +70,23 @@ pub struct StoredTicker {
     pub volume_by_product: Decimal,
 }
 
+/// `StoredTicker` を `Ticker` に変換する。ltp を価格代表値として使用する。
+impl From<&StoredTicker> for Ticker {
+    fn from(st: &StoredTicker) -> Self {
+        Ticker {
+            product_code: st.product_code.clone(),
+            timestamp: st.timestamp,
+            best_bid: st.best_bid,
+            best_ask: st.best_ask,
+            best_bid_size: st.best_bid_size,
+            best_ask_size: st.best_ask_size,
+            ltp: st.ltp,
+            volume: st.volume,
+            volume_by_product: st.volume_by_product,
+        }
+    }
+}
+
 /// 自分の約定履歴（`GET /v1/me/getexecutions` レスポンス）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MyExecution {

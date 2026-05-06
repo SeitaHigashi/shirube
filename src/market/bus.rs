@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use chrono::{TimeZone, Utc};
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
@@ -47,6 +48,35 @@ impl MarketDataBus {
             let mut ws_rx = ws_tx.subscribe();
             tokio::spawn(async move {
                 let mut agg = CandleAggregator::new(pc.clone(), resolution_secs);
+
+                // 起動時刻が分の途中の場合のデータロストを防ぐため、DB に保存済みの
+                // 現在バケット内 Ticker を事前投入してアグリゲーターをウォームアップする。
+                // 例: 11:40:30 起動 → 11:40:00〜11:40:30 の Ticker を取得して feed する。
+                let now = Utc::now();
+                let bucket_start_ts =
+                    (now.timestamp() / resolution_secs as i64) * resolution_secs as i64;
+                let bucket_start = Utc.timestamp_opt(bucket_start_ts, 0).unwrap();
+                match db_ws.tickers().range(&pc, bucket_start, now).await {
+                    Ok(stored) => {
+                        let count = stored.len();
+                        for st in &stored {
+                            agg.feed_ticker(&Ticker::from(st));
+                        }
+                        if count > 0 {
+                            info!(
+                                "Pre-seeded {} tickers into CandleAggregator for bucket {}",
+                                count, bucket_start
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to pre-seed CandleAggregator from DB: {}. Starting from scratch.",
+                            e
+                        );
+                    }
+                }
+
                 loop {
                     match ws_rx.recv().await {
                         Ok(WsMessage::Executions(trades)) => {

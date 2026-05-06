@@ -401,28 +401,32 @@
     // produces accurate alignment without zoom drift.
     // syncingRange flag prevents circular re-entrancy.
     chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-      rsiChart.timeScale().setVisibleLogicalRange(range);
-      macdChart.timeScale().setVisibleLogicalRange(range);
+      //if (rsiChart.timeScale().getVisibleLogicalRange() != range) {
+      //  rsiChart.timeScale().setVisibleLogicalRange(range);
+      //}
+      //if (macdChart.timeScale().getVisibleLogicalRange() != range) {
+      //  macdChart.timeScale().setVisibleLogicalRange(range);
+      //}
       if (range === null) return;
-      if (range.from < 15) {
+      if (range.from < 10) {
         loadMoreHistory();
       } 
     });
     rsiChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-      chart.timeScale().setVisibleLogicalRange(range);
-      macdChart.timeScale().setVisibleLogicalRange(range);
-      if (range === null) return;
-      if (range.from < 15) {
-        loadMoreHistory();
-      } 
+      //chart.timeScale().setVisibleLogicalRange(range);
+      //macdChart.timeScale().setVisibleLogicalRange(range);
+      //if (range === null) return;
+      //if (range.from < 10) {
+      //  loadMoreHistory();
+      //} 
     });
     macdChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-      chart.timeScale().setVisibleLogicalRange(range);
-      rsiChart.timeScale().setVisibleLogicalRange(range);
-      if (range === null) return;
-      if (range.from < 15) {
-        loadMoreHistory();
-      } 
+      //chart.timeScale().setVisibleLogicalRange(range);
+      //rsiChart.timeScale().setVisibleLogicalRange(range);
+      //if (range === null) return;
+      //if (range.from < 10) {
+      //  loadMoreHistory();
+      //} 
     });
 
     // ── Cursor-anchored zoom (wheel) ──────────────────────────────────────────
@@ -450,15 +454,15 @@
 
       // Keep cursorLogical at the same screen fraction after zoom.
       const newFrom = cursorLogical - fraction * newVisibleBars;
-      const newTo   = cursorLogical + (1 - fraction) * newVisibleBars;
+      //const newTo   = cursorLogical + (1 - fraction) * newVisibleBars;
+      const newTo   = range.to;
 
-      syncingRange = true;
+
       chart.timeScale().setVisibleLogicalRange({ from: newFrom, to: newTo });
-      rsiChart.timeScale().setVisibleLogicalRange({ from: newFrom, to: newTo });
-      macdChart.timeScale().setVisibleLogicalRange({ from: newFrom, to: newTo });
-      syncingRange = false;
+      //rsiChart.timeScale().setVisibleLogicalRange({ from: newFrom, to: newTo });
+      //macdChart.timeScale().setVisibleLogicalRange({ from: newFrom, to: newTo });
 
-      if (newFrom <= 10) loadMoreHistory();
+      //if (newFrom <= 10) loadMoreHistory();
     }
 
     // Attach to all three chart containers so sub-charts also respond.
@@ -666,16 +670,14 @@
         // New candles are prepended, so logical indices shift by newData.length.
         const savedRange = chart.timeScale().getVisibleLogicalRange();
         candleData = [...newData, ...candleData];
-        candleSeries.setData(candleData);
         // Restore range with offset so the viewport stays at the same position.
         if (savedRange) {
           const offset = newData.length;
+          candleSeries.setData(candleData);
           const restoredRange = { from: savedRange.from + offset, to: savedRange.to + offset };
-          syncingRange = true;
           chart.timeScale().setVisibleLogicalRange(restoredRange);
-          rsiChart.timeScale().setVisibleLogicalRange(restoredRange);
-          macdChart.timeScale().setVisibleLogicalRange(restoredRange);
-          syncingRange = false;
+          //rsiChart.timeScale().setVisibleLogicalRange(restoredRange);
+          //macdChart.timeScale().setVisibleLogicalRange(restoredRange);
         }
         loadAndRenderIndicators();
       } catch (e) {
@@ -689,83 +691,79 @@
 
     // API から取得した IndicatorPoint[] をチャートシリーズにセットする。
     // バックエンドと同一ロジックで計算された値を使用するため、JS での再計算は不要。
-    function renderIndicators(points) {
-      if (!points || points.length === 0) return;
+    //function renderIndicators(points) {
+    //  if (!points || points.length === 0) return;
 
-      // setData() 呼び出し前に現在の表示範囲を保存し、範囲同期を一時停止
-      const savedRange = chart.timeScale().getVisibleLogicalRange();
-      syncingRange = true;
+    //  // setData() 呼び出し前に現在の表示範囲を保存し、範囲同期を一時停止
+    //  const savedRange = chart.timeScale().getVisibleLogicalRange();
 
-      // IndicatorPoint の time (ISO 8601) をチャート用タイムスタンプに変換
-      const toT = p => toChartTime(p.time);
+    //  // IndicatorPoint の time (ISO 8601) をチャート用タイムスタンプに変換
+    //  const toT = p => toChartTime(p.time);
 
-      // SMA (初回は visible: false で作成されているため、ここで表示する)
-      smaSeries.applyOptions({ visible: true });
-      smaSeries.setData(points.filter(p => p.sma != null).map(p => ({ time: toT(p), value: p.sma })));
+    //  // SMA (初回は visible: false で作成されているため、ここで表示する)
+    //  smaSeries.applyOptions({ visible: true });
+    //  smaSeries.setData(points.filter(p => p.sma != null).map(p => ({ time: toT(p), value: p.sma })));
 
-      // EMA
-      emaSeries.applyOptions({ visible: true });
-      emaSeries.setData(points.filter(p => p.ema != null).map(p => ({ time: toT(p), value: p.ema })));
+    //  // EMA
+    //  emaSeries.applyOptions({ visible: true });
+    //  emaSeries.setData(points.filter(p => p.ema != null).map(p => ({ time: toT(p), value: p.ema })));
 
-      // Bollinger Bands
-      bbUpperSeries.applyOptions({ visible: true });
-      bbMiddleSeries.applyOptions({ visible: true });
-      bbLowerSeries.applyOptions({ visible: true });
-      bbUpperSeries.setData(points.filter(p => p.bb_upper != null).map(p => ({ time: toT(p), value: p.bb_upper })));
-      bbMiddleSeries.setData(points.filter(p => p.bb_middle != null).map(p => ({ time: toT(p), value: p.bb_middle })));
-      bbLowerSeries.setData(points.filter(p => p.bb_lower != null).map(p => ({ time: toT(p), value: p.bb_lower })));
+    //  // Bollinger Bands
+    //  bbUpperSeries.applyOptions({ visible: true });
+    //  bbMiddleSeries.applyOptions({ visible: true });
+    //  bbLowerSeries.applyOptions({ visible: true });
+    //  bbUpperSeries.setData(points.filter(p => p.bb_upper != null).map(p => ({ time: toT(p), value: p.bb_upper })));
+    //  bbMiddleSeries.setData(points.filter(p => p.bb_middle != null).map(p => ({ time: toT(p), value: p.bb_middle })));
+    //  bbLowerSeries.setData(points.filter(p => p.bb_lower != null).map(p => ({ time: toT(p), value: p.bb_lower })));
 
-      // RSI sub-chart
-      rsiEl.style.display = 'block';
-      rsiLabelEl.style.display = 'block';
-      const rsiData = points.filter(p => p.rsi != null).map(p => ({ time: toT(p), value: p.rsi }));
-      rsiSeries.setData(rsiData);
-      // OB/OS 基準線は RSI データ範囲のタイムスタンプに合わせる
-      const rsiTimes = rsiData.map(d => d.time);
-      rsiOBSeries.setData(rsiTimes.map(t => ({ time: t, value: 70 })));
-      rsiOSSeries.setData(rsiTimes.map(t => ({ time: t, value: 30 })));
+    //  // RSI sub-chart
+    //  rsiEl.style.display = 'block';
+    //  rsiLabelEl.style.display = 'block';
+    //  const rsiData = points.filter(p => p.rsi != null).map(p => ({ time: toT(p), value: p.rsi }));
+    //  rsiSeries.setData(rsiData);
+    //  // OB/OS 基準線は RSI データ範囲のタイムスタンプに合わせる
+    //  const rsiTimes = rsiData.map(d => d.time);
+    //  rsiOBSeries.setData(rsiTimes.map(t => ({ time: t, value: 70 })));
+    //  rsiOSSeries.setData(rsiTimes.map(t => ({ time: t, value: 30 })));
 
-      // MACD sub-chart
-      macdEl.style.display = 'block';
-      macdLabelEl.style.display = 'block';
-      macdLineSeries.setData(points.filter(p => p.macd_line != null).map(p => ({ time: toT(p), value: p.macd_line })));
-      macdSignalSeries.setData(points.filter(p => p.signal_line != null).map(p => ({ time: toT(p), value: p.signal_line })));
-      macdHistSeries.setData(points.filter(p => p.histogram != null).map(p => ({
-        time: toT(p), value: p.histogram,
-        color: p.histogram >= 0 ? '#26a69a' : '#ef5350',
-      })));
+    //  // MACD sub-chart
+    //  macdEl.style.display = 'block';
+    //  macdLabelEl.style.display = 'block';
+    //  macdLineSeries.setData(points.filter(p => p.macd_line != null).map(p => ({ time: toT(p), value: p.macd_line })));
+    //  macdSignalSeries.setData(points.filter(p => p.signal_line != null).map(p => ({ time: toT(p), value: p.signal_line })));
+    //  macdHistSeries.setData(points.filter(p => p.histogram != null).map(p => ({
+    //    time: toT(p), value: p.histogram,
+    //    color: p.histogram >= 0 ? '#26a69a' : '#ef5350',
+    //  })));
 
-      // 保存した表示範囲を全チャートに復元
-      syncingRange = false;
-      if (savedRange) {
-        syncingRange = true;
-        chart.timeScale().setVisibleLogicalRange(savedRange);
-        rsiChart.timeScale().setVisibleLogicalRange(savedRange);
-        macdChart.timeScale().setVisibleLogicalRange(savedRange);
-        syncingRange = false;
-      }
-      resizeCharts();
-    }
+    //  // 保存した表示範囲を全チャートに復元
+    //  if (savedRange) {
+    //    chart.timeScale().setVisibleLogicalRange(savedRange);
+    //    rsiChart.timeScale().setVisibleLogicalRange(savedRange);
+    //    macdChart.timeScale().setVisibleLogicalRange(savedRange);
+    //  }
+    //  resizeCharts();
+    //}
 
     // バックエンド API からインジケーター値を取得してチャートに反映する
     async function loadAndRenderIndicators() {
-      try {
-        const count = RES_COUNT[currentResolution] || 200;
-        const url = `${BASE}/api/indicators?resolution=${currentResolution}&count=${count}`;
-        const res = await fetch(url);
-        if (!res.ok) return;
-        const points = await res.json();
-        renderIndicators(points);
-      } catch (e) { console.warn('indicator load failed', e); }
-    }
+    //  try {
+    //    const count = RES_COUNT[currentResolution] || 200;
+    //    const url = `${BASE}/api/indicators?resolution=${currentResolution}&count=${count}`;
+    //    const res = await fetch(url);
+    //    if (!res.ok) return;
+    //    const points = await res.json();
+    //    //renderIndicators(points);
+    //  } catch (e) { console.warn('indicator load failed', e); }
+    //}
 
-    // WS で新しいキャンドルが届くたびに呼ばれる debounce 版。
-    // インジケーターはローソク足レベルの更新で十分なため、3秒でデバウンスして
-    // 連続した WS メッセージによる API 過呼び出しを防ぐ。
-    let renderIndicatorsTimer = null;
-    function debouncedRenderIndicators() {
-      if (renderIndicatorsTimer) clearTimeout(renderIndicatorsTimer);
-      renderIndicatorsTimer = setTimeout(loadAndRenderIndicators, 3000);
+    //// WS で新しいキャンドルが届くたびに呼ばれる debounce 版。
+    //// インジケーターはローソク足レベルの更新で十分なため、3秒でデバウンスして
+    //// 連続した WS メッセージによる API 過呼び出しを防ぐ。
+    //let renderIndicatorsTimer = null;
+    //function debouncedRenderIndicators() {
+    //  if (renderIndicatorsTimer) clearTimeout(renderIndicatorsTimer);
+    //  renderIndicatorsTimer = setTimeout(loadAndRenderIndicators, 3000);
     }
 
     // ── Load historical candles ───────────────────────────────────────────────
@@ -888,27 +886,27 @@
     }
 
     function updateTradeMarkers(orders) {
-      // 同一時刻の注文をグループ化して1マーカーに集約
-      const groups = new Map();
-      for (const o of orders) {
-        const t = toChartTime(o.created_at);
-        if (!groups.has(t)) groups.set(t, []);
-        groups.get(t).push(o);
-      }
-      tradeMarkers = Array.from(groups.entries()).map(([t, group]) => {
-        const hasBuy  = group.some(o => o.side === 'BUY');
-        const hasSell = group.some(o => o.side === 'SELL');
-        const dominant = group[group.length - 1].side;
-        return {
-          time: t,
-          position: dominant === 'BUY' ? 'belowBar' : 'aboveBar',
-          color: hasBuy && hasSell ? '#ffb300'
-               : dominant === 'BUY' ? '#26a69a' : '#ef5350',
-          shape: dominant === 'BUY' ? 'arrowUp' : 'arrowDown',
-          text: hasBuy && hasSell ? '売買' : dominant === 'BUY' ? '買' : '売',
-        };
-      }).sort((a, b) => a.time - b.time);
-      applyAllMarkers();
+    //  // 同一時刻の注文をグループ化して1マーカーに集約
+    //  const groups = new Map();
+    //  for (const o of orders) {
+    //    const t = toChartTime(o.created_at);
+    //    if (!groups.has(t)) groups.set(t, []);
+    //    groups.get(t).push(o);
+    //  }
+    //  tradeMarkers = Array.from(groups.entries()).map(([t, group]) => {
+    //    const hasBuy  = group.some(o => o.side === 'BUY');
+    //    const hasSell = group.some(o => o.side === 'SELL');
+    //    const dominant = group[group.length - 1].side;
+    //    return {
+    //      time: t,
+    //      position: dominant === 'BUY' ? 'belowBar' : 'aboveBar',
+    //      color: hasBuy && hasSell ? '#ffb300'
+    //           : dominant === 'BUY' ? '#26a69a' : '#ef5350',
+    //      shape: dominant === 'BUY' ? 'arrowUp' : 'arrowDown',
+    //      text: hasBuy && hasSell ? '売買' : dominant === 'BUY' ? '買' : '売',
+    //    };
+    //  }).sort((a, b) => a.time - b.time);
+    //  applyAllMarkers();
     }
 
     // Snap an arbitrary timestamp to the nearest candle time so that
@@ -923,35 +921,35 @@
     }
 
     function updateNewsMarkers(items) {
-      const fixedData = [];
-      const markers = [];
+      //const fixedData = [];
+      //const markers = [];
 
-      items
-        .filter(item => item.score > 0.1 || item.score < -0.1)
-        .forEach(item => {
-          const isBullish = item.score > 0.1;
-          const timeStr = item.published_at || item.analyzed_at;
-          if (!timeStr) return;
-          const t = snapToCandle(toChartTime(timeStr));
+      //items
+      //  .filter(item => item.score > 0.1 || item.score < -0.1)
+      //  .forEach(item => {
+      //    const isBullish = item.score > 0.1;
+      //    const timeStr = item.published_at || item.analyzed_at;
+      //    if (!timeStr) return;
+      //    const t = snapToCandle(toChartTime(timeStr));
 
-          fixedData.push({ time: t, value: isBullish ? 0.05 : 0.95 });
-          markers.push({
-            time: t,
-            position: 'inBar',
-            color: isBullish ? '#26a69a' : '#ef5350',
-            shape: isBullish ? 'arrowUp' : 'arrowDown',
-            text: isBullish ? '強気' : '弱気',
-            size: 1,
-          });
-        });
+      //    fixedData.push({ time: t, value: isBullish ? 0.05 : 0.95 });
+      //    markers.push({
+      //      time: t,
+      //      position: 'inBar',
+      //      color: isBullish ? '#26a69a' : '#ef5350',
+      //      shape: isBullish ? 'arrowUp' : 'arrowDown',
+      //      text: isBullish ? '強気' : '弱気',
+      //      size: 1,
+      //    });
+      //  });
 
-      // 同一時刻の重複を排除してソート（setData の要件）
-      const dedupData = [...new Map(fixedData.map(d => [d.time, d])).values()]
-        .sort((a, b) => a.time - b.time);
-      newsFixedSeries.setData(dedupData);
+      //// 同一時刻の重複を排除してソート（setData の要件）
+      //const dedupData = [...new Map(fixedData.map(d => [d.time, d])).values()]
+      //  .sort((a, b) => a.time - b.time);
+      //newsFixedSeries.setData(dedupData);
 
-      newsMarkers = markers.sort((a, b) => a.time - b.time);
-      applyAllMarkers();
+      //newsMarkers = markers.sort((a, b) => a.time - b.time);
+      //applyAllMarkers();
     }
 
     // ── Load orders ───────────────────────────────────────────────────────────

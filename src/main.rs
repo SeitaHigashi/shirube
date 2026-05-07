@@ -322,7 +322,7 @@ async fn main() -> anyhow::Result<()> {
     // Auto-updater: check GitHub Releases every 60 minutes.
     // The first check is delayed so the process is fully initialised before
     // any binary replacement occurs.
-    updater::spawn_update_loop("seita", "shirube", 60 * 60);
+    updater::spawn_update_loop("SeitaHigashi", "shirube", 60 * 60);
 
     // Keep the main task alive
     tokio::signal::ctrl_c().await?;

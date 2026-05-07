@@ -2358,6 +2358,7 @@ dependencies = [
  "rusqlite",
  "rust_decimal",
  "rust_decimal_macros",
+ "rustls",
  "self_update",
  "serde",
  "serde_json",

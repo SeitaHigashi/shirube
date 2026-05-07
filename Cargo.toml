@@ -39,6 +39,12 @@ tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["fs", "cors"] }
 tokio-stream = "0.1"
 feed-rs = "2"
+self_update = { version = "0.44", default-features = false, features = [
+    "archive-tar",
+    "compression-flate2",
+    "reqwest",
+    "rustls",
+] }
 
 [dev-dependencies]
 wiremock = "0.6"

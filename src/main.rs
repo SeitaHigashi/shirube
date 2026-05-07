@@ -9,6 +9,7 @@ mod signal;
 mod storage;
 mod trading;
 mod types;
+mod updater;
 
 use std::sync::Arc;
 
@@ -29,6 +30,12 @@ use crate::trading::engine::TradingEngine;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Print version and exit (used by the auto-updater smoke test)
+    if std::env::args().any(|a| a == "--version") {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     dotenvy::dotenv().ok();
 
     tracing_subscriber::fmt()
@@ -304,6 +311,11 @@ async fn main() -> anyhow::Result<()> {
         config_tx: Arc::clone(&config_tx),
     };
     tokio::spawn(api::server::run(api_state, addr));
+
+    // Auto-updater: check GitHub Releases every 60 minutes.
+    // The first check is delayed so the process is fully initialised before
+    // any binary replacement occurs.
+    updater::spawn_update_loop("seita", "shirube", 60 * 60);
 
     // Keep the main task alive
     tokio::signal::ctrl_c().await?;

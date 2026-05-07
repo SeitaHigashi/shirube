@@ -40,9 +40,8 @@ jobs:
           TAG="v${VERSION}"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
           echo "TAG=${TAG}"         >> "$GITHUB_ENV"
-          # Rewrite Cargo.toml version in-place (not committed) so that
-          # env!("CARGO_PKG_VERSION") in the binary reflects the real version.
-          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
+          # NOTE: Cargo.toml version is managed by the post-commit hook locally,
+          # so no sed rewrite is needed here — the committed value is already correct.
 
       - name: Create and push tag
         run: |

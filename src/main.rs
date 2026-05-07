@@ -36,6 +36,13 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // Explicitly install the rustls crypto provider before any TLS operations.
+    // Both ring and aws-lc-rs are pulled in transitively (reqwest + self_update),
+    // so rustls cannot auto-select one — we pin ring to match reqwest's default.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install rustls crypto provider");
+
     dotenvy::dotenv().ok();
 
     tracing_subscriber::fmt()

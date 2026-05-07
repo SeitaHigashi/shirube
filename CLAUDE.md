@@ -199,6 +199,22 @@ After completing any implementation task:
 **Rules:**
 - Never commit secrets or `.env` files
 - Never use `--force` or `--no-verify`
+- Daily development work goes on the `dev` branch; push to `main` only to release
+
+## Branch Strategy & Release
+
+- **Development branch**: `dev` — all feature/fix work goes here
+- **Production branch**: `main` — merge from `dev` triggers automatic release
+- **Release process**: Push/merge to `main` → CI computes version `0.1.<commit-count>` →
+  builds Linux x86_64 binary → creates GitHub Release and git tag automatically
+- **No manual tagging or version bumping required**
+
+### Daily Development Flow
+
+1. Work on `dev` branch (or feature branches off `dev`)
+2. When ready to release: open PR `dev → main` and merge
+3. CI automatically releases `v0.1.<N>` within a few minutes
+4. Running `shirube` instances pick up the update within 60 minutes (auto-updater)
 
 ## Comment Policy
 

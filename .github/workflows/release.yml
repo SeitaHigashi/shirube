@@ -2,8 +2,8 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
 
 jobs:
   build-and-release:
@@ -13,6 +13,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history required to count commits for version numbering
+          fetch-depth: 0
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -30,13 +33,29 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Compute version
+        run: |
+          COUNT=$(git rev-list --count HEAD)
+          VERSION="0.1.${COUNT}"
+          TAG="v${VERSION}"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "TAG=${TAG}"         >> "$GITHUB_ENV"
+          # Rewrite Cargo.toml version in-place (not committed) so that
+          # env!("CARGO_PKG_VERSION") in the binary reflects the real version.
+          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
+
+      - name: Create and push tag
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+
       - name: Build release binary
         run: cargo build --release --target x86_64-unknown-linux-gnu --bin shirube
 
       - name: Package binary
         run: |
-          TAG=${GITHUB_REF_NAME}           # e.g. "v0.2.0"
-          VERSION=${TAG#v}                  # strip leading "v" → "0.2.0"
           ASSET="shirube-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
           tar czf "${ASSET}" \
             -C target/x86_64-unknown-linux-gnu/release \
@@ -46,5 +65,6 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.TAG }}
           files: ${{ env.ASSET }}
           generate_release_notes: true

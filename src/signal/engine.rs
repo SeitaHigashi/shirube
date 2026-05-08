@@ -5,7 +5,7 @@ use tokio::sync::{broadcast, watch};
 use tokio::time::{interval, MissedTickBehavior};
 use tracing::{debug, info, warn};
 
-use super::{AllocationSignal, Indicator, IndicatorSignal, Signal, SignalDetail};
+use super::{AllocationSignal, Indicator, IndicatorPoint, IndicatorRawValues, IndicatorSignal, Signal, SignalDetail};
 use super::indicators::{bollinger::Bollinger, ema::Ema, macd::Macd, rsi::Rsi, sma::Sma};
 use crate::config::{TradingConfig, ZoneConfig};
 use crate::types::market::Candle;
@@ -20,6 +20,8 @@ pub struct SignalEngine {
     config_rx: watch::Receiver<TradingConfig>,
     /// 最後に受信したキャンドルから計算したインジケータ結果（タイマー再計算に使用）
     last_indicator_signals: Option<Vec<IndicatorSignal>>,
+    /// 最後に計算した生インジケータ値（TradingEngine のガードロジックで使用）
+    last_raw_indicators: Option<IndicatorPoint>,
 }
 
 impl SignalEngine {
@@ -60,6 +62,7 @@ impl SignalEngine {
                 zone,
                 config_rx,
                 last_indicator_signals: None,
+                last_raw_indicators: None,
             },
             signal_tx,
             signal_rx,
@@ -105,14 +108,41 @@ impl SignalEngine {
                 result = self.candle_rx.recv() => {
                     match result {
                         Ok(candle) => {
+                            let mut point = IndicatorPoint {
+                                time: candle.open_time,
+                                sma: None, ema: None, rsi: None,
+                                macd_line: None, signal_line: None, histogram: None,
+                                bb_upper: None, bb_middle: None, bb_lower: None,
+                            };
                             let indicator_signals: Vec<IndicatorSignal> = self.indicators
                                 .iter_mut()
                                 .map(|ind| {
                                     let signal = ind.update(&candle);
                                     let value = ind.value();
+                                    // スナップショットで生値を収集してIndicatorPointに格納
+                                    match ind.snapshot() {
+                                        IndicatorRawValues::Scalar(v) => match ind.name() {
+                                            "SMA" => point.sma = v,
+                                            "EMA" => point.ema = v,
+                                            "RSI" => point.rsi = v,
+                                            _ => {}
+                                        },
+                                        IndicatorRawValues::Macd { macd_line, signal_line, histogram } => {
+                                            point.macd_line = macd_line;
+                                            point.signal_line = signal_line;
+                                            point.histogram = histogram;
+                                        }
+                                        IndicatorRawValues::BollingerBands { upper, middle, lower } => {
+                                            point.bb_upper = upper;
+                                            point.bb_middle = middle;
+                                            point.bb_lower = lower;
+                                        }
+                                    }
                                     IndicatorSignal { name: ind.name().to_string(), signal, value }
                                 })
                                 .collect();
+                            // いずれかのフィールドが Some であれば IndicatorPoint を保持
+                            self.last_raw_indicators = Some(point);
                             self.last_indicator_signals = Some(indicator_signals);
                         }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -134,6 +164,7 @@ impl SignalEngine {
                         let detail = SignalDetail {
                             aggregate: aggregated,
                             indicators: ind_signals.clone(),
+                            raw_indicators: self.last_raw_indicators.clone(),
                             calculated_at: Utc::now(),
                             calculation_state: "active".to_string(),
                         };

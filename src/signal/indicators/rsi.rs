@@ -97,6 +97,10 @@ impl Indicator for Rsi {
     fn min_periods(&self) -> usize {
         self.period + 1
     }
+
+    fn snapshot(&self) -> crate::signal::IndicatorRawValues {
+        crate::signal::IndicatorRawValues::Scalar(self.current_rsi)
+    }
 }
 
 fn rsi_to_signal(rsi: f64, price: Decimal) -> Signal {

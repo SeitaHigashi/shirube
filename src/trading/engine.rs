@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,7 +15,7 @@ use crate::config::TradingConfig;
 use crate::exchange::ExchangeClient;
 use crate::risk::manager::RiskManager;
 use crate::risk::RiskDecision;
-use crate::signal::{AllocationSignal, SignalDetail};
+use crate::signal::{AllocationSignal, IndicatorPoint, SignalDetail};
 use crate::storage::orders::OrderRepository;
 use crate::types::order::{Order, OrderRequest, OrderSide, OrderStatus, OrderType};
 
@@ -52,6 +53,10 @@ pub struct TradingEngine {
     /// `confidence == 0` so that neutral indicators do not force a rebalance
     /// back to 50%.
     sticky_target: Option<f64>,
+    /// 直近受信した IndicatorPoint の Rolling buffer（ガードロジックの過去参照用）
+    indicator_history: VecDeque<IndicatorPoint>,
+    /// indicator_history の最大保持件数
+    indicator_history_size: usize,
 }
 
 impl TradingEngine {
@@ -70,6 +75,8 @@ impl TradingEngine {
             config: Arc::new(RwLock::new(TradingConfig::default())),
             order_repo: None,
             sticky_target: None,
+            indicator_history: VecDeque::new(),
+            indicator_history_size: 20,
         }
     }
 
@@ -90,7 +97,7 @@ impl TradingEngine {
         // Buffer=1: if the worker is busy when a new signal arrives, the
         // old queued signal is discarded and only the latest one is kept.
         // This ensures we always act on the most recent market state.
-        let (work_tx, mut work_rx) = tokio::sync::mpsc::channel::<AllocationSignal>(1);
+        let (work_tx, mut work_rx) = tokio::sync::mpsc::channel::<SignalDetail>(1);
 
         // Extract signal_rx from self using channel replacement so that `self`
         // remains valid (not partially moved) for the worker loop below.
@@ -107,7 +114,7 @@ impl TradingEngine {
                     Ok(detail) => {
                         // try_send drops the signal when the worker is busy
                         // (buffer full), keeping only the most recent signal.
-                        let _ = work_tx.try_send(detail.aggregate);
+                        let _ = work_tx.try_send(detail);
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         warn!("TradingEngine lagged by {} signals", n);
@@ -133,8 +140,8 @@ impl TradingEngine {
             tokio::select! {
                 result = work_rx.recv() => {
                     match result {
-                        Some(signal) => {
-                            if let Err(e) = self.handle_signal(signal).await {
+                        Some(detail) => {
+                            if let Err(e) = self.handle_signal(detail).await {
                                 warn!("TradingEngine error: {}", e);
                             }
                         }
@@ -147,12 +154,20 @@ impl TradingEngine {
                     // Uses confidence=0 so that sticky_target is not overwritten.
                     if let Some(target) = self.sticky_target {
                         debug!(target, "Periodic rebalance check");
-                        let rebalance_signal = AllocationSignal {
-                            raw_signal: target,
-                            target_pct: target,
-                            confidence: 0.0,
+                        // Rebalance uses confidence=0 so sticky_target is not overwritten.
+                        // raw_indicators is None since this is a synthetic rebalance trigger.
+                        let rebalance_detail = SignalDetail {
+                            aggregate: AllocationSignal {
+                                raw_signal: target,
+                                target_pct: target,
+                                confidence: 0.0,
+                            },
+                            indicators: vec![],
+                            raw_indicators: None,
+                            calculated_at: Utc::now(),
+                            calculation_state: "active".to_string(),
                         };
-                        if let Err(e) = self.handle_signal(rebalance_signal).await {
+                        if let Err(e) = self.handle_signal(rebalance_detail).await {
                             warn!("TradingEngine rebalance error: {}", e);
                         }
                     }
@@ -176,7 +191,9 @@ impl TradingEngine {
     /// the existing `sticky_target` is used unchanged so that a neutral market
     /// does not force a rebalance back to 50%.  If no `sticky_target` has been
     /// set yet (warm-up period), the signal is silently skipped.
-    async fn handle_signal(&mut self, signal: AllocationSignal) -> crate::error::Result<()> {
+    async fn handle_signal(&mut self, detail: SignalDetail) -> crate::error::Result<()> {
+        let signal = &detail.aggregate;
+
         // Update sticky_target only when there is directional conviction.
         // confidence == 0.0 means all indicators returned Hold; in that case we
         // preserve the previously established target to avoid churning back to 50%.
@@ -194,6 +211,14 @@ impl TradingEngine {
                 return Ok(());
             }
         };
+
+        // Accumulate raw indicator data into the rolling history buffer.
+        if let Some(raw) = detail.raw_indicators.clone() {
+            self.indicator_history.push_back(raw);
+            if self.indicator_history.len() > self.indicator_history_size {
+                self.indicator_history.pop_front();
+            }
+        }
 
         // Pull the latest config snapshot and push params into risk manager
         let allocation_threshold = {
@@ -260,13 +285,65 @@ impl TradingEngine {
                 // Change is too small to warrant a trade (avoids churn)
                 None
             } else {
-                Self::allocation_delta_to_order(
-                    delta,
-                    total_value,
-                    btc_price,
-                    &self.product_code,
-                    min_order_size,
-                )
+                // --- Indicator guard logic ---
+                // Apply guards using the latest raw indicator values.
+                // Guards can suppress or scale down orders based on indicator state.
+                let mut effective_delta = delta;
+
+                if let Some(ref ri) = detail.raw_indicators {
+                    let cfg = self.config.read().await;
+
+                    // RSI guard: suppress orders when market is overbought/oversold.
+                    if cfg.rsi_guard_enabled {
+                        if let Some(rsi) = ri.rsi {
+                            if rsi > cfg.rsi_overbought && effective_delta > 0.0 {
+                                // Overbought: suppress buy
+                                debug!(rsi, threshold = cfg.rsi_overbought, "RSI overbought guard: suppressing buy");
+                                return Ok(());
+                            }
+                            if rsi < cfg.rsi_oversold && effective_delta < 0.0 {
+                                // Oversold: suppress sell
+                                debug!(rsi, threshold = cfg.rsi_oversold, "RSI oversold guard: suppressing sell");
+                                return Ok(());
+                            }
+                        }
+                    }
+
+                    // MACD confirmation guard: skip when MACD histogram direction conflicts with signal.
+                    if cfg.macd_confirmation_enabled {
+                        if let Some(hist) = ri.histogram {
+                            let macd_bullish = hist > 0.0;
+                            let delta_bullish = effective_delta > 0.0;
+                            if macd_bullish != delta_bullish {
+                                debug!(histogram = hist, delta = effective_delta, "MACD confirmation guard: direction mismatch, skipping");
+                                return Ok(());
+                            }
+                        }
+                    }
+
+                    // Bollinger Band squeeze: halve order size during low-volatility squeeze.
+                    if let (Some(upper), Some(middle), Some(lower)) = (ri.bb_upper, ri.bb_middle, ri.bb_lower) {
+                        if middle > 0.0 {
+                            let squeeze_ratio = (upper - lower) / middle;
+                            if squeeze_ratio < cfg.bb_squeeze_threshold {
+                                debug!(squeeze_ratio, threshold = cfg.bb_squeeze_threshold, "BB squeeze detected: halving order size");
+                                effective_delta *= 0.5;
+                            }
+                        }
+                    }
+                }
+
+                if effective_delta.abs() < allocation_threshold {
+                    None
+                } else {
+                    Self::allocation_delta_to_order(
+                        effective_delta,
+                        total_value,
+                        btc_price,
+                        &self.product_code,
+                        min_order_size,
+                    )
+                }
             }
         };
 
@@ -361,6 +438,7 @@ mod tests {
         SignalDetail {
             aggregate: AllocationSignal::from_effective(target_pct, confidence),
             indicators: vec![],
+            raw_indicators: None,
             calculated_at: chrono::Utc::now(),
             calculation_state: "active".to_string(),
         }

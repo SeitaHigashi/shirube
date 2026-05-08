@@ -60,11 +60,38 @@ pub struct TradingConfig {
     /// 現在配分 vs 目標配分を確認する。デフォルト: 60秒。
     #[serde(default = "default_rebalance_interval")]
     pub rebalance_interval_secs: u64,
+
+    // --- インジケータガード設定 ---
+
+    /// RSI ガードを有効にするか。デフォルト: true。
+    /// RSI が rsi_overbought を超えた場合の買い、rsi_oversold を下回った場合の売りを抑制する。
+    #[serde(default = "default_true")]
+    pub rsi_guard_enabled: bool,
+
+    /// RSI 買われ過ぎ閾値。デフォルト: 80.0。
+    #[serde(default = "default_rsi_overbought")]
+    pub rsi_overbought: f64,
+
+    /// RSI 売られ過ぎ閾値。デフォルト: 20.0。
+    #[serde(default = "default_rsi_oversold")]
+    pub rsi_oversold: f64,
+
+    /// MACD トレンド確認ガードを有効にするか。デフォルト: true。
+    /// MACD ヒストグラムの方向がシグナルと逆の場合に注文を見送る。
+    #[serde(default = "default_true")]
+    pub macd_confirmation_enabled: bool,
+
+    /// ボリンジャーバンド スクイーズ閾値。デフォルト: 0.01。
+    /// (upper - lower) / middle がこの値を下回る場合、注文サイズを半減する。
+    #[serde(default = "default_bb_squeeze_threshold")]
+    pub bb_squeeze_threshold: f64,
 }
 
-fn default_rebalance_interval() -> u64 {
-    60
-}
+fn default_rebalance_interval() -> u64 { 60 }
+fn default_true() -> bool { true }
+fn default_rsi_overbought() -> f64 { 80.0 }
+fn default_rsi_oversold() -> f64 { 20.0 }
+fn default_bb_squeeze_threshold() -> f64 { 0.01 }
 
 impl Default for TradingConfig {
     fn default() -> Self {
@@ -87,6 +114,11 @@ impl Default for TradingConfig {
             sentiment_weight: 0.3,
             zone: ZoneConfig::default(),
             rebalance_interval_secs: 60,
+            rsi_guard_enabled: true,
+            rsi_overbought: 80.0,
+            rsi_oversold: 20.0,
+            macd_confirmation_enabled: true,
+            bb_squeeze_threshold: 0.01,
         }
     }
 }

@@ -79,6 +79,10 @@ pub fn apply_zone(raw: f64, zone: &crate::config::ZoneConfig) -> f64 {
 pub struct SignalDetail {
     pub aggregate: AllocationSignal,
     pub indicators: Vec<IndicatorSignal>,
+    /// 生インジケータ値（ウォームアップ中は None）。TradingEngine のガードロジックで使用。
+    /// None の場合は JSON に含まれないため API 互換性を維持する。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_indicators: Option<IndicatorPoint>,
     /// シグナルが計算された日時（ミリ秒精度）
     pub calculated_at: DateTime<Utc>,
     /// 計算エンジンの状態: "active" | "waiting_for_data"
@@ -146,6 +150,26 @@ pub fn compute_indicators(candles: &[Candle], cfg: &TradingConfig) -> Vec<Indica
 
 // ---- Indicator trait ----
 
+/// インジケータが返す生値のバリアント。
+/// スカラー（SMA/EMA/RSI）と多値（MACD/Bollinger）を型安全に区別する。
+#[derive(Debug, Clone)]
+pub enum IndicatorRawValues {
+    /// スカラー値（SMA, EMA, RSI 等）。ウォームアップ中は None。
+    Scalar(Option<f64>),
+    /// MACD の 3 値セット。ウォームアップ中は全て None。
+    Macd {
+        macd_line: Option<f64>,
+        signal_line: Option<f64>,
+        histogram: Option<f64>,
+    },
+    /// ボリンジャーバンドの 3 値セット。ウォームアップ中は全て None。
+    BollingerBands {
+        upper: Option<f64>,
+        middle: Option<f64>,
+        lower: Option<f64>,
+    },
+}
+
 pub trait Indicator: Send + Sync {
     fn name(&self) -> &str;
     /// Candle を受け取り、シグナルを返す。ウォームアップ中は None。
@@ -156,6 +180,8 @@ pub trait Indicator: Send + Sync {
     fn reset(&mut self);
     /// シグナルを出すのに必要な最低 Candle 数
     fn min_periods(&self) -> usize;
+    /// 現在の生計算値を返す。多値インジケータ（MACD/Bollinger）はそれぞれのバリアントを返す。
+    fn snapshot(&self) -> IndicatorRawValues;
 }
 
 // ---- MockIndicator (テスト用) ----
@@ -199,6 +225,10 @@ pub mod mock {
 
         fn min_periods(&self) -> usize {
             0
+        }
+
+        fn snapshot(&self) -> IndicatorRawValues {
+            IndicatorRawValues::Scalar(self.value())
         }
     }
 }

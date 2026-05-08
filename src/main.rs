@@ -205,6 +205,7 @@ async fn main() -> anyhow::Result<()> {
         let detail = SignalDetail {
             aggregate: aggregated,
             indicators: warmup_signals,
+            raw_indicators: None,
             calculated_at: chrono::Utc::now(),
             calculation_state: "active".to_string(),
         };

@@ -96,6 +96,10 @@ impl Indicator for Ema {
     fn min_periods(&self) -> usize {
         self.period
     }
+
+    fn snapshot(&self) -> crate::signal::IndicatorRawValues {
+        crate::signal::IndicatorRawValues::Scalar(self.value())
+    }
 }
 
 #[cfg(test)]

@@ -100,6 +100,14 @@ impl Indicator for Bollinger {
     fn min_periods(&self) -> usize {
         self.period
     }
+
+    fn snapshot(&self) -> crate::signal::IndicatorRawValues {
+        let (upper, middle, lower) = match self.band_values() {
+            Some((u, m, l)) => (Some(u), Some(m), Some(l)),
+            None => (None, None, None),
+        };
+        crate::signal::IndicatorRawValues::BollingerBands { upper, middle, lower }
+    }
 }
 
 impl Bollinger {

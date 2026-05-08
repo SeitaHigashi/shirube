@@ -91,6 +91,14 @@ impl Indicator for Macd {
         // slow(26) + signal(9) - 1 = 34
         26 + 9 - 1
     }
+
+    fn snapshot(&self) -> crate::signal::IndicatorRawValues {
+        let (macd_line, signal_line, histogram) = match self.last_components {
+            Some((ml, sl, h)) => (Some(ml), Some(sl), Some(h)),
+            None => (None, None, None),
+        };
+        crate::signal::IndicatorRawValues::Macd { macd_line, signal_line, histogram }
+    }
 }
 
 #[cfg(test)]

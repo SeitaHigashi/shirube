@@ -40,8 +40,10 @@ jobs:
           TAG="v${VERSION}"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
           echo "TAG=${TAG}"         >> "$GITHUB_ENV"
-          # NOTE: Cargo.toml version is managed by the post-commit hook locally,
-          # so no sed rewrite is needed here — the committed value is already correct.
+          # Update Cargo.toml so CARGO_PKG_VERSION in the binary matches the release tag.
+          # This is necessary because the local pre-commit hook uses the dev branch commit
+          # count, which differs from the main branch count used here.
+          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
 
       - name: Create and push tag
         run: |

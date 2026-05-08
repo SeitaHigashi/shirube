@@ -319,9 +319,10 @@ async fn main() -> anyhow::Result<()> {
     };
     tokio::spawn(api::server::run(api_state, addr));
 
-    // Auto-updater: check GitHub Releases every 60 minutes.
-    // The first check is delayed so the process is fully initialised before
-    // any binary replacement occurs.
+    // Auto-updater: only active in release builds.
+    // In debug builds (cargo run / cargo build), skip to avoid overwriting
+    // the local binary with a release binary from GitHub.
+    #[cfg(not(debug_assertions))]
     updater::spawn_update_loop("SeitaHigashi", "shirube", 60 * 60);
 
     // Keep the main task alive

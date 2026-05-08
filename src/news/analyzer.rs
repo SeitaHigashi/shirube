@@ -66,8 +66,15 @@ impl NewsAnalyzer {
         let body_section = body
             .filter(|s| !s.is_empty())
             .map(|s| {
-                // Truncate to 500 chars to avoid excessive token usage
-                let trimmed = if s.len() > 500 { &s[..500] } else { s };
+                // Truncate to 500 Unicode chars (not bytes) to avoid panicking
+                // on multi-byte characters (e.g. UTF-8 encoded quotes, CJK)
+                let truncated: String;
+                let trimmed: &str = if s.chars().count() > 500 {
+                    truncated = s.chars().take(500).collect();
+                    &truncated
+                } else {
+                    s
+                };
                 format!("\nArticle summary: {}", trimmed)
             })
             .unwrap_or_default();

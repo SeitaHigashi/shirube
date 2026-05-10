@@ -162,19 +162,88 @@ impl TradingEngine {
         }
     }
 
+    /// Compute the target BTC allocation ratio from an aggregated signal, raw indicator
+    /// values, and trading configuration. This is the single place where strategy
+    /// judgment lives — edit this function to change trading behaviour.
+    ///
+    /// # Arguments
+    /// - `signal`: Result of `aggregate_with_zone()` — contains `target_pct` and `confidence`
+    /// - `raw`: Raw numeric indicator values for the latest candle (RSI, MACD histogram, etc.)
+    /// - `config`: Live trading configuration including guard thresholds
+    ///
+    /// # Returns
+    /// - `Some(target_pct)` — the target BTC allocation to rebalance toward
+    /// - `None` — skip this signal (confidence too low, or a guard fired)
+    fn compute_btc_target(
+        signal: &AllocationSignal,
+        raw: &crate::signal::IndicatorPoint,
+        config: &crate::config::TradingConfig,
+    ) -> Option<f64> {
+        // --- 1. Confidence check ---
+        // confidence <= 0.0 means every active indicator returned Hold.
+        // Raise this threshold to require stronger agreement before acting.
+        if signal.confidence <= 0.0 {
+            return None;
+        }
+
+        let mut target = signal.target_pct;
+
+        // --- 2. RSI overbought / oversold guard ---
+        // Suppress buys when the market is already overbought, sells when oversold.
+        if config.rsi_guard_enabled {
+            if let Some(rsi) = raw.rsi {
+                if rsi > config.rsi_overbought && target > 0.5 {
+                    debug!(rsi, threshold = config.rsi_overbought, "RSI overbought guard: suppressing buy");
+                    return None;
+                }
+                if rsi < config.rsi_oversold && target < 0.5 {
+                    debug!(rsi, threshold = config.rsi_oversold, "RSI oversold guard: suppressing sell");
+                    return None;
+                }
+            }
+        }
+
+        // --- 3. MACD trend confirmation guard ---
+        // Skip when the MACD histogram direction conflicts with the target direction.
+        if config.macd_confirmation_enabled {
+            if let Some(hist) = raw.histogram {
+                let macd_bullish = hist > 0.0;
+                let target_bullish = target > 0.5;
+                if macd_bullish != target_bullish {
+                    debug!(histogram = hist, target, "MACD confirmation guard: direction mismatch, skipping");
+                    return None;
+                }
+            }
+        }
+
+        // --- 4. Bollinger Band squeeze: reduce exposure during low-volatility squeeze ---
+        // When bands are unusually narrow, pull target halfway back toward 0.5
+        // to avoid over-committing in choppy, mean-reverting conditions.
+        if let (Some(upper), Some(middle), Some(lower)) = (raw.bb_upper, raw.bb_middle, raw.bb_lower) {
+            if middle > 0.0 {
+                let squeeze_ratio = (upper - lower) / middle;
+                if squeeze_ratio < config.bb_squeeze_threshold {
+                    debug!(squeeze_ratio, threshold = config.bb_squeeze_threshold, "BB squeeze detected: halving exposure toward neutral");
+                    target = 0.5 + (target - 0.5) * 0.5;
+                }
+            }
+        }
+
+        Some(target)
+    }
+
     /// Process a single IndicatorOutput: aggregate signals, update sticky target,
     /// broadcast SignalDetail for API consumers, apply guard logic, and place orders.
     ///
     /// # Sticky target logic
     ///
-    /// Only outputs where aggregate `confidence > 0` update `sticky_target`.
-    /// When `confidence == 0` (all indicators Hold), the existing `sticky_target`
-    /// is used unchanged so that a neutral market does not force a rebalance back
-    /// to 50%.  If no `sticky_target` has been set yet, the output is skipped.
+    /// Only outputs where `compute_btc_target` returns `Some` update `sticky_target`.
+    /// When it returns `None` (all indicators Hold or a guard fired), the existing
+    /// `sticky_target` is preserved so that a neutral market does not force a
+    /// rebalance back to 50%.  If no `sticky_target` has been set yet, skipped.
     async fn handle_indicator(&mut self, output: IndicatorOutput) -> crate::error::Result<()> {
-        // Aggregate indicator signals into an allocation signal (judgment step).
-        // This is the only place aggregate_with_zone() is called; SignalEngine
-        // only computes raw values and does not make allocation decisions.
+        // Step 1: Aggregate raw indicator signals into an AllocationSignal.
+        // SignalEngine only computes raw values; allocation judgment happens here.
         let raw_signals: Vec<Option<crate::signal::Signal>> = output.indicators.iter()
             .map(|is| is.signal.clone())
             .collect();
@@ -183,12 +252,19 @@ impl TradingEngine {
             crate::signal::aggregate_with_zone(&raw_signals, &cfg.zone)
         };
 
-        // Update sticky_target only when there is directional conviction.
-        // confidence == 0.0 means all indicators returned Hold; in that case we
-        // preserve the previously established target to avoid churning back to 50%.
-        if signal.confidence > 0.0 {
-            self.sticky_target = Some(signal.target_pct);
-            debug!(target = signal.target_pct, confidence = signal.confidence, "Sticky target updated");
+        // Step 2: Apply strategy logic (confidence check + guards) via the pure function.
+        // Returns Some(target_pct) when we should act, None when we should skip.
+        let maybe_target = {
+            let cfg = self.config.read().await;
+            Self::compute_btc_target(&signal, &output.raw, &cfg)
+        };
+
+        // Update sticky_target only when compute_btc_target returned a valid target.
+        // When it returns None (Hold or guard), preserve the previous target so that
+        // a neutral market does not force a rebalance back to 50%.
+        if let Some(t) = maybe_target {
+            self.sticky_target = Some(t);
+            debug!(target = t, confidence = signal.confidence, "Sticky target updated");
         }
 
         // Skip rebalancing until the first directional signal establishes a target.
@@ -269,61 +345,13 @@ impl TradingEngine {
             if delta.abs() < allocation_threshold {
                 None
             } else {
-                // --- Indicator guard logic ---
-                // Applied only for indicator-driven signals (not periodic rebalances).
-                // Uses output.raw directly since IndicatorPoint is always present in IndicatorOutput.
-                let mut effective_delta = delta;
-                let ri = &output.raw;
-                let cfg = self.config.read().await;
-
-                // RSI guard: suppress orders when market is overbought/oversold.
-                if cfg.rsi_guard_enabled {
-                    if let Some(rsi) = ri.rsi {
-                        if rsi > cfg.rsi_overbought && effective_delta > 0.0 {
-                            debug!(rsi, threshold = cfg.rsi_overbought, "RSI overbought guard: suppressing buy");
-                            return Ok(());
-                        }
-                        if rsi < cfg.rsi_oversold && effective_delta < 0.0 {
-                            debug!(rsi, threshold = cfg.rsi_oversold, "RSI oversold guard: suppressing sell");
-                            return Ok(());
-                        }
-                    }
-                }
-
-                // MACD confirmation guard: skip when histogram direction conflicts with signal.
-                if cfg.macd_confirmation_enabled {
-                    if let Some(hist) = ri.histogram {
-                        let macd_bullish = hist > 0.0;
-                        let delta_bullish = effective_delta > 0.0;
-                        if macd_bullish != delta_bullish {
-                            debug!(histogram = hist, delta = effective_delta, "MACD confirmation guard: direction mismatch, skipping");
-                            return Ok(());
-                        }
-                    }
-                }
-
-                // Bollinger Band squeeze: halve order size during low-volatility squeeze.
-                if let (Some(upper), Some(middle), Some(lower)) = (ri.bb_upper, ri.bb_middle, ri.bb_lower) {
-                    if middle > 0.0 {
-                        let squeeze_ratio = (upper - lower) / middle;
-                        if squeeze_ratio < cfg.bb_squeeze_threshold {
-                            debug!(squeeze_ratio, threshold = cfg.bb_squeeze_threshold, "BB squeeze detected: halving order size");
-                            effective_delta *= 0.5;
-                        }
-                    }
-                }
-
-                if effective_delta.abs() < allocation_threshold {
-                    None
-                } else {
-                    Self::allocation_delta_to_order(
-                        effective_delta,
-                        total_value,
-                        btc_price,
-                        &self.product_code,
-                        min_order_size,
-                    )
-                }
+                Self::allocation_delta_to_order(
+                    delta,
+                    total_value,
+                    btc_price,
+                    &self.product_code,
+                    min_order_size,
+                )
             }
         };
 
@@ -660,6 +688,93 @@ mod tests {
             orders.iter().all(|o| o.side == OrderSide::Buy),
             "unexpected sell order: {:?}", orders
         );
+    }
+
+    // ---- compute_btc_target unit tests ----
+
+    fn default_config() -> TradingConfig {
+        TradingConfig::default()
+    }
+
+    fn make_raw(rsi: Option<f64>, histogram: Option<f64>, bb: Option<(f64, f64, f64)>) -> crate::signal::IndicatorPoint {
+        let (bb_upper, bb_middle, bb_lower) = bb
+            .map(|(u, m, l)| (Some(u), Some(m), Some(l)))
+            .unwrap_or((None, None, None));
+        crate::signal::IndicatorPoint {
+            time: chrono::Utc::now(),
+            sma: None, ema: None, rsi,
+            macd_line: None, signal_line: None, histogram,
+            bb_upper, bb_middle, bb_lower,
+        }
+    }
+
+    fn make_signal(target_pct: f64, confidence: f64) -> AllocationSignal {
+        AllocationSignal { raw_signal: target_pct, target_pct, confidence }
+    }
+
+    #[test]
+    fn compute_btc_target_zero_confidence_returns_none() {
+        let signal = make_signal(0.8, 0.0);
+        let raw = make_raw(None, None, None);
+        assert!(TradingEngine::compute_btc_target(&signal, &raw, &default_config()).is_none());
+    }
+
+    #[test]
+    fn compute_btc_target_strong_buy_no_guards_returns_target() {
+        let signal = make_signal(1.0, 1.0);
+        let raw = make_raw(None, None, None);
+        let result = TradingEngine::compute_btc_target(&signal, &raw, &default_config());
+        assert_eq!(result, Some(1.0));
+    }
+
+    #[test]
+    fn compute_btc_target_strong_sell_no_guards_returns_target() {
+        let signal = make_signal(0.0, 1.0);
+        let raw = make_raw(None, None, None);
+        let result = TradingEngine::compute_btc_target(&signal, &raw, &default_config());
+        assert_eq!(result, Some(0.0));
+    }
+
+    #[test]
+    fn compute_btc_target_rsi_overbought_suppresses_buy() {
+        let signal = make_signal(0.9, 1.0);
+        // rsi=85 > default rsi_overbought(80), target > 0.5 → None
+        let raw = make_raw(Some(85.0), None, None);
+        let cfg = default_config();
+        assert!(TradingEngine::compute_btc_target(&signal, &raw, &cfg).is_none());
+    }
+
+    #[test]
+    fn compute_btc_target_rsi_oversold_suppresses_sell() {
+        let signal = make_signal(0.1, 1.0);
+        // rsi=15 < default rsi_oversold(20), target < 0.5 → None
+        let raw = make_raw(Some(15.0), None, None);
+        let cfg = default_config();
+        assert!(TradingEngine::compute_btc_target(&signal, &raw, &cfg).is_none());
+    }
+
+    #[test]
+    fn compute_btc_target_macd_direction_mismatch_returns_none() {
+        let signal = make_signal(0.8, 1.0); // target bullish (> 0.5)
+        // histogram < 0 → macd bearish → mismatch → None
+        let raw = make_raw(None, Some(-0.1), None);
+        let cfg = default_config();
+        assert!(TradingEngine::compute_btc_target(&signal, &raw, &cfg).is_none());
+    }
+
+    #[test]
+    fn compute_btc_target_bb_squeeze_pulls_target_toward_neutral() {
+        let signal = make_signal(0.9, 1.0);
+        // squeeze_ratio = (upper - lower) / middle = (9001.0 - 8999.0) / 9000.0 ≈ 0.000222
+        // default bb_squeeze_threshold is typically > 0 → triggers squeeze
+        let bb = Some((9001.0_f64, 9000.0_f64, 8999.0_f64));
+        let raw = make_raw(None, None, bb);
+        let mut cfg = default_config();
+        // Force squeeze threshold above the ratio so the squeeze fires
+        cfg.bb_squeeze_threshold = 0.01;
+        let result = TradingEngine::compute_btc_target(&signal, &raw, &cfg);
+        // Expected: 0.5 + (0.9 - 0.5) * 0.5 = 0.7
+        assert!((result.unwrap() - 0.7).abs() < 1e-9, "got {:?}", result);
     }
 
     #[tokio::test]

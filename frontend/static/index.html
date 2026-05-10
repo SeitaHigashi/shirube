@@ -534,11 +534,11 @@
         return;
       }
 
-      const agg = detail.aggregate; // { raw_signal, target_pct, confidence }
-      const pct = (agg.target_pct * 100).toFixed(1);
+      const agg = detail.aggregate; // { raw_signal, confidence }
+      const pct = (detail.target_pct * 100).toFixed(1);
       targetEl.textContent = `${pct}%`;
-      targetEl.className = agg.target_pct > 0.55 ? 'signal-buy'
-                         : agg.target_pct < 0.45 ? 'signal-sell'
+      targetEl.className = detail.target_pct > 0.55 ? 'signal-buy'
+                         : detail.target_pct < 0.45 ? 'signal-sell'
                          : 'signal-hold';
       fillEl.style.width = `${pct}%`;
 
@@ -546,14 +546,14 @@
       const zoneDiffEl = document.getElementById('signal-zone-diff');
       const rawPctEl   = document.getElementById('raw-signal-pct');
       const zoneBadgeEl = document.getElementById('zone-badge');
-      const rawSignal = agg.raw_signal != null ? agg.raw_signal : agg.target_pct;
-      const diff = Math.abs(rawSignal - agg.target_pct);
+      const rawSignal = agg.raw_signal != null ? agg.raw_signal : detail.target_pct;
+      const diff = Math.abs(rawSignal - detail.target_pct);
       if (diff >= 0.01) {
         rawPctEl.textContent = `${(rawSignal * 100).toFixed(1)}%`;
         let zone, cls;
-        if (agg.target_pct <= 0.001 && rawSignal > 0.001) {
+        if (detail.target_pct <= 0.001 && rawSignal > 0.001) {
           zone = 'Zone A  JPY保持'; cls = 'zone-badge zone-badge-a';
-        } else if (agg.target_pct >= 0.999 && rawSignal < 0.999) {
+        } else if (detail.target_pct >= 0.999 && rawSignal < 0.999) {
           zone = 'Zone C  BTC保持'; cls = 'zone-badge zone-badge-c';
         } else {
           zone = 'Zone B  比例配分'; cls = 'zone-badge zone-badge-b';

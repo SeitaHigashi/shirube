@@ -167,12 +167,12 @@ impl TradingEngine {
     /// judgment lives — edit this function to change trading behaviour.
     ///
     /// # Arguments
-    /// - `signal`: Result of `aggregate_with_zone()` — contains `target_pct` and `confidence`
+    /// - `signal`: Result of `aggregate_with_zone()` — contains `raw_signal` and `confidence`
     /// - `raw`: Raw numeric indicator values for the latest candle (RSI, MACD histogram, etc.)
-    /// - `config`: Live trading configuration including guard thresholds
+    /// - `config`: Live trading configuration including zone config and guard thresholds
     ///
     /// # Returns
-    /// - `Some(target_pct)` — the target BTC allocation to rebalance toward
+    /// - `Some(target_pct)` — the target BTC allocation to rebalance toward, ∈ [0.0, 1.0]
     /// - `None` — skip this signal (confidence too low, or a guard fired)
     fn compute_btc_target(
         signal: &AllocationSignal,
@@ -186,7 +186,11 @@ impl TradingEngine {
             return None;
         }
 
-        let mut target = signal.target_pct;
+        // --- Zone conversion: raw_signal → target_pct ---
+        // apply_zone maps the aggregated raw value through ZoneConfig into [0.0, 1.0].
+        // Zone A (raw < hold_jpy_below) → 0.0, Zone C (raw > hold_btc_above) → 1.0,
+        // Zone B (between) → linear interpolation.
+        let mut target = crate::signal::apply_zone(signal.raw_signal, &config.zone);
 
         // --- 2. RSI overbought / oversold guard ---
         // Suppress buys when the market is already overbought, sells when oversold.
@@ -280,8 +284,10 @@ impl TradingEngine {
         // Broadcast SignalDetail for API/WebSocket consumers (GET /api/signal, /ws/candles).
         // This happens before order placement so consumers can see the signal even if
         // no order is placed (e.g. delta below threshold, guard suppressed).
+        // target_pct reflects sticky_target so Hold signals don't reset the displayed value.
         let detail = SignalDetail {
             aggregate: signal.clone(),
+            target_pct: self.sticky_target.unwrap_or(0.5),
             indicators: output.indicators.clone(),
             raw_indicators: Some(output.raw.clone()),
             calculated_at: output.calculated_at,
@@ -369,9 +375,9 @@ impl TradingEngine {
         let rebalance_detail = SignalDetail {
             aggregate: AllocationSignal {
                 raw_signal: target_pct,
-                target_pct,
                 confidence: 0.0,
             },
+            target_pct,
             indicators: vec![],
             raw_indicators: None,
             calculated_at: Utc::now(),
@@ -708,8 +714,8 @@ mod tests {
         }
     }
 
-    fn make_signal(target_pct: f64, confidence: f64) -> AllocationSignal {
-        AllocationSignal { raw_signal: target_pct, target_pct, confidence }
+    fn make_signal(raw_signal: f64, confidence: f64) -> AllocationSignal {
+        AllocationSignal { raw_signal, confidence }
     }
 
     #[test]
@@ -764,17 +770,16 @@ mod tests {
 
     #[test]
     fn compute_btc_target_bb_squeeze_pulls_target_toward_neutral() {
+        // raw_signal=0.9 → apply_zone(0.9, default) → Zone C (0.9 > hold_btc_above=0.8) → target=1.0
+        // squeeze fires → 0.5 + (1.0 - 0.5) * 0.5 = 0.75
         let signal = make_signal(0.9, 1.0);
-        // squeeze_ratio = (upper - lower) / middle = (9001.0 - 8999.0) / 9000.0 ≈ 0.000222
-        // default bb_squeeze_threshold is typically > 0 → triggers squeeze
         let bb = Some((9001.0_f64, 9000.0_f64, 8999.0_f64));
+        // squeeze_ratio ≈ 0.000222; force threshold above that so squeeze fires
         let raw = make_raw(None, None, bb);
         let mut cfg = default_config();
-        // Force squeeze threshold above the ratio so the squeeze fires
         cfg.bb_squeeze_threshold = 0.01;
         let result = TradingEngine::compute_btc_target(&signal, &raw, &cfg);
-        // Expected: 0.5 + (0.9 - 0.5) * 0.5 = 0.7
-        assert!((result.unwrap() - 0.7).abs() < 1e-9, "got {:?}", result);
+        assert!((result.unwrap() - 0.75).abs() < 1e-9, "got {:?}", result);
     }
 
     #[tokio::test]

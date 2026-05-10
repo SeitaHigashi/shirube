@@ -29,29 +29,23 @@ pub struct IndicatorSignal {
 
 // ---- AllocationSignal — 連続配分シグナル ----
 
-/// 目標BTC配分率。
-/// - raw_signal: ゾーン変換前の生シグナル値。ZoneConfig.range_max までの範囲を取る。
-/// - target_pct: ゾーン変換後の実効BTC配分率 ∈ [0.0, 1.0]（TradingEngineはこれを使う）
+/// インジケータ集計結果。ゾーン変換前の生シグナル値と信頼度のみを持つ。
+/// ゾーン変換（raw_signal → target_pct）は TradingEngine の compute_btc_target で行う。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AllocationSignal {
-    /// 変換前の生シグナル値。デフォルトゾーンでは target_pct と同値。
+    /// ゾーン変換前の生シグナル値 [0.0, range_max]。
+    /// Buy優勢 → range_max 方向、Sell優勢 → 0.0 方向、中立 → range_max / 2.0。
     pub raw_signal: f64,
-    pub target_pct: f64,
+    /// インジケータのうち方向性を持つもの（Buy/Sell）の割合 [0.0, 1.0]。
+    /// 0.0 = 全インジケータが Hold、1.0 = 全インジケータが方向性あり。
     pub confidence: f64,
 }
 
 impl AllocationSignal {
+    /// 中立シグナル: raw_signal = range_max/2, confidence = 0
     pub fn neutral() -> Self {
-        Self { raw_signal: 0.5, target_pct: 0.5, confidence: 0.0 }
+        Self { raw_signal: 0.5, confidence: 0.0 }
     }
-
-    /// レガシー互換コンストラクタ: raw_signal = target_pct として生成
-    pub fn from_effective(target_pct: f64, confidence: f64) -> Self {
-        Self { raw_signal: target_pct, target_pct, confidence }
-    }
-
-    pub fn is_bullish(&self) -> bool { self.target_pct > 0.5 }
-    pub fn is_bearish(&self) -> bool { self.target_pct < 0.5 }
 }
 
 /// raw_signal を ZoneConfig に従って実効BTC配分率 [0.0, 1.0] に変換する。
@@ -122,9 +116,11 @@ pub fn aggregate_with_zone(signals: &[Option<Signal>], zone: &ZoneConfig) -> All
     // Sell(1.0) 1本のみ → (0.5 - 0.5) * range_max = 0.0
     let normalized = (0.5 + delta_sum / (active as f64 * 2.0)).clamp(0.0, 1.0);
     let raw_signal = normalized * zone.range_max;
-    let target_pct = apply_zone(raw_signal, zone);
     let confidence = directional as f64 / active as f64;
-    AllocationSignal { raw_signal, target_pct, confidence }
+    // NOTE: apply_zone() is intentionally NOT called here.
+    // Zone conversion (raw_signal → target_pct) is the responsibility of
+    // TradingEngine::compute_btc_target(), keeping strategy judgment out of the signal layer.
+    AllocationSignal { raw_signal, confidence }
 }
 
 /// デフォルト ZoneConfig（range_max=1.0）で集計する。
@@ -137,6 +133,10 @@ pub fn aggregate(signals: &[Option<Signal>]) -> AllocationSignal {
 #[derive(Debug, Clone, Serialize)]
 pub struct SignalDetail {
     pub aggregate: AllocationSignal,
+    /// TradingEngine が compute_btc_target で算出した目標 BTC 配分率 [0.0, 1.0]。
+    /// sticky_target を反映するため、Hold シグナル時も最後の有効値を保持する。
+    /// sticky_target が未設定（ウォームアップ中）は 0.5（中立）を返す。
+    pub target_pct: f64,
     pub indicators: Vec<IndicatorSignal>,
     /// 生インジケータ値（ウォームアップ中は None）。TradingEngine のガードロジックで使用。
     /// None の場合は JSON に含まれないため API 互換性を維持する。
@@ -370,14 +370,14 @@ mod tests {
         fn buy_dominates() {
             let signals = vec![buy(0.8), sell(0.3), Some(Signal::Hold)];
             let result = aggregate(&signals);
-            assert!(result.target_pct > 0.5, "got {}", result.target_pct);
+            assert!(result.raw_signal > 0.5, "got {}", result.raw_signal);
         }
 
         #[test]
         fn sell_dominates() {
             let signals = vec![buy(0.2), sell(0.9)];
             let result = aggregate(&signals);
-            assert!(result.target_pct < 0.5, "got {}", result.target_pct);
+            assert!(result.raw_signal < 0.5, "got {}", result.raw_signal);
         }
 
         #[test]
@@ -385,29 +385,29 @@ mod tests {
             // delta = 0.1, active=3 → 0.5 + 0.1/6 ≈ 0.517
             let signals = vec![buy(0.1), Some(Signal::Hold), Some(Signal::Hold)];
             let result = aggregate(&signals);
-            assert!(result.target_pct > 0.5 && result.target_pct < 0.6,
-                "got {}", result.target_pct);
+            assert!(result.raw_signal > 0.5 && result.raw_signal < 0.6,
+                "got {}", result.raw_signal);
         }
 
         #[test]
         fn tied_returns_neutral() {
             let signals = vec![buy(0.5), sell(0.5)];
             let result = aggregate(&signals);
-            assert!((result.target_pct - 0.5).abs() < 1e-9, "got {}", result.target_pct);
+            assert!((result.raw_signal - 0.5).abs() < 1e-9, "got {}", result.raw_signal);
         }
 
         #[test]
         fn single_strong_buy() {
             let signals = vec![buy(1.0)];
             let result = aggregate(&signals);
-            assert!((result.target_pct - 1.0).abs() < 1e-9, "got {}", result.target_pct);
+            assert!((result.raw_signal - 1.0).abs() < 1e-9, "got {}", result.raw_signal);
         }
 
         #[test]
         fn single_strong_sell() {
             let signals = vec![sell(1.0)];
             let result = aggregate(&signals);
-            assert!((result.target_pct - 0.0).abs() < 1e-9, "got {}", result.target_pct);
+            assert!((result.raw_signal - 0.0).abs() < 1e-9, "got {}", result.raw_signal);
         }
     }
 

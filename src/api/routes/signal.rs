@@ -23,7 +23,8 @@ mod tests {
     fn detail(target_pct: f64, confidence: f64) -> SignalDetail {
         use crate::signal::AllocationSignal;
         SignalDetail {
-            aggregate: AllocationSignal::from_effective(target_pct, confidence),
+            aggregate: AllocationSignal { raw_signal: target_pct, confidence },
+            target_pct,
             indicators: vec![],
             raw_indicators: None,
             calculated_at: chrono::Utc::now(),
@@ -82,7 +83,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let pct = json["aggregate"]["target_pct"].as_f64().unwrap();
+        let pct = json["target_pct"].as_f64().unwrap();
         assert!((pct - 0.5).abs() < 1e-9);
     }
 
@@ -99,7 +100,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let pct = json["aggregate"]["target_pct"].as_f64().unwrap();
+        let pct = json["target_pct"].as_f64().unwrap();
         assert!(pct > 0.5, "expected bullish allocation, got {pct}");
         let conf = json["aggregate"]["confidence"].as_f64().unwrap();
         assert!((conf - 0.9).abs() < 1e-9);

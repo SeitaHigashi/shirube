@@ -215,8 +215,10 @@ async fn main() -> anyhow::Result<()> {
         let raw: Vec<Option<Signal>> =
             warmup_signals.iter().map(|is| is.signal.clone()).collect();
         let aggregated = crate::signal::aggregate(&raw);
+        // target_pct at warmup: no sticky_target yet, use neutral 0.5
         let detail = SignalDetail {
             aggregate: aggregated,
+            target_pct: 0.5,
             indicators: warmup_signals,
             raw_indicators: None,
             calculated_at: chrono::Utc::now(),

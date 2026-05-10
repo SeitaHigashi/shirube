@@ -162,40 +162,26 @@ impl TradingEngine {
         }
     }
 
-    /// Compute the target BTC allocation ratio from an aggregated signal and trading
-    /// configuration. This is the single place where strategy judgment lives — edit
-    /// this function to change trading behaviour.
+    /// Compute the raw BTC allocation ratio from an aggregated signal.
+    ///
+    /// Pure function: only checks confidence and returns `signal.normalized` as-is
+    /// (∈ [0.0, 1.0]). Zone mapping (raw_signal scaling + `apply_zone`) is left to
+    /// the caller so that zone config can be applied independently.
     ///
     /// # Arguments
     /// - `signal`: Result of `aggregate()` — contains `normalized` [0.0, 1.0] and `confidence`
-    /// - `config`: Live trading configuration including zone config
     ///
     /// # Returns
-    /// - `Some(target_pct)` — the target BTC allocation to rebalance toward, ∈ [0.0, 1.0]
+    /// - `Some(normalized)` — raw BTC allocation ratio ∈ [0.0, 1.0] before zone mapping
     /// - `None` — skip this signal (confidence too low)
-    fn compute_btc_target(
-        signal: &AllocationSignal,
-        config: &crate::config::TradingConfig,
-    ) -> Option<f64> {
-        // --- Confidence check ---
+    fn compute_btc_target(signal: &AllocationSignal) -> Option<f64> {
         // confidence <= 0.0 means every active indicator returned Hold.
         // Raise this threshold to require stronger agreement before acting.
         if signal.confidence <= 0.0 {
             return None;
         }
 
-        // --- raw_signal 計算: normalized を range_max にスケール ---
-        // aggregate() は [0.0, 1.0] の正規化値のみを返す。
-        // ここで ZoneConfig の range_max を乗じて raw_signal を得る。
-        let raw_signal = signal.normalized * config.zone.range_max;
-
-        // --- Zone conversion: raw_signal → target_pct ---
-        // apply_zone maps the aggregated raw value through ZoneConfig into [0.0, 1.0].
-        // Zone A (raw < hold_jpy_below) → 0.0, Zone C (raw > hold_btc_above) → 1.0,
-        // Zone B (between) → linear interpolation.
-        let target = crate::signal::apply_zone(raw_signal, &config.zone);
-
-        Some(target)
+        Some(signal.normalized)
     }
 
     /// Process a single IndicatorOutput: aggregate signals, update sticky target,
@@ -215,11 +201,17 @@ impl TradingEngine {
             .collect();
         let signal = crate::signal::aggregate(&raw_signals);
 
-        // Step 2: Apply strategy logic (confidence check) via the pure function.
-        // Returns Some(target_pct) when we should act, None when we should skip.
+        // Step 2: Apply confidence check via the pure function, then apply zone mapping.
+        // compute_btc_target returns the raw normalized value [0.0, 1.0] or None (Hold).
+        // Zone scaling (range_max) and apply_zone are applied here by the caller.
         let maybe_target = {
             let cfg = self.config.read().await;
-            Self::compute_btc_target(&signal, &cfg)
+            Self::compute_btc_target(&signal).map(|normalized| {
+                // Scale normalized value by range_max, then map through zone boundaries
+                // into the final BTC allocation ratio.
+                let raw = normalized * cfg.zone.range_max;
+                crate::signal::apply_zone(raw, &cfg.zone)
+            })
         };
 
         // Update sticky_target only when compute_btc_target returned a valid target.
@@ -657,10 +649,6 @@ mod tests {
 
     // ---- compute_btc_target unit tests ----
 
-    fn default_config() -> TradingConfig {
-        TradingConfig::default()
-    }
-
     fn make_signal(normalized: f64, confidence: f64) -> AllocationSignal {
         AllocationSignal { normalized, confidence }
     }
@@ -668,20 +656,22 @@ mod tests {
     #[test]
     fn compute_btc_target_zero_confidence_returns_none() {
         let signal = make_signal(0.8, 0.0);
-        assert!(TradingEngine::compute_btc_target(&signal, &default_config()).is_none());
+        assert!(TradingEngine::compute_btc_target(&signal).is_none());
     }
 
     #[test]
     fn compute_btc_target_strong_buy_returns_target() {
+        // normalized=1.0 → returns Some(1.0); zone mapping is the caller's responsibility.
         let signal = make_signal(1.0, 1.0);
-        let result = TradingEngine::compute_btc_target(&signal, &default_config());
+        let result = TradingEngine::compute_btc_target(&signal);
         assert_eq!(result, Some(1.0));
     }
 
     #[test]
     fn compute_btc_target_strong_sell_returns_target() {
+        // normalized=0.0 → returns Some(0.0); zone mapping is the caller's responsibility.
         let signal = make_signal(0.0, 1.0);
-        let result = TradingEngine::compute_btc_target(&signal, &default_config());
+        let result = TradingEngine::compute_btc_target(&signal);
         assert_eq!(result, Some(0.0));
     }
 

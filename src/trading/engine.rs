@@ -162,25 +162,29 @@ impl TradingEngine {
         }
     }
 
-    /// Compute the raw BTC allocation ratio from an aggregated signal.
+    /// Compute the raw BTC allocation ratio from individual indicator signals and confidence.
     ///
-    /// Pure function: only checks confidence and returns `signal.normalized` as-is
-    /// (∈ [0.0, 1.0]). Zone mapping (raw_signal scaling + `apply_zone`) is left to
-    /// the caller so that zone config can be applied independently.
+    /// Pure function: aggregates `indicators` into a normalized value [0.0, 1.0] internally,
+    /// then gates on `confidence`. Zone mapping (raw_signal scaling + `apply_zone`) is left
+    /// to the caller so that zone config can be applied independently.
     ///
     /// # Arguments
-    /// - `signal`: Result of `aggregate()` — contains `normalized` [0.0, 1.0] and `confidence`
+    /// - `indicators`: Per-indicator signals from `IndicatorOutput` (None = warming up)
+    /// - `confidence`: Fraction of active indicators that returned a directional signal [0.0, 1.0]
     ///
     /// # Returns
     /// - `Some(normalized)` — raw BTC allocation ratio ∈ [0.0, 1.0] before zone mapping
-    /// - `None` — skip this signal (confidence too low)
-    fn compute_btc_target(signal: &AllocationSignal) -> Option<f64> {
+    /// - `None` — skip this signal (confidence too low; all active indicators returned Hold)
+    fn compute_btc_target(indicators: &[Option<crate::signal::Signal>], confidence: f64) -> Option<f64> {
         // confidence <= 0.0 means every active indicator returned Hold.
         // Raise this threshold to require stronger agreement before acting.
-        if signal.confidence <= 0.0 {
+        if confidence <= 0.0 {
             return None;
         }
 
+        // Derive normalized allocation ratio from raw indicator signals.
+        // Buy-heavy → 1.0, Sell-heavy → 0.0, neutral → 0.5.
+        let signal = crate::signal::aggregate(indicators);
         Some(signal.normalized)
     }
 
@@ -206,7 +210,7 @@ impl TradingEngine {
         // Zone scaling (range_max) and apply_zone are applied here by the caller.
         let maybe_target = {
             let cfg = self.config.read().await;
-            Self::compute_btc_target(&signal).map(|normalized| {
+            Self::compute_btc_target(&raw_signals, signal.confidence).map(|normalized| {
                 // Scale normalized value by range_max, then map through zone boundaries
                 // into the final BTC allocation ratio.
                 let raw = normalized * cfg.zone.range_max;
@@ -649,29 +653,28 @@ mod tests {
 
     // ---- compute_btc_target unit tests ----
 
-    fn make_signal(normalized: f64, confidence: f64) -> AllocationSignal {
-        AllocationSignal { normalized, confidence }
-    }
-
     #[test]
     fn compute_btc_target_zero_confidence_returns_none() {
-        let signal = make_signal(0.8, 0.0);
-        assert!(TradingEngine::compute_btc_target(&signal).is_none());
+        // confidence=0.0 → all active indicators returned Hold → skip
+        let indicators = vec![Some(crate::signal::Signal::Hold)];
+        assert!(TradingEngine::compute_btc_target(&indicators, 0.0).is_none());
     }
 
     #[test]
     fn compute_btc_target_strong_buy_returns_target() {
-        // normalized=1.0 → returns Some(1.0); zone mapping is the caller's responsibility.
-        let signal = make_signal(1.0, 1.0);
-        let result = TradingEngine::compute_btc_target(&signal);
+        // Single Buy(1.0): normalized = (0.5 + 1.0/2.0).clamp = 1.0; zone mapping is caller's responsibility.
+        let price = rust_decimal::Decimal::from(10_000_000u64);
+        let indicators = vec![Some(crate::signal::Signal::Buy { price, confidence: 1.0 })];
+        let result = TradingEngine::compute_btc_target(&indicators, 1.0);
         assert_eq!(result, Some(1.0));
     }
 
     #[test]
     fn compute_btc_target_strong_sell_returns_target() {
-        // normalized=0.0 → returns Some(0.0); zone mapping is the caller's responsibility.
-        let signal = make_signal(0.0, 1.0);
-        let result = TradingEngine::compute_btc_target(&signal);
+        // Single Sell(1.0): normalized = (0.5 - 1.0/2.0).clamp = 0.0; zone mapping is caller's responsibility.
+        let price = rust_decimal::Decimal::from(10_000_000u64);
+        let indicators = vec![Some(crate::signal::Signal::Sell { price, confidence: 1.0 })];
+        let result = TradingEngine::compute_btc_target(&indicators, 1.0);
         assert_eq!(result, Some(0.0));
     }
 

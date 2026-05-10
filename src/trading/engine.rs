@@ -167,7 +167,7 @@ impl TradingEngine {
     /// this function to change trading behaviour.
     ///
     /// # Arguments
-    /// - `signal`: Result of `aggregate_with_zone()` — contains `raw_signal` and `confidence`
+    /// - `signal`: Result of `aggregate()` — contains `normalized` [0.0, 1.0] and `confidence`
     /// - `config`: Live trading configuration including zone config
     ///
     /// # Returns
@@ -184,11 +184,16 @@ impl TradingEngine {
             return None;
         }
 
+        // --- raw_signal 計算: normalized を range_max にスケール ---
+        // aggregate() は [0.0, 1.0] の正規化値のみを返す。
+        // ここで ZoneConfig の range_max を乗じて raw_signal を得る。
+        let raw_signal = signal.normalized * config.zone.range_max;
+
         // --- Zone conversion: raw_signal → target_pct ---
         // apply_zone maps the aggregated raw value through ZoneConfig into [0.0, 1.0].
         // Zone A (raw < hold_jpy_below) → 0.0, Zone C (raw > hold_btc_above) → 1.0,
         // Zone B (between) → linear interpolation.
-        let target = crate::signal::apply_zone(signal.raw_signal, &config.zone);
+        let target = crate::signal::apply_zone(raw_signal, &config.zone);
 
         Some(target)
     }
@@ -208,10 +213,7 @@ impl TradingEngine {
         let raw_signals: Vec<Option<crate::signal::Signal>> = output.indicators.iter()
             .map(|is| is.signal.clone())
             .collect();
-        let signal = {
-            let cfg = self.config.read().await;
-            crate::signal::aggregate_with_zone(&raw_signals, &cfg.zone)
-        };
+        let signal = crate::signal::aggregate(&raw_signals);
 
         // Step 2: Apply strategy logic (confidence check) via the pure function.
         // Returns Some(target_pct) when we should act, None when we should skip.
@@ -331,7 +333,7 @@ impl TradingEngine {
         // Broadcast synthetic SignalDetail so API/WS consumers see rebalance activity.
         let rebalance_detail = SignalDetail {
             aggregate: AllocationSignal {
-                raw_signal: target_pct,
+                normalized: target_pct,
                 confidence: 0.0,
             },
             target_pct,
@@ -659,8 +661,8 @@ mod tests {
         TradingConfig::default()
     }
 
-    fn make_signal(raw_signal: f64, confidence: f64) -> AllocationSignal {
-        AllocationSignal { raw_signal, confidence }
+    fn make_signal(normalized: f64, confidence: f64) -> AllocationSignal {
+        AllocationSignal { normalized, confidence }
     }
 
     #[test]

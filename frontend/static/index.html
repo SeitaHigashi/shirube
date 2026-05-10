@@ -97,30 +97,10 @@
     #settings-msg.ok { color: #26a69a; }
     #settings-msg.err { color: #ef5350; }
     /* Signal panel */
-    #signal-composite { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #0f3460; }
-    .signal-composite-label { font-size: 11px; color: #888; }
-    #alloc-target-pct { font-size: 26px; font-weight: bold; }
-    #signal-confidence { font-size: 12px; color: #888; margin-bottom: 8px; }
-    #alloc-gauge-wrap { margin-bottom: 10px; }
-    #alloc-gauge-track { background: #0f3460; border-radius: 4px; height: 10px; position: relative; }
-    #alloc-gauge-fill { height: 100%; border-radius: 4px; background: linear-gradient(to right, #ef5350, #ffb300, #26a69a); transition: width 0.4s; }
-    #alloc-labels { display: flex; justify-content: space-between; font-size: 10px; color: #555; margin-top: 3px; }
     .signal-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid #1a1a2e; font-size: 12px; }
     .signal-row:last-child { border-bottom: none; }
     .signal-name { color: #888; min-width: 40px; }
     .signal-detail { color: #ccc; flex: 1; margin: 0 8px; font-size: 11px; }
-    .signal-badge { font-weight: bold; font-size: 12px; min-width: 36px; text-align: right; }
-    .signal-buy { color: #26a69a; }
-    .signal-sell { color: #ef5350; }
-    .signal-hold { color: #888; }
-    #signal-zone-diff { display: none; font-size: 11px; color: #aaa; margin-bottom: 8px; align-items: center; gap: 6px; flex-wrap: wrap; }
-    .zone-raw-label { color: #777; }
-    .zone-raw-val { color: #ccc; font-weight: bold; }
-    .zone-arrow { color: #555; }
-    .zone-badge { font-size: 10px; font-weight: bold; padding: 1px 6px; border-radius: 3px; }
-    .zone-badge-a { background: #4a1515; color: #ef5350; border: 1px solid #ef5350; }
-    .zone-badge-b { background: #3a3000; color: #ffb300; border: 1px solid #ffb300; }
-    .zone-badge-c { background: #0d2e2b; color: #26a69a; border: 1px solid #26a69a; }
   </style>
 </head>
 <body>
@@ -173,24 +153,7 @@
       <div id="macd-chart"></div>
     </div>
     <div class="panel" id="signal-panel">
-      <h2>シグナル</h2>
-      <div id="signal-composite">
-        <span class="signal-composite-label">目標BTC配分</span>
-        <span id="alloc-target-pct" class="signal-hold">--.--%</span>
-      </div>
-      <div id="signal-zone-diff">
-        <span class="zone-raw-label">生シグナル:</span>
-        <span id="raw-signal-pct" class="zone-raw-val">--.--%</span>
-        <span class="zone-arrow">→</span>
-        <span id="zone-badge" class="zone-badge zone-badge-b">Zone B 比例配分</span>
-      </div>
-      <div id="alloc-gauge-wrap">
-        <div id="alloc-gauge-track">
-          <div id="alloc-gauge-fill" style="width:50%"></div>
-        </div>
-        <div id="alloc-labels"><span>0%</span><span>50%</span><span>100%</span></div>
-      </div>
-      <div id="signal-confidence"></div>
+      <h2>インジケータ</h2>
       <div style="display:flex;align-items:center;gap:6px;margin:4px 0 6px;font-size:11px;color:#888;">
         <span id="calc-dot" style="width:8px;height:8px;border-radius:50%;background:#555;flex-shrink:0;"></span>
         <span id="calc-state-text">--</span>
@@ -520,57 +483,19 @@
     }
 
     function renderSignalPanel(detail) {
-      const targetEl = document.getElementById('alloc-target-pct');
-      const fillEl    = document.getElementById('alloc-gauge-fill');
-      const confEl    = document.getElementById('signal-confidence');
-      const rowsEl    = document.getElementById('signal-rows');
-
-      if (detail === null || detail === undefined) {
-        targetEl.textContent = '--.--%';
-        targetEl.className = 'signal-hold';
-        confEl.textContent = 'シグナル待機中';
-        rowsEl.innerHTML = '';
-        fillEl.style.width = '50%';
-        return;
-      }
-
-      const agg = detail.aggregate; // { raw_signal, confidence }
-      const pct = (detail.target_pct * 100).toFixed(1);
-      targetEl.textContent = `${pct}%`;
-      targetEl.className = detail.target_pct > 0.55 ? 'signal-buy'
-                         : detail.target_pct < 0.45 ? 'signal-sell'
-                         : 'signal-hold';
-      fillEl.style.width = `${pct}%`;
-
-      // ゾーン差分表示: raw_signal と target_pct が 1% 以上異なる場合に表示
-      const zoneDiffEl = document.getElementById('signal-zone-diff');
-      const rawPctEl   = document.getElementById('raw-signal-pct');
-      const zoneBadgeEl = document.getElementById('zone-badge');
-      const rawSignal = agg.raw_signal != null ? agg.raw_signal : detail.target_pct;
-      const diff = Math.abs(rawSignal - detail.target_pct);
-      if (diff >= 0.01) {
-        rawPctEl.textContent = `${(rawSignal * 100).toFixed(1)}%`;
-        let zone, cls;
-        if (detail.target_pct <= 0.001 && rawSignal > 0.001) {
-          zone = 'Zone A  JPY保持'; cls = 'zone-badge zone-badge-a';
-        } else if (detail.target_pct >= 0.999 && rawSignal < 0.999) {
-          zone = 'Zone C  BTC保持'; cls = 'zone-badge zone-badge-c';
-        } else {
-          zone = 'Zone B  比例配分'; cls = 'zone-badge zone-badge-b';
-        }
-        zoneBadgeEl.textContent = zone;
-        zoneBadgeEl.className = cls;
-        zoneDiffEl.style.display = 'flex';
-      } else {
-        zoneDiffEl.style.display = 'none';
-      }
-
-      confEl.textContent = `信頼度 ${(agg.confidence * 100).toFixed(0)}%`;
+      const rowsEl = document.getElementById('signal-rows');
 
       // 計算状態の表示
       const dot = document.getElementById('calc-dot');
       const stateText = document.getElementById('calc-state-text');
       const calcTime = document.getElementById('calc-time');
+
+      if (detail === null || detail === undefined) {
+        rowsEl.innerHTML = '';
+        stateText.textContent = 'シグナル待機中';
+        return;
+      }
+
       if (detail.calculation_state === 'active') {
         dot.className = 'active';
         stateText.textContent = '計算中';
@@ -584,17 +509,13 @@
           '.' + String(d.getMilliseconds()).padStart(3, '0');
       }
 
+      // インジケータ名と raw 値のみ表示（シグナル影響情報は非表示）
       const indicators = detail.indicators || [];
       rowsEl.innerHTML = indicators.map(ind => {
-        const s = parseSignal(ind.signal);
-        const badge = s.kind === 'HOLD' ? '－' : s.kind === 'BUY' ? '▲' : '▼';
-        const cls = signalClass(s.kind);
-        const conf = s.confidence != null ? ` ${(s.confidence * 100).toFixed(0)}%` : '';
         const valText = ind.value != null ? formatIndicatorValue(ind.name, ind.value) : '---';
         return `<div class="signal-row">
           <span class="signal-name">${ind.name}</span>
           <span class="signal-detail">${valText}</span>
-          <span class="signal-badge ${cls}">${badge}${conf}</span>
         </div>`;
       }).join('');
     }

@@ -23,7 +23,7 @@ mod tests {
     fn detail(target_pct: f64, confidence: f64) -> SignalDetail {
         use crate::signal::AllocationSignal;
         SignalDetail {
-            aggregate: AllocationSignal { raw_signal: target_pct, confidence },
+            aggregate: AllocationSignal { normalized: target_pct, confidence },
             target_pct,
             indicators: vec![],
             raw_indicators: None,

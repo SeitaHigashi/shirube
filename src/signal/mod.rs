@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::Serialize;
 
-use crate::config::{TradingConfig, ZoneConfig};
+use crate::config::TradingConfig;
 use crate::types::market::Candle;
 
 // ---- Signal ----
@@ -29,22 +29,24 @@ pub struct IndicatorSignal {
 
 // ---- AllocationSignal — 連続配分シグナル ----
 
-/// インジケータ集計結果。ゾーン変換前の生シグナル値と信頼度のみを持つ。
-/// ゾーン変換（raw_signal → target_pct）は TradingEngine の compute_btc_target で行う。
+/// インジケータ集計結果。正規化済みシグナル値と信頼度のみを持つ。
+/// range_max スケーリングと zone 変換（normalized → target_pct）は
+/// TradingEngine の compute_btc_target で行う。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AllocationSignal {
-    /// ゾーン変換前の生シグナル値 [0.0, range_max]。
-    /// Buy優勢 → range_max 方向、Sell優勢 → 0.0 方向、中立 → range_max / 2.0。
-    pub raw_signal: f64,
+    /// 正規化済みシグナル値 [0.0, 1.0]。
+    /// Buy優勢 → 1.0、Sell優勢 → 0.0、中立 → 0.5。
+    /// range_max スケーリングは行わない（TradingEngine の責務）。
+    pub normalized: f64,
     /// インジケータのうち方向性を持つもの（Buy/Sell）の割合 [0.0, 1.0]。
     /// 0.0 = 全インジケータが Hold、1.0 = 全インジケータが方向性あり。
     pub confidence: f64,
 }
 
 impl AllocationSignal {
-    /// 中立シグナル: raw_signal = range_max/2, confidence = 0
+    /// 中立シグナル: normalized = 0.5, confidence = 0
     pub fn neutral() -> Self {
-        Self { raw_signal: 0.5, confidence: 0.0 }
+        Self { normalized: 0.5, confidence: 0.0 }
     }
 }
 
@@ -71,7 +73,7 @@ pub fn apply_zone(raw: f64, zone: &crate::config::ZoneConfig) -> f64 {
 
 /// SignalEngine がブロードキャストする計算結果。
 /// インジケータの計算値のみを含み、「何%BTCを持つか」という判断は含まない。
-/// TradingEngine はこれを受け取り aggregate_with_zone() で AllocationSignal を計算する。
+/// TradingEngine はこれを受け取り aggregate() で AllocationSignal を計算する。
 #[derive(Debug, Clone)]
 pub struct IndicatorOutput {
     pub indicators: Vec<IndicatorSignal>,
@@ -81,13 +83,16 @@ pub struct IndicatorOutput {
 
 // ---- 集計関数（純粋関数） ----
 
-/// 複数インジケータのシグナルを ZoneConfig に従って AllocationSignal に合成する（純粋関数）。
+/// 複数インジケータのシグナルを AllocationSignal に合成する（純粋関数）。
 /// TradingEngine が発注判断に使用する。
 ///
 /// - None（ウォームアップ中）は集計から除外
-/// - Buy は raw_signal を range_max 方向へ、Sell は 0.0 方向へ押す
-/// - 中立（インジケータなし）は range_max / 2.0
-pub fn aggregate_with_zone(signals: &[Option<Signal>], zone: &ZoneConfig) -> AllocationSignal {
+/// - Buy は normalized を 1.0 方向へ、Sell は 0.0 方向へ押す
+/// - 中立（インジケータなし）は 0.5
+///
+/// NOTE: range_max スケーリングは行わない。
+/// raw_signal = normalized * range_max の計算は TradingEngine::compute_btc_target の責務。
+pub fn aggregate(signals: &[Option<Signal>]) -> AllocationSignal {
     let mut delta_sum = 0.0f64;
     let mut active = 0usize;
     let mut directional = 0usize;
@@ -111,21 +116,10 @@ pub fn aggregate_with_zone(signals: &[Option<Signal>], zone: &ZoneConfig) -> All
         return AllocationSignal::neutral();
     }
 
-    // 正規化後の値 [0.0, 1.0] を range_max にスケール
-    // Buy(1.0) 1本のみ → (0.5 + 0.5) * range_max = range_max
-    // Sell(1.0) 1本のみ → (0.5 - 0.5) * range_max = 0.0
+    // 正規化: Buy(1.0) 1本のみ → 1.0、Sell(1.0) 1本のみ → 0.0、中立 → 0.5
     let normalized = (0.5 + delta_sum / (active as f64 * 2.0)).clamp(0.0, 1.0);
-    let raw_signal = normalized * zone.range_max;
     let confidence = directional as f64 / active as f64;
-    // NOTE: apply_zone() is intentionally NOT called here.
-    // Zone conversion (raw_signal → target_pct) is the responsibility of
-    // TradingEngine::compute_btc_target(), keeping strategy judgment out of the signal layer.
-    AllocationSignal { raw_signal, confidence }
-}
-
-/// デフォルト ZoneConfig（range_max=1.0）で集計する。
-pub fn aggregate(signals: &[Option<Signal>]) -> AllocationSignal {
-    aggregate_with_zone(signals, &ZoneConfig::default())
+    AllocationSignal { normalized, confidence }
 }
 
 // ---- SignalDetail — API レスポンス用（集計 + 個別） ----
@@ -370,14 +364,14 @@ mod tests {
         fn buy_dominates() {
             let signals = vec![buy(0.8), sell(0.3), Some(Signal::Hold)];
             let result = aggregate(&signals);
-            assert!(result.raw_signal > 0.5, "got {}", result.raw_signal);
+            assert!(result.normalized > 0.5, "got {}", result.normalized);
         }
 
         #[test]
         fn sell_dominates() {
             let signals = vec![buy(0.2), sell(0.9)];
             let result = aggregate(&signals);
-            assert!(result.raw_signal < 0.5, "got {}", result.raw_signal);
+            assert!(result.normalized < 0.5, "got {}", result.normalized);
         }
 
         #[test]
@@ -385,29 +379,29 @@ mod tests {
             // delta = 0.1, active=3 → 0.5 + 0.1/6 ≈ 0.517
             let signals = vec![buy(0.1), Some(Signal::Hold), Some(Signal::Hold)];
             let result = aggregate(&signals);
-            assert!(result.raw_signal > 0.5 && result.raw_signal < 0.6,
-                "got {}", result.raw_signal);
+            assert!(result.normalized > 0.5 && result.normalized < 0.6,
+                "got {}", result.normalized);
         }
 
         #[test]
         fn tied_returns_neutral() {
             let signals = vec![buy(0.5), sell(0.5)];
             let result = aggregate(&signals);
-            assert!((result.raw_signal - 0.5).abs() < 1e-9, "got {}", result.raw_signal);
+            assert!((result.normalized - 0.5).abs() < 1e-9, "got {}", result.normalized);
         }
 
         #[test]
         fn single_strong_buy() {
             let signals = vec![buy(1.0)];
             let result = aggregate(&signals);
-            assert!((result.raw_signal - 1.0).abs() < 1e-9, "got {}", result.raw_signal);
+            assert!((result.normalized - 1.0).abs() < 1e-9, "got {}", result.normalized);
         }
 
         #[test]
         fn single_strong_sell() {
             let signals = vec![sell(1.0)];
             let result = aggregate(&signals);
-            assert!((result.raw_signal - 0.0).abs() < 1e-9, "got {}", result.raw_signal);
+            assert!((result.normalized - 0.0).abs() < 1e-9, "got {}", result.normalized);
         }
     }
 

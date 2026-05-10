@@ -3,24 +3,34 @@ use std::time::Duration;
 use chrono::Utc;
 use tokio::sync::{broadcast, watch};
 use tokio::time::{interval, MissedTickBehavior};
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
-use super::{AllocationSignal, Indicator, IndicatorPoint, IndicatorRawValues, IndicatorSignal, Signal, SignalDetail};
+use super::{Indicator, IndicatorOutput, IndicatorPoint, IndicatorRawValues, IndicatorSignal};
 use super::indicators::{bollinger::Bollinger, ema::Ema, macd::Macd, rsi::Rsi, sma::Sma};
-use crate::config::{TradingConfig, ZoneConfig};
+use crate::config::TradingConfig;
 use crate::types::market::Candle;
 
+/// インジケータ計算エンジン。Candle を受信してインジケータを更新し、
+/// 250ms 周期で IndicatorOutput をブロードキャストする。
+///
+/// # 責務
+/// - インジケータの計算値（IndicatorPoint）の生成
+/// - 各インジケータの個別シグナル（IndicatorSignal）の収集
+/// - 設定変更に応じたインジケータ再構築
+///
+/// # 非責務（TradingEngine が担う）
+/// - 配分率の計算（aggregate_with_zone）
+/// - 発注判断・ガードロジック
 pub struct SignalEngine {
     indicators: Vec<Box<dyn Indicator>>,
     candle_rx: broadcast::Receiver<Candle>,
-    signal_tx: broadcast::Sender<SignalDetail>,
-    threshold: f64,
-    zone: ZoneConfig,
+    /// IndicatorOutput をブロードキャストするチャネル（計算値のみ、判断は含まない）
+    output_tx: broadcast::Sender<IndicatorOutput>,
     /// ライブ設定変更を受信するチャネル
     config_rx: watch::Receiver<TradingConfig>,
-    /// 最後に受信したキャンドルから計算したインジケータ結果（タイマー再計算に使用）
+    /// 最後に受信したキャンドルから計算したインジケータ結果（タイマー再送信用）
     last_indicator_signals: Option<Vec<IndicatorSignal>>,
-    /// 最後に計算した生インジケータ値（TradingEngine のガードロジックで使用）
+    /// 最後に計算した生インジケータ値（タイマー再送信用）
     last_raw_indicators: Option<IndicatorPoint>,
 }
 
@@ -29,43 +39,19 @@ impl SignalEngine {
         indicators: Vec<Box<dyn Indicator>>,
         candle_rx: broadcast::Receiver<Candle>,
         config_rx: watch::Receiver<TradingConfig>,
-    ) -> (Self, broadcast::Sender<SignalDetail>, broadcast::Receiver<SignalDetail>) {
-        let threshold = config_rx.borrow().signal_threshold;
-        let zone = config_rx.borrow().zone.clone();
-        Self::new_with_zone_inner(indicators, candle_rx, config_rx, threshold, zone)
-    }
-
-    pub fn new_with_zone(
-        indicators: Vec<Box<dyn Indicator>>,
-        candle_rx: broadcast::Receiver<Candle>,
-        config_rx: watch::Receiver<TradingConfig>,
-    ) -> (Self, broadcast::Sender<SignalDetail>, broadcast::Receiver<SignalDetail>) {
-        let threshold = config_rx.borrow().signal_threshold;
-        let zone = config_rx.borrow().zone.clone();
-        Self::new_with_zone_inner(indicators, candle_rx, config_rx, threshold, zone)
-    }
-
-    fn new_with_zone_inner(
-        indicators: Vec<Box<dyn Indicator>>,
-        candle_rx: broadcast::Receiver<Candle>,
-        config_rx: watch::Receiver<TradingConfig>,
-        threshold: f64,
-        zone: ZoneConfig,
-    ) -> (Self, broadcast::Sender<SignalDetail>, broadcast::Receiver<SignalDetail>) {
-        let (signal_tx, signal_rx) = broadcast::channel(256);
+    ) -> (Self, broadcast::Sender<IndicatorOutput>, broadcast::Receiver<IndicatorOutput>) {
+        let (output_tx, output_rx) = broadcast::channel(256);
         (
             Self {
                 indicators,
                 candle_rx,
-                signal_tx: signal_tx.clone(),
-                threshold,
-                zone,
+                output_tx: output_tx.clone(),
                 config_rx,
                 last_indicator_signals: None,
                 last_raw_indicators: None,
             },
-            signal_tx,
-            signal_rx,
+            output_tx,
+            output_rx,
         )
     }
 
@@ -94,7 +80,7 @@ impl SignalEngine {
 
     /// 非同期タスクとして動かす。
     /// キャンドル受信時はインジケータを更新してキャッシュし、
-    /// 250ms タイマーで再集計してシグナルをブロードキャストする。
+    /// 250ms タイマーで IndicatorOutput をブロードキャストする。
     /// config_rx で設定変更を検知するとインジケータを再構築する。
     pub async fn run(mut self) {
         let mut ticker = interval(Duration::from_millis(250));
@@ -119,7 +105,7 @@ impl SignalEngine {
                                 .map(|ind| {
                                     let signal = ind.update(&candle);
                                     let value = ind.value();
-                                    // スナップショットで生値を収集してIndicatorPointに格納
+                                    // スナップショットで生値を収集して IndicatorPoint に格納
                                     match ind.snapshot() {
                                         IndicatorRawValues::Scalar(v) => match ind.name() {
                                             "SMA" => point.sma = v,
@@ -141,7 +127,6 @@ impl SignalEngine {
                                     IndicatorSignal { name: ind.name().to_string(), signal, value }
                                 })
                                 .collect();
-                            // いずれかのフィールドが Some であれば IndicatorPoint を保持
                             self.last_raw_indicators = Some(point);
                             self.last_indicator_signals = Some(indicator_signals);
                         }
@@ -153,26 +138,22 @@ impl SignalEngine {
                         }
                     }
                 }
-                // 250ms タイマー: キャッシュ済みインジケータ結果で再集計して送信
+                // 250ms タイマー: キャッシュ済みインジケータ結果を IndicatorOutput として送信
+                // NOTE: 集計（aggregate_with_zone）は行わない。判断は TradingEngine が担う。
                 _ = ticker.tick() => {
-                    if let Some(ref ind_signals) = self.last_indicator_signals {
-                        let raw: Vec<Option<Signal>> = ind_signals.iter()
-                            .map(|is| is.signal.clone())
-                            .collect();
-                        let aggregated = Self::aggregate_with_zone(&raw, self.threshold, &self.zone);
-                        debug!(signal = ?aggregated, "SignalEngine aggregated");
-                        let detail = SignalDetail {
-                            aggregate: aggregated,
+                    if let (Some(ref ind_signals), Some(ref raw)) =
+                        (&self.last_indicator_signals, &self.last_raw_indicators)
+                    {
+                        let output = IndicatorOutput {
                             indicators: ind_signals.clone(),
-                            raw_indicators: self.last_raw_indicators.clone(),
+                            raw: raw.clone(),
                             calculated_at: Utc::now(),
-                            calculation_state: "active".to_string(),
                         };
-                        let _ = self.signal_tx.send(detail);
+                        let _ = self.output_tx.send(output);
                     }
                     // last_indicator_signals が None の場合は無送信（データ待ち）
                 }
-                // 設定変更: threshold/zone を即時反映、インジケータ周期が変わった場合は再構築
+                // 設定変更: インジケータ周期が変わった場合は再構築
                 Ok(()) = self.config_rx.changed() => {
                     let new_cfg = self.config_rx.borrow_and_update().clone();
                     if Self::indicators_changed(&current_cfg, &new_cfg) {
@@ -185,134 +166,23 @@ impl SignalEngine {
                         self.indicators = Self::build_indicators(&new_cfg);
                         // ウォームアップ完了まで古いキャッシュをクリアする
                         self.last_indicator_signals = None;
+                        self.last_raw_indicators = None;
                     }
-                    self.threshold = new_cfg.signal_threshold;
-                    self.zone = new_cfg.zone.clone();
                     current_cfg = new_cfg;
                 }
             }
         }
-    }
-
-    /// 複数インジケータのシグナルをZoneConfigに従って合成する（純粋関数）。
-    /// - None (ウォームアップ中) は集計から除外
-    /// - Buy は raw_signal を range_max 方向へ、Sell は 0.0 方向へ押す
-    /// - 中立（インジケータなし）は range_max / 2.0
-    pub fn aggregate_with_zone(
-        signals: &[Option<Signal>],
-        _threshold: f64,
-        zone: &ZoneConfig,
-    ) -> AllocationSignal {
-        let mut delta_sum = 0.0f64;
-        let mut active = 0usize;
-        let mut directional = 0usize;
-
-        for sig in signals.iter().flatten() {
-            active += 1;
-            match sig {
-                Signal::Buy { confidence, .. } => {
-                    delta_sum += confidence;
-                    directional += 1;
-                }
-                Signal::Sell { confidence, .. } => {
-                    delta_sum -= confidence;
-                    directional += 1;
-                }
-                Signal::Hold => {}
-            }
-        }
-
-        if active == 0 {
-            return AllocationSignal::neutral();
-        }
-
-        // 正規化後の値 [0.0, 1.0] を range_max にスケール
-        // Buy(1.0) 1本のみ → (0.5 + 0.5) * range_max = range_max
-        // Sell(1.0) 1本のみ → (0.5 - 0.5) * range_max = 0.0
-        let normalized = (0.5 + delta_sum / (active as f64 * 2.0)).clamp(0.0, 1.0);
-        let raw_signal = normalized * zone.range_max;
-        let target_pct = crate::signal::apply_zone(raw_signal, zone);
-        let confidence = directional as f64 / active as f64;
-        AllocationSignal { raw_signal, target_pct, confidence }
-    }
-
-    /// 後方互換: デフォルトZoneConfig（range_max=1.0）で集計する。
-    pub fn aggregate(signals: &[Option<Signal>], threshold: f64) -> AllocationSignal {
-        Self::aggregate_with_zone(signals, threshold, &ZoneConfig::default())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal_macros::dec;
-
-    fn buy(conf: f64) -> Option<Signal> {
-        Some(Signal::Buy { price: dec!(9000000), confidence: conf })
-    }
-
-    fn sell(conf: f64) -> Option<Signal> {
-        Some(Signal::Sell { price: dec!(9000000), confidence: conf })
-    }
-
-    #[test]
-    fn empty_signals_returns_neutral() {
-        let result = SignalEngine::aggregate(&[], 0.3);
-        assert_eq!(result, AllocationSignal::neutral());
-    }
-
-    #[test]
-    fn all_none_returns_neutral() {
-        let result = SignalEngine::aggregate(&[None, None, None], 0.3);
-        assert_eq!(result, AllocationSignal::neutral());
-    }
-
-    #[test]
-    fn buy_dominates() {
-        let signals = vec![buy(0.8), sell(0.3), Some(Signal::Hold)];
-        let result = SignalEngine::aggregate(&signals, 0.3);
-        assert!(result.target_pct > 0.5, "got {}", result.target_pct);
-    }
-
-    #[test]
-    fn sell_dominates() {
-        let signals = vec![buy(0.2), sell(0.9)];
-        let result = SignalEngine::aggregate(&signals, 0.3);
-        assert!(result.target_pct < 0.5, "got {}", result.target_pct);
-    }
-
-    #[test]
-    fn weak_buy_stays_near_neutral() {
-        // delta = 0.1, active=3 → 0.5 + 0.1/6 ≈ 0.517
-        let signals = vec![buy(0.1), Some(Signal::Hold), Some(Signal::Hold)];
-        let result = SignalEngine::aggregate(&signals, 0.3);
-        assert!(result.target_pct > 0.5 && result.target_pct < 0.6,
-            "got {}", result.target_pct);
-    }
-
-    #[test]
-    fn tied_returns_neutral() {
-        let signals = vec![buy(0.5), sell(0.5)];
-        let result = SignalEngine::aggregate(&signals, 0.3);
-        assert!((result.target_pct - 0.5).abs() < 1e-9, "got {}", result.target_pct);
-    }
-
-    #[test]
-    fn single_strong_buy() {
-        let signals = vec![buy(1.0)];
-        let result = SignalEngine::aggregate(&signals, 0.3);
-        assert!((result.target_pct - 1.0).abs() < 1e-9, "got {}", result.target_pct);
-    }
-
-    #[test]
-    fn single_strong_sell() {
-        let signals = vec![sell(1.0)];
-        let result = SignalEngine::aggregate(&signals, 0.3);
-        assert!((result.target_pct - 0.0).abs() < 1e-9, "got {}", result.target_pct);
-    }
+    use crate::signal::{Indicator, Signal};
+    use tokio::sync::broadcast;
 
     #[tokio::test]
-    async fn engine_broadcasts_aggregated_signal() {
+    async fn engine_broadcasts_indicator_output() {
         use crate::signal::mock::MockIndicator;
         use chrono::Utc;
         use rust_decimal_macros::dec;
@@ -336,19 +206,20 @@ mod tests {
         let cfg = crate::config::TradingConfig::default();
         let (config_tx, config_rx) = tokio::sync::watch::channel(cfg);
         let _ = config_tx; // keep sender alive
-        let (engine, _signal_tx, mut signal_rx) = SignalEngine::new(indicators, candle_rx, config_rx);
+        let (engine, _output_tx, mut output_rx) = SignalEngine::new(indicators, candle_rx, config_rx);
         tokio::spawn(engine.run());
 
         candle_tx.send(candle).unwrap();
 
-        let sig = tokio::time::timeout(
+        let output = tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            async { signal_rx.recv().await.unwrap() }
+            async { output_rx.recv().await.unwrap() }
         ).await.expect("timeout");
 
-        assert!(sig.aggregate.target_pct > 0.5, "expected bullish allocation");
-        assert_eq!(sig.indicators.len(), 1);
-        assert_eq!(sig.indicators[0].name, "test");
+        // IndicatorOutput にはインジケータ計算値が含まれる（集計は含まない）
+        assert_eq!(output.indicators.len(), 1);
+        assert_eq!(output.indicators[0].name, "test");
+        assert!(matches!(output.indicators[0].signal, Some(Signal::Buy { .. })));
     }
 
     #[test]
@@ -369,7 +240,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn config_update_reflects_new_threshold() {
+    async fn config_update_rebuilds_indicators() {
         use crate::signal::mock::MockIndicator;
         use crate::types::market::Candle;
         use chrono::Utc;
@@ -392,22 +263,22 @@ mod tests {
 
         let cfg = crate::config::TradingConfig::default();
         let (config_tx, config_rx) = tokio::sync::watch::channel(cfg.clone());
-        let (engine, _signal_tx, mut signal_rx) = SignalEngine::new(indicators, candle_rx, config_rx);
+        let (engine, _output_tx, mut output_rx) = SignalEngine::new(indicators, candle_rx, config_rx);
         tokio::spawn(engine.run());
 
-        // 設定を更新して threshold を変更する
+        // 設定を更新してインジケータ周期を変更する
         let mut updated = cfg;
-        updated.signal_threshold = 0.9;
+        updated.sma_period = 50;
         config_tx.send(updated).unwrap();
 
         candle_tx.send(candle).unwrap();
 
-        let sig = tokio::time::timeout(
+        let output = tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            async { signal_rx.recv().await.unwrap() }
+            async { output_rx.recv().await.unwrap() }
         ).await.expect("timeout");
 
-        // シグナルが正常に届けば設定更新後も動作していることを確認
-        assert_eq!(sig.indicators.len(), 1);
+        // 設定更新後もブロードキャストが正常に届くことを確認
+        assert_eq!(output.indicators.len(), 1);
     }
 }

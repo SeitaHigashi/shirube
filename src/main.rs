@@ -175,17 +175,30 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // SignalEngine: Candle → Signal（config_rx 経由でライブ設定変更を受信）
-    let (signal_engine, signal_engine_tx, signal_rx) =
+    // SignalEngine: Candle → IndicatorOutput（config_rx 経由でライブ設定変更を受信）
+    let (signal_engine, _indicator_tx, indicator_rx) =
         SignalEngine::new(indicators, market_bus.candle_rx(), config_rx);
     tokio::spawn(signal_engine.run());
 
+    // TradingEngine: IndicatorOutput → aggregate_with_zone → RiskManager → send_order → SignalDetail broadcast
+    let (trading_engine, signal_detail_tx) = TradingEngine::new(
+        indicator_rx,
+        Arc::clone(&client),
+        RiskManager::new(init_risk_params),
+        "BTC_JPY".to_string(),
+    );
+    let trading_engine = trading_engine
+        .with_config(Arc::clone(&trading_config))
+        .with_order_repo(db.orders());
+    tokio::spawn(trading_engine.run());
+
     // 最新シグナルをキャッシュするタスク（API配信用）
+    // TradingEngine が SignalDetail をブロードキャストするので、そちらを subscribe する
     let latest_signal: Arc<RwLock<Option<crate::signal::SignalDetail>>> =
         Arc::new(RwLock::new(None));
     {
         let cache = Arc::clone(&latest_signal);
-        let mut rx = signal_engine_tx.subscribe();
+        let mut rx = signal_detail_tx.subscribe();
         tokio::spawn(async move {
             loop {
                 match rx.recv().await {
@@ -201,7 +214,7 @@ async fn main() -> anyhow::Result<()> {
         use crate::signal::Signal;
         let raw: Vec<Option<Signal>> =
             warmup_signals.iter().map(|is| is.signal.clone()).collect();
-        let aggregated = SignalEngine::aggregate(&raw, init_cfg.signal_threshold);
+        let aggregated = crate::signal::aggregate(&raw);
         let detail = SignalDetail {
             aggregate: aggregated,
             indicators: warmup_signals,
@@ -212,17 +225,6 @@ async fn main() -> anyhow::Result<()> {
         *latest_signal.write().await = Some(detail);
         info!("Pre-populated signal cache from warmup data");
     }
-
-    // TradingEngine: Signal → RiskManager → send_order
-    let trading_engine = TradingEngine::new(
-        signal_rx,
-        Arc::clone(&client),
-        RiskManager::new(init_risk_params),
-        "BTC_JPY".to_string(),
-    )
-    .with_config(Arc::clone(&trading_config))
-    .with_order_repo(db.orders());
-    tokio::spawn(trading_engine.run());
 
     // News AI タスク起動（5分ごとにRSSフィードを取得、新規記事のみOllamaでセンチメント分析）
     let news_cache = Arc::new(RwLock::new(vec![]));
@@ -308,7 +310,7 @@ async fn main() -> anyhow::Result<()> {
         exchange: Arc::clone(&client),
         candle_tx: market_bus.candle_tx(),
         ticker_tx: market_bus.ticker_tx(),
-        signal_tx: signal_engine_tx,
+        signal_tx: signal_detail_tx,
         ws_tx: ws_tx_for_api,
         aggregator_registry: std::sync::Arc::new(tokio::sync::Mutex::new(
             std::collections::HashMap::new(),

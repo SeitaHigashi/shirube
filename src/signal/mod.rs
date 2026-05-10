@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::Serialize;
 
-use crate::config::TradingConfig;
+use crate::config::{TradingConfig, ZoneConfig};
 use crate::types::market::Candle;
 
 // ---- Signal ----
@@ -71,6 +71,65 @@ pub fn apply_zone(raw: f64, zone: &crate::config::ZoneConfig) -> f64 {
         return if raw >= zone.hold_btc_above { 1.0 } else { 0.0 };
     }
     ((raw - zone.hold_jpy_below) / span).clamp(0.0, 1.0)
+}
+
+// ---- IndicatorOutput — SignalEngine が出力する純粋な計算結果 ----
+
+/// SignalEngine がブロードキャストする計算結果。
+/// インジケータの計算値のみを含み、「何%BTCを持つか」という判断は含まない。
+/// TradingEngine はこれを受け取り aggregate_with_zone() で AllocationSignal を計算する。
+#[derive(Debug, Clone)]
+pub struct IndicatorOutput {
+    pub indicators: Vec<IndicatorSignal>,
+    pub raw: IndicatorPoint,
+    pub calculated_at: DateTime<Utc>,
+}
+
+// ---- 集計関数（純粋関数） ----
+
+/// 複数インジケータのシグナルを ZoneConfig に従って AllocationSignal に合成する（純粋関数）。
+/// TradingEngine が発注判断に使用する。
+///
+/// - None（ウォームアップ中）は集計から除外
+/// - Buy は raw_signal を range_max 方向へ、Sell は 0.0 方向へ押す
+/// - 中立（インジケータなし）は range_max / 2.0
+pub fn aggregate_with_zone(signals: &[Option<Signal>], zone: &ZoneConfig) -> AllocationSignal {
+    let mut delta_sum = 0.0f64;
+    let mut active = 0usize;
+    let mut directional = 0usize;
+
+    for sig in signals.iter().flatten() {
+        active += 1;
+        match sig {
+            Signal::Buy { confidence, .. } => {
+                delta_sum += confidence;
+                directional += 1;
+            }
+            Signal::Sell { confidence, .. } => {
+                delta_sum -= confidence;
+                directional += 1;
+            }
+            Signal::Hold => {}
+        }
+    }
+
+    if active == 0 {
+        return AllocationSignal::neutral();
+    }
+
+    // 正規化後の値 [0.0, 1.0] を range_max にスケール
+    // Buy(1.0) 1本のみ → (0.5 + 0.5) * range_max = range_max
+    // Sell(1.0) 1本のみ → (0.5 - 0.5) * range_max = 0.0
+    let normalized = (0.5 + delta_sum / (active as f64 * 2.0)).clamp(0.0, 1.0);
+    let raw_signal = normalized * zone.range_max;
+    let target_pct = apply_zone(raw_signal, zone);
+    let confidence = directional as f64 / active as f64;
+    AllocationSignal { raw_signal, target_pct, confidence }
+}
+
+/// デフォルト ZoneConfig（range_max=1.0）で集計する。
+pub fn aggregate(signals: &[Option<Signal>]) -> AllocationSignal {
+    aggregate_with_zone(signals, &ZoneConfig::default())
 }
 
 // ---- SignalDetail — API レスポンス用（集計 + 個別） ----
@@ -281,6 +340,75 @@ mod tests {
         let candle = dummy_candle();
         let mut ind = MockIndicator::new("empty", vec![]);
         assert!(ind.update(&candle).is_none());
+    }
+
+    mod aggregate_tests {
+        use super::*;
+        use rust_decimal_macros::dec;
+
+        fn buy(conf: f64) -> Option<Signal> {
+            Some(Signal::Buy { price: dec!(9000000), confidence: conf })
+        }
+
+        fn sell(conf: f64) -> Option<Signal> {
+            Some(Signal::Sell { price: dec!(9000000), confidence: conf })
+        }
+
+        #[test]
+        fn empty_signals_returns_neutral() {
+            let result = aggregate(&[]);
+            assert_eq!(result, AllocationSignal::neutral());
+        }
+
+        #[test]
+        fn all_none_returns_neutral() {
+            let result = aggregate(&[None, None, None]);
+            assert_eq!(result, AllocationSignal::neutral());
+        }
+
+        #[test]
+        fn buy_dominates() {
+            let signals = vec![buy(0.8), sell(0.3), Some(Signal::Hold)];
+            let result = aggregate(&signals);
+            assert!(result.target_pct > 0.5, "got {}", result.target_pct);
+        }
+
+        #[test]
+        fn sell_dominates() {
+            let signals = vec![buy(0.2), sell(0.9)];
+            let result = aggregate(&signals);
+            assert!(result.target_pct < 0.5, "got {}", result.target_pct);
+        }
+
+        #[test]
+        fn weak_buy_stays_near_neutral() {
+            // delta = 0.1, active=3 → 0.5 + 0.1/6 ≈ 0.517
+            let signals = vec![buy(0.1), Some(Signal::Hold), Some(Signal::Hold)];
+            let result = aggregate(&signals);
+            assert!(result.target_pct > 0.5 && result.target_pct < 0.6,
+                "got {}", result.target_pct);
+        }
+
+        #[test]
+        fn tied_returns_neutral() {
+            let signals = vec![buy(0.5), sell(0.5)];
+            let result = aggregate(&signals);
+            assert!((result.target_pct - 0.5).abs() < 1e-9, "got {}", result.target_pct);
+        }
+
+        #[test]
+        fn single_strong_buy() {
+            let signals = vec![buy(1.0)];
+            let result = aggregate(&signals);
+            assert!((result.target_pct - 1.0).abs() < 1e-9, "got {}", result.target_pct);
+        }
+
+        #[test]
+        fn single_strong_sell() {
+            let signals = vec![sell(1.0)];
+            let result = aggregate(&signals);
+            assert!((result.target_pct - 0.0).abs() < 1e-9, "got {}", result.target_pct);
+        }
     }
 
     mod zone_tests {

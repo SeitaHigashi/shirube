@@ -15,7 +15,7 @@ use crate::exchange::ExchangeClient;
 use crate::news::analyzer::SentimentScore;
 use crate::risk::manager::RiskManager;
 use crate::risk::RiskDecision;
-use crate::signal::{AllocationSignal, IndicatorOutput, SignalDetail};
+use crate::signal::{AllocationSignal, IndicatorOutput, IndicatorPoint, SignalDetail};
 use crate::storage::orders::OrderRepository;
 use crate::types::order::{Order, OrderRequest, OrderSide, OrderStatus, OrderType};
 
@@ -172,33 +172,73 @@ impl TradingEngine {
         }
     }
 
-    /// Compute the BTC allocation ratio from indicator signals and news sentiment.
+    /// Compute the BTC allocation ratio from raw indicator values and news sentiment.
     ///
-    /// Pure function: combines TA normalized value with news sentiment normalized value
-    /// using the configured weights. Returns None only when both signals are neutral
-    /// (TA confidence = 0 and |avg_sentiment| < 0.1), allowing the sticky target to
-    /// be preserved and preventing unnecessary rebalances on fully neutral markets.
+    /// Derives a directional sub-signal from each available indicator in `raw`,
+    /// averages them into a TA normalized value [0.0, 1.0], then combines with
+    /// news sentiment using the configured weights.
+    ///
+    /// Returns `None` when all indicator fields are `None` (still warming up).
+    ///
+    /// # Sub-signal mappings
+    /// - RSI:       (1.0 - rsi/100)       — low RSI (oversold) → 1.0 (bullish)
+    /// - SMA cross: close > sma → 1.0, close < sma → 0.0
+    /// - EMA cross: close > ema → 1.0, close < ema → 0.0
+    /// - MACD hist: histogram > 0 → 1.0, < 0 → 0.0
+    /// - BB %B:     (1.0 - pct_b/100) clamped — near lower band → bullish
     ///
     /// # Formula
-    ///   ta_normalized    = aggregate(indicators).normalized   ∈ [0.0, 1.0]
-    ///   sentiment_norm   = (avg_sentiment + 1.0) / 2.0        ∈ [0.0, 1.0]
+    ///   ta_normalized    = avg(sub_signals)              ∈ [0.0, 1.0]
+    ///   sentiment_norm   = (avg_sentiment + 1.0) / 2.0  ∈ [0.0, 1.0]
     ///   combined         = ta_normalized * ta_weight + sentiment_norm * sentiment_weight
-    ///
-    /// # Returns
-    /// - `Some(combined)` — BTC allocation ratio ∈ [0.0, 1.0] before zone mapping
-    /// - `None` — both TA and news are neutral; preserve sticky target
     fn compute_btc_target(
-        indicators: &[Option<crate::signal::Signal>],
-        confidence: f64,
+        raw: &IndicatorPoint,
         news_scores: &[SentimentScore],
-        ta_weight: f64,
-        sentiment_weight: f64,
+        config: &TradingConfig,
     ) -> Option<f64> {
-        let ta_signal = crate::signal::aggregate(indicators);
-        let ta_normalized = ta_signal.normalized; // [0.0, 1.0]
+        let mut sub_signals: Vec<f64> = Vec::new();
+
+        // RSI: oversold (low RSI) → bullish (1.0), overbought (high RSI) → bearish (0.0)
+        if let Some(rsi) = raw.rsi {
+            sub_signals.push(1.0 - (rsi / 100.0).clamp(0.0, 1.0));
+        }
+
+        // SMA cross: price above SMA → bullish, below → bearish
+        if let (Some(close), Some(sma)) = (raw.close, raw.sma) {
+            sub_signals.push(if close > sma { 1.0 } else if close < sma { 0.0 } else { 0.5 });
+        }
+
+        // EMA cross: price above EMA → bullish, below → bearish
+        if let (Some(close), Some(ema)) = (raw.close, raw.ema) {
+            sub_signals.push(if close > ema { 1.0 } else if close < ema { 0.0 } else { 0.5 });
+        }
+
+        // MACD histogram: positive → bullish, negative → bearish
+        if let Some(hist) = raw.histogram {
+            sub_signals.push(if hist > 0.0 { 1.0 } else if hist < 0.0 { 0.0 } else { 0.5 });
+        }
+
+        // Bollinger %B: near lower band (oversold) → bullish, near upper band → bearish
+        // Computed from close, bb_upper, bb_lower since IndicatorPoint stores band values.
+        if let (Some(close), Some(bb_upper), Some(bb_lower)) = (raw.close, raw.bb_upper, raw.bb_lower) {
+            let bandwidth = bb_upper - bb_lower;
+            let pct_b = if bandwidth > 0.0 {
+                (close - bb_lower) / bandwidth * 100.0
+            } else {
+                50.0 // flat bands → neutral
+            };
+            sub_signals.push(1.0 - (pct_b / 100.0).clamp(0.0, 1.0));
+        }
+
+        // Warmup: no indicator data available yet
+        if sub_signals.is_empty() {
+            return None;
+        }
+
+        let ta_normalized = sub_signals.iter().sum::<f64>() / sub_signals.len() as f64;
 
         // Average news sentiment: [-1.0, 1.0] → normalize to [0.0, 1.0]
-        // Empty cache (Ollama unavailable or not yet run) → neutral 0.5
+        // Empty cache (Ollama unavailable or not yet run) → neutral 0.0
         let avg_sentiment = if news_scores.is_empty() {
             0.0
         } else {
@@ -206,18 +246,13 @@ impl TradingEngine {
         };
         let sentiment_normalized = ((avg_sentiment + 1.0) / 2.0).clamp(0.0, 1.0);
 
-        // Both TA and news are neutral → preserve sticky target (skip update)
-        if confidence <= 0.0 && avg_sentiment.abs() < 0.1 {
-            return None;
-        }
-
         // Weighted combination of TA and sentiment signals
-        let combined = ta_normalized * ta_weight + sentiment_normalized * sentiment_weight;
+        let combined = ta_normalized * config.ta_weight + sentiment_normalized * config.sentiment_weight;
         Some(combined.clamp(0.0, 1.0))
     }
 
-    /// Process a single IndicatorOutput: aggregate signals, update sticky target,
-    /// broadcast SignalDetail for API consumers and place orders.
+    /// Process a single IndicatorOutput: compute BTC target from raw indicator values,
+    /// update sticky target, broadcast SignalDetail for API consumers and place orders.
     ///
     /// # Sticky target logic
     ///
@@ -226,31 +261,20 @@ impl TradingEngine {
     /// preserved so that a neutral market does not force a rebalance back to 50%.
     /// If no `sticky_target` has been set yet, processing is skipped.
     async fn handle_indicator(&mut self, output: IndicatorOutput) -> crate::error::Result<()> {
-        // Step 1: Aggregate raw indicator signals into an AllocationSignal.
-        // SignalEngine only computes raw values; allocation judgment happens here.
-        let raw_signals: Vec<Option<crate::signal::Signal>> = output.indicators.iter()
-            .map(|is| is.signal.clone())
-            .collect();
-        let signal = crate::signal::aggregate(&raw_signals);
-
-        // Step 2: Apply confidence + news check via the pure function, then apply zone mapping.
-        // compute_btc_target returns the combined normalized value [0.0, 1.0] or None (neutral).
-        // Zone scaling (range_max) and apply_zone are applied here by the caller.
-        let maybe_target = {
+        // Compute combined TA + news normalized value [0.0, 1.0], then apply zone mapping.
+        // Returns None when all indicators are in warmup or both TA and news are neutral.
+        let (maybe_target, agg_normalized) = {
             let cfg = self.config.read().await;
             let news_scores = self.news_cache.read().await.clone();
-            Self::compute_btc_target(
-                &raw_signals,
-                signal.confidence,
-                &news_scores,
-                cfg.ta_weight,
-                cfg.sentiment_weight,
-            ).map(|normalized| {
+            let combined = Self::compute_btc_target(&output.raw, &news_scores, &cfg);
+            let agg_norm = combined.unwrap_or(0.5);
+            let target = combined.map(|normalized| {
                 // Scale normalized value by range_max, then map through zone boundaries
                 // into the final BTC allocation ratio.
                 let raw = normalized * cfg.zone.range_max;
                 crate::signal::apply_zone(raw, &cfg.zone)
-            })
+            });
+            (target, agg_norm)
         };
 
         // Update sticky_target only when compute_btc_target returned a valid target.
@@ -258,7 +282,7 @@ impl TradingEngine {
         // a neutral market does not force a rebalance back to 50%.
         if let Some(t) = maybe_target {
             self.sticky_target = Some(t);
-            debug!(target = t, confidence = signal.confidence, "Sticky target updated");
+            debug!(target = t, "Sticky target updated");
         }
 
         // Skip rebalancing until the first directional signal establishes a target.
@@ -276,7 +300,7 @@ impl TradingEngine {
         // no order is placed (e.g. delta below threshold).
         // target_pct reflects sticky_target so neutral signals don't reset the displayed value.
         let detail = SignalDetail {
-            aggregate: signal.clone(),
+            aggregate: AllocationSignal { normalized: agg_normalized },
             target_pct: self.sticky_target.unwrap_or(0.5),
             indicators: output.indicators.clone(),
             raw_indicators: Some(output.raw.clone()),
@@ -358,15 +382,12 @@ impl TradingEngine {
     /// allocation drift from price movements.  No aggregation or guard logic is
     /// applied — this is a pure delta-rebalance with the last known target.
     ///
-    /// Broadcasts a synthetic SignalDetail (confidence=0, no raw_indicators) so
+    /// Broadcasts a synthetic SignalDetail (no raw_indicators) so
     /// that API consumers remain aware of periodic rebalance activity.
     async fn handle_rebalance(&mut self, target_pct: f64) -> crate::error::Result<()> {
         // Broadcast synthetic SignalDetail so API/WS consumers see rebalance activity.
         let rebalance_detail = SignalDetail {
-            aggregate: AllocationSignal {
-                normalized: target_pct,
-                confidence: 0.0,
-            },
+            aggregate: AllocationSignal { normalized: target_pct },
             target_pct,
             indicators: vec![],
             raw_indicators: None,
@@ -519,22 +540,17 @@ mod tests {
     use crate::config::TradingConfig;
     use crate::exchange::mock::MockExchangeClient;
     use crate::risk::{RiskManager, RiskParams};
-    use crate::signal::{IndicatorOutput, IndicatorPoint, IndicatorSignal, Signal};
+    use crate::signal::{IndicatorOutput, IndicatorPoint, IndicatorSignal};
     use rust_decimal_macros::dec;
 
-    /// Build an IndicatorOutput from a list of signals.
-    fn make_output(signals: Vec<Option<Signal>>) -> IndicatorOutput {
-        let indicators = signals.into_iter().enumerate()
-            .map(|(i, sig)| IndicatorSignal {
-                name: format!("mock_{}", i),
-                signal: sig,
-                value: None,
-            })
-            .collect();
+    /// Build an IndicatorOutput with all-None IndicatorPoint (warmup state).
+    /// No directional signal → sticky_target stays None → no order.
+    fn hold_output() -> IndicatorOutput {
         IndicatorOutput {
-            indicators,
+            indicators: vec![],
             raw: IndicatorPoint {
                 time: chrono::Utc::now(),
+                close: None,
                 sma: None, ema: None, rsi: None,
                 macd_line: None, signal_line: None, histogram: None,
                 bb_upper: None, bb_middle: None, bb_lower: None,
@@ -543,28 +559,53 @@ mod tests {
         }
     }
 
-    /// All Hold signals → aggregate confidence = 0 → no sticky_target → no order.
-    fn hold_output() -> IndicatorOutput {
-        make_output(vec![None, None, None])
-    }
-
-    /// Strong Buy signals → aggregate produces target_pct well above 0.5.
+    /// Build an IndicatorOutput with strong bullish raw values.
+    /// RSI=20 (oversold), close > SMA, positive histogram, low %B.
     fn bullish_output() -> IndicatorOutput {
-        make_output(vec![
-            Some(Signal::Buy { price: dec!(9000000), confidence: 1.0 }),
-        ])
+        IndicatorOutput {
+            indicators: vec![IndicatorSignal { name: "RSI".into(), value: Some(20.0) }],
+            raw: IndicatorPoint {
+                time: chrono::Utc::now(),
+                close: Some(10_100.0),
+                sma: Some(10_000.0),   // close > sma → bullish
+                ema: Some(10_050.0),   // close > ema → bullish
+                rsi: Some(20.0),       // oversold → bullish
+                macd_line: Some(50.0),
+                signal_line: Some(30.0),
+                histogram: Some(20.0), // positive → bullish
+                bb_upper: Some(10_200.0),
+                bb_middle: Some(10_000.0),
+                bb_lower: Some(9_800.0), // close near middle, %B ≈ 50 → neutral from BB
+            },
+            calculated_at: chrono::Utc::now(),
+        }
     }
 
-    /// Strong Sell signals → aggregate produces target_pct well below 0.5.
+    /// Build an IndicatorOutput with strong bearish raw values.
+    /// RSI=80 (overbought), close < SMA, negative histogram, high %B.
     fn bearish_output() -> IndicatorOutput {
-        make_output(vec![
-            Some(Signal::Sell { price: dec!(9000000), confidence: 1.0 }),
-        ])
+        IndicatorOutput {
+            indicators: vec![IndicatorSignal { name: "RSI".into(), value: Some(80.0) }],
+            raw: IndicatorPoint {
+                time: chrono::Utc::now(),
+                close: Some(9_900.0),
+                sma: Some(10_000.0),   // close < sma → bearish
+                ema: Some(9_950.0),    // close < ema → bearish
+                rsi: Some(80.0),       // overbought → bearish
+                macd_line: Some(-50.0),
+                signal_line: Some(-30.0),
+                histogram: Some(-20.0), // negative → bearish
+                bb_upper: Some(10_200.0),
+                bb_middle: Some(10_000.0),
+                bb_lower: Some(9_800.0), // close near lower, %B ≈ 50 → neutral from BB
+            },
+            calculated_at: chrono::Utc::now(),
+        }
     }
 
     #[tokio::test]
     async fn neutral_allocation_does_not_place_order() {
-        // All Hold signals → confidence=0, no news → sticky_target=None → no order placed.
+        // All-None IndicatorPoint → warmup → sticky_target=None → no order placed.
         let mock_exchange = Arc::new(MockExchangeClient::new());
         let (indicator_tx, indicator_rx) = broadcast::channel::<IndicatorOutput>(16);
         let params = RiskParams::default();
@@ -585,8 +626,7 @@ mod tests {
     #[tokio::test]
     async fn bullish_allocation_places_buy_order() {
         // JPY=1_000_000, BTC=0, price=9_000_500, fee=0
-        // Strong Buy → aggregate target_pct=1.0 → delta=1.0 → size≈0.111 BTC
-        // fee=0 to avoid insufficient-balance edge case at 100% allocation.
+        // Strong bullish → target_pct=1.0 → delta=1.0 → Buy
         let mock_exchange = Arc::new(MockExchangeClient::with_fee(0.0));
         let (indicator_tx, indicator_rx) = broadcast::channel::<IndicatorOutput>(16);
         let params = RiskParams::default();
@@ -609,7 +649,7 @@ mod tests {
     #[tokio::test]
     async fn bearish_allocation_places_sell_order() {
         let mock_exchange = Arc::new(MockExchangeClient::new());
-        // BTC を多く保有した状態 → current_alloc 高い → Strong Sell → sell
+        // BTC を多く保有した状態 → current_alloc 高い → bearish → sell
         mock_exchange.set_balances(vec![
             crate::types::balance::Balance {
                 currency_code: "JPY".to_string(),
@@ -622,8 +662,6 @@ mod tests {
                 available: dec!(0.1),
             },
         ]);
-        // price=9_000_500 → BTC価値 ≈ 900_050 JPY
-        // total ≈ 1_000_050 JPY, current_alloc ≈ 0.9 → strong Sell → target_pct ≈ 0 → sell
 
         let (indicator_tx, indicator_rx) = broadcast::channel::<IndicatorOutput>(16);
         let params = RiskParams::default();
@@ -645,8 +683,8 @@ mod tests {
     #[tokio::test]
     async fn neutral_signal_after_bullish_does_not_rebalance_to_50pct() {
         // Regression test for sticky target behaviour:
-        // 1. Bullish signal (confidence>0) establishes sticky_target → Buy
-        // 2. Hold signal (confidence=0, no news) must NOT reset target to 0.5 and sell
+        // 1. Bullish signal establishes sticky_target → Buy
+        // 2. Warmup (all-None) signal must NOT reset target to 0.5 and sell
         let mock_exchange = Arc::new(MockExchangeClient::new());
         let (indicator_tx, indicator_rx) = broadcast::channel::<IndicatorOutput>(16);
         let params = RiskParams::default();
@@ -659,7 +697,7 @@ mod tests {
 
         // Bullish signal: sticky_target set → Buy
         indicator_tx.send(bullish_output()).unwrap();
-        // Hold signal: confidence=0, no news → sticky_target preserved (no sell-back to 50%)
+        // Warmup signal: all None → compute_btc_target returns None → sticky_target preserved
         indicator_tx.send(hold_output()).unwrap();
         drop(indicator_tx);
 
@@ -675,46 +713,89 @@ mod tests {
 
     // ---- compute_btc_target unit tests ----
 
-    #[test]
-    fn compute_btc_target_fully_neutral_returns_none() {
-        // TA confidence=0 かつ news empty (avg_sentiment=0.0 < 0.1) → None
-        let indicators = vec![Some(crate::signal::Signal::Hold)];
-        assert!(TradingEngine::compute_btc_target(&indicators, 0.0, &[], 0.7, 0.3).is_none());
+    fn make_cfg() -> TradingConfig {
+        TradingConfig::default()
     }
 
     #[test]
-    fn compute_btc_target_strong_buy_returns_target() {
-        // Single Buy(1.0): TA normalized=1.0 → combined = 1.0*0.7 + 0.5*0.3 = 0.85
-        let price = rust_decimal::Decimal::from(10_000_000u64);
-        let indicators = vec![Some(crate::signal::Signal::Buy { price, confidence: 1.0 })];
-        let result = TradingEngine::compute_btc_target(&indicators, 1.0, &[], 0.7, 0.3);
-        assert!(result.is_some());
-        let v = result.unwrap();
-        assert!(v > 0.5, "bullish should be > 0.5, got {}", v);
+    fn compute_btc_target_warmup_all_none_returns_none() {
+        // All-None IndicatorPoint → warmup → None
+        let raw = IndicatorPoint {
+            time: chrono::Utc::now(),
+            close: None,
+            sma: None, ema: None, rsi: None,
+            macd_line: None, signal_line: None, histogram: None,
+            bb_upper: None, bb_middle: None, bb_lower: None,
+        };
+        assert!(TradingEngine::compute_btc_target(&raw, &[], &make_cfg()).is_none());
     }
 
     #[test]
-    fn compute_btc_target_strong_sell_returns_target() {
-        // Single Sell(1.0): TA normalized=0.0 → combined = 0.0*0.7 + 0.5*0.3 = 0.15
-        let price = rust_decimal::Decimal::from(10_000_000u64);
-        let indicators = vec![Some(crate::signal::Signal::Sell { price, confidence: 1.0 })];
-        let result = TradingEngine::compute_btc_target(&indicators, 1.0, &[], 0.7, 0.3);
+    fn compute_btc_target_neutral_rsi_returns_some() {
+        // RSI=50 → sub_signal=0.5 → neutral TA, no news → Some(0.5) (no longer filtered out)
+        let raw = IndicatorPoint {
+            time: chrono::Utc::now(),
+            close: None,
+            sma: None, ema: None, rsi: Some(50.0),
+            macd_line: None, signal_line: None, histogram: None,
+            bb_upper: None, bb_middle: None, bb_lower: None,
+        };
+        let result = TradingEngine::compute_btc_target(&raw, &[], &make_cfg());
         assert!(result.is_some());
-        let v = result.unwrap();
-        assert!(v < 0.5, "bearish should be < 0.5, got {}", v);
+        let val = result.unwrap();
+        // ta_normalized=0.5, sentiment_normalized=0.5 → combined=0.5
+        assert!((val - 0.5).abs() < 1e-9, "expected ~0.5, got {}", val);
+    }
+
+    #[test]
+    fn compute_btc_target_strong_buy_returns_target_above_half() {
+        // RSI=20, close > SMA → strong bullish → combined > 0.5
+        let raw = IndicatorPoint {
+            time: chrono::Utc::now(),
+            close: Some(10_100.0),
+            sma: Some(10_000.0),
+            ema: None, rsi: Some(20.0),
+            macd_line: None, signal_line: None, histogram: None,
+            bb_upper: None, bb_middle: None, bb_lower: None,
+        };
+        let result = TradingEngine::compute_btc_target(&raw, &[], &make_cfg());
+        assert!(result.is_some());
+        assert!(result.unwrap() > 0.5, "bullish should be > 0.5, got {:?}", result);
+    }
+
+    #[test]
+    fn compute_btc_target_strong_sell_returns_target_below_half() {
+        // RSI=80, close < SMA → strong bearish → combined < 0.5
+        let raw = IndicatorPoint {
+            time: chrono::Utc::now(),
+            close: Some(9_900.0),
+            sma: Some(10_000.0),
+            ema: None, rsi: Some(80.0),
+            macd_line: None, signal_line: None, histogram: None,
+            bb_upper: None, bb_middle: None, bb_lower: None,
+        };
+        let result = TradingEngine::compute_btc_target(&raw, &[], &make_cfg());
+        assert!(result.is_some());
+        assert!(result.unwrap() < 0.5, "bearish should be < 0.5, got {:?}", result);
     }
 
     #[test]
     fn compute_btc_target_neutral_ta_strong_news_returns_some() {
-        // TA confidence=0 but news is bullish (score=0.8 > 0.1) → Some
-        let indicators = vec![Some(crate::signal::Signal::Hold)];
+        // RSI=50 (neutral TA) but bullish news → Some and > 0.5
+        let raw = IndicatorPoint {
+            time: chrono::Utc::now(),
+            close: None,
+            sma: None, ema: None, rsi: Some(50.0),
+            macd_line: None, signal_line: None, histogram: None,
+            bb_upper: None, bb_middle: None, bb_lower: None,
+        };
         let news = vec![SentimentScore {
             headline: "BTC soars".into(),
             score: 0.8,
             analyzed_at: chrono::Utc::now(),
             published_at: None,
         }];
-        let result = TradingEngine::compute_btc_target(&indicators, 0.0, &news, 0.7, 0.3);
+        let result = TradingEngine::compute_btc_target(&raw, &news, &make_cfg());
         assert!(result.is_some(), "strong news should override neutral TA");
         let v = result.unwrap();
         assert!(v > 0.5, "bullish news should yield v > 0.5, got {}", v);
@@ -722,7 +803,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_directional_signal_skips_rebalance() {
-        // When only Hold signals arrive with no news,
+        // When only warmup (all-None) signals arrive with no news,
         // sticky_target remains None and no order should be placed.
         let mock_exchange = Arc::new(MockExchangeClient::new());
         let (indicator_tx, indicator_rx) = broadcast::channel::<IndicatorOutput>(16);
@@ -734,7 +815,7 @@ mod tests {
             "BTC_JPY".into(),
         );
 
-        // Only Hold signals — no sticky_target established
+        // Only warmup signals — no sticky_target established
         indicator_tx.send(hold_output()).unwrap();
         indicator_tx.send(hold_output()).unwrap();
         drop(indicator_tx);

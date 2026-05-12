@@ -503,13 +503,6 @@
       return s === 'BUY' ? 'signal-buy' : s === 'SELL' ? 'signal-sell' : 'signal-hold';
     }
 
-    function parseSignal(raw) {
-      if (!raw || raw === 'Hold') return { kind: 'HOLD', confidence: null, price: null };
-      if (raw.Buy) return { kind: 'BUY', confidence: raw.Buy.confidence, price: raw.Buy.price };
-      if (raw.Sell) return { kind: 'SELL', confidence: raw.Sell.confidence, price: raw.Sell.price };
-      return { kind: 'HOLD', confidence: null, price: null };
-    }
-
     function formatIndicatorValue(name, value) {
       if (name === 'RSI') return value.toFixed(1);
       if (name === 'MACD') return value.toFixed(2);

@@ -1,4 +1,3 @@
-use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 
@@ -12,9 +11,9 @@ use crate::risk::RiskParams;
 pub struct ZoneConfig {
     /// 生シグナルの最大値。デフォルト 1.0
     pub range_max: f64,
-    /// これ未満のraw_signalは effective=0.0（全JPY）。デフォルト 0.0
+    /// これ未満のraw_signalは effective=0.0（全JPY）。デフォルト 0.2
     pub hold_jpy_below: f64,
-    /// これ超のraw_signalは effective=1.0（全BTC）。デフォルト 1.0
+    /// これ超のraw_signalは effective=1.0（全BTC）。デフォルト 0.8
     pub hold_btc_above: f64,
 }
 
@@ -24,17 +23,12 @@ impl Default for ZoneConfig {
     }
 }
 
+/// 取引設定。インジケータ周期・シグナル重み・ゾーン設定・リバランス間隔を保持する。
+/// リスク管理パラメータ（ポジション上限・ドローダウン）は RiskParams で別管理。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradingConfig {
-    // リスク管理
-    pub max_position_btc: f64,
-    pub max_daily_drawdown: f64,
-    pub stop_loss_pct: f64,
-    pub min_order_size: f64,
-
-    // シグナル閾値
-    pub signal_threshold: f64,
-    /// 配分変更の dead-band。|delta| がこれ未満なら注文しない。デフォルト 0.05 (5%)
+    /// 配分変更の最小しきい値。|delta| がこれ未満なら注文しない（取引所最小取引量の目安）。
+    /// デフォルト 0.15 (15%)
     pub allocation_threshold: f64,
 
     // インジケータ設定
@@ -47,7 +41,7 @@ pub struct TradingConfig {
     pub bollinger_period: usize,
     pub bollinger_std: f64,
 
-    // シグナル重み
+    // シグナル重み（ta_weight + sentiment_weight = 1.0）
     pub ta_weight: f64,
     pub sentiment_weight: f64,
 
@@ -60,7 +54,6 @@ pub struct TradingConfig {
     /// 現在配分 vs 目標配分を確認する。デフォルト: 60秒。
     #[serde(default = "default_rebalance_interval")]
     pub rebalance_interval_secs: u64,
-
 }
 
 fn default_rebalance_interval() -> u64 { 60 }
@@ -68,11 +61,6 @@ fn default_rebalance_interval() -> u64 { 60 }
 impl Default for TradingConfig {
     fn default() -> Self {
         Self {
-            max_position_btc: 0.1,
-            max_daily_drawdown: 0.05,
-            stop_loss_pct: 0.02,
-            min_order_size: 0.001,
-            signal_threshold: 0.4,
             allocation_threshold: 0.15,
             sma_period: 200,
             ema_period: 100,
@@ -91,34 +79,17 @@ impl Default for TradingConfig {
 }
 
 impl TradingConfig {
+    /// RiskParams へ変換する。最小注文サイズは固定値（0.001 BTC）を使用する。
     pub fn to_risk_params(&self) -> RiskParams {
         RiskParams {
-            max_position_btc: Decimal::try_from(self.max_position_btc).unwrap_or(dec!(0.1)),
-            max_daily_drawdown: self.max_daily_drawdown,
-            stop_loss_pct: self.stop_loss_pct,
-            min_order_size: Decimal::try_from(self.min_order_size).unwrap_or(dec!(0.001)),
+            min_order_size: dec!(0.001),
             circuit_breaker_enabled: false,
         }
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        if !(0.0..=1.0).contains(&self.signal_threshold) {
-            return Err("signal_threshold は 0.0〜1.0 の範囲で指定してください".into());
-        }
         if !(0.0..=1.0).contains(&self.allocation_threshold) {
             return Err("allocation_threshold は 0.0〜1.0 の範囲で指定してください".into());
-        }
-        if !(0.0..=1.0).contains(&self.max_daily_drawdown) {
-            return Err("max_daily_drawdown は 0.0〜1.0 の範囲で指定してください".into());
-        }
-        if !(0.0..=1.0).contains(&self.stop_loss_pct) {
-            return Err("stop_loss_pct は 0.0〜1.0 の範囲で指定してください".into());
-        }
-        if self.max_position_btc <= 0.0 {
-            return Err("max_position_btc は 0 より大きい値を指定してください".into());
-        }
-        if self.min_order_size <= 0.0 {
-            return Err("min_order_size は 0 より大きい値を指定してください".into());
         }
         if self.macd_slow <= self.macd_fast {
             return Err("macd_slow は macd_fast より大きい値を指定してください".into());
@@ -155,7 +126,7 @@ mod tests {
     #[test]
     fn default_values_are_correct() {
         let cfg = TradingConfig::default();
-        assert_eq!(cfg.signal_threshold, 0.4);
+        assert_eq!(cfg.allocation_threshold, 0.15);
         assert_eq!(cfg.sma_period, 200);
         assert_eq!(cfg.ta_weight, 0.7);
     }
@@ -165,15 +136,8 @@ mod tests {
         let cfg = TradingConfig::default();
         let json = serde_json::to_string(&cfg).unwrap();
         let back: TradingConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.signal_threshold, cfg.signal_threshold);
+        assert_eq!(back.allocation_threshold, cfg.allocation_threshold);
         assert_eq!(back.sma_period, cfg.sma_period);
-    }
-
-    #[test]
-    fn validate_rejects_invalid_threshold() {
-        let mut cfg = TradingConfig::default();
-        cfg.signal_threshold = 1.5;
-        assert!(cfg.validate().is_err());
     }
 
     #[test]
@@ -193,10 +157,9 @@ mod tests {
     }
 
     #[test]
-    fn to_risk_params_converts_correctly() {
+    fn to_risk_params_sets_min_order_size() {
         let cfg = TradingConfig::default();
         let params = cfg.to_risk_params();
-        assert_eq!(params.max_daily_drawdown, 0.05);
-        assert_eq!(params.stop_loss_pct, 0.02);
+        assert_eq!(params.min_order_size, dec!(0.001));
     }
 }

@@ -180,6 +180,11 @@ async fn main() -> anyhow::Result<()> {
         SignalEngine::new(indicators, market_bus.candle_rx(), config_rx);
     tokio::spawn(signal_engine.run());
 
+    // News cache shared between TradingEngine and the news AI task.
+    // Declared here so TradingEngine can hold a reference before the news task starts.
+    let news_cache: Arc<RwLock<Vec<crate::news::analyzer::SentimentScore>>> =
+        Arc::new(RwLock::new(vec![]));
+
     // TradingEngine: IndicatorOutput → aggregate_with_zone → RiskManager → send_order → SignalDetail broadcast
     let (trading_engine, signal_detail_tx) = TradingEngine::new(
         indicator_rx,
@@ -189,7 +194,8 @@ async fn main() -> anyhow::Result<()> {
     );
     let trading_engine = trading_engine
         .with_config(Arc::clone(&trading_config))
-        .with_order_repo(db.orders());
+        .with_order_repo(db.orders())
+        .with_news_cache(Arc::clone(&news_cache));
     tokio::spawn(trading_engine.run());
 
     // 最新シグナルをキャッシュするタスク（API配信用）
@@ -229,14 +235,13 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // News AI タスク起動（5分ごとにRSSフィードを取得、新規記事のみOllamaでセンチメント分析）
-    let news_cache = Arc::new(RwLock::new(vec![]));
     {
         let cache = Arc::clone(&news_cache);
         let news_repo = db.news_sentiments();
         let ollama_url = std::env::var("OLLAMA_URL")
-            .unwrap_or_else(|_| "http://localhost:11434".to_string());
+            .expect("OLLAMA_URL environment variable is required");
         let ollama_model = std::env::var("OLLAMA_MODEL")
-            .unwrap_or_else(|_| "qwen3.6:27b".to_string());
+            .expect("OLLAMA_MODEL environment variable is required");
         let feed_urls: Vec<String> = std::env::var("NEWS_FEED_URLS")
             .unwrap_or_else(|_| {
                 "https://feeds.feedburner.com/CoinDesk,https://cointelegraph.com/rss".to_string()

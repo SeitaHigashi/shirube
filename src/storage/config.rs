@@ -74,13 +74,12 @@ mod tests {
         let db = Database::open_in_memory().await.unwrap();
         let repo = db.config();
         let mut cfg = TradingConfig::default();
-        cfg.signal_threshold = 0.5;
         cfg.sma_period = 30;
 
         repo.save(&cfg).await.unwrap();
         let loaded = repo.load().await.unwrap().unwrap();
-        assert_eq!(loaded.signal_threshold, 0.5);
         assert_eq!(loaded.sma_period, 30);
+        assert_eq!(loaded.allocation_threshold, cfg.allocation_threshold);
     }
 
     #[tokio::test]
@@ -88,13 +87,13 @@ mod tests {
         let db = Database::open_in_memory().await.unwrap();
         let repo = db.config();
         let mut cfg = TradingConfig::default();
-        cfg.signal_threshold = 0.4;
+        cfg.sma_period = 50;
         repo.save(&cfg).await.unwrap();
 
-        cfg.signal_threshold = 0.6;
+        cfg.sma_period = 100;
         repo.save(&cfg).await.unwrap();
 
         let loaded = repo.load().await.unwrap().unwrap();
-        assert_eq!(loaded.signal_threshold, 0.6);
+        assert_eq!(loaded.sma_period, 100);
     }
 }

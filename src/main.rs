@@ -159,9 +159,9 @@ async fn main() -> anyhow::Result<()> {
                     warmup_signals = indicators
                         .iter_mut()
                         .map(|ind| {
-                            let signal = ind.update(candle);
+                            ind.update(candle);
                             let value = ind.value();
-                            IndicatorSignal { name: ind.name().to_string(), signal, value }
+                            IndicatorSignal { name: ind.name().to_string(), value }
                         })
                         .collect();
                 }
@@ -217,18 +217,14 @@ async fn main() -> anyhow::Result<()> {
     }
     // ウォームアップ結果でシグナルキャッシュを事前初期化（ライブCandle待ちで様子見になるのを防ぐ）
     if !warmup_signals.is_empty() {
-        use crate::signal::Signal;
-        let raw: Vec<Option<Signal>> =
-            warmup_signals.iter().map(|is| is.signal.clone()).collect();
-        let aggregated = crate::signal::aggregate(&raw);
         // target_pct at warmup: no sticky_target yet, use neutral 0.5
         let detail = SignalDetail {
-            aggregate: aggregated,
+            aggregate: crate::signal::AllocationSignal { normalized: 0.5 },
             target_pct: 0.5,
             indicators: warmup_signals,
             raw_indicators: None,
             calculated_at: chrono::Utc::now(),
-            calculation_state: "active".to_string(),
+            calculation_state: "waiting_for_data".to_string(),
         };
         *latest_signal.write().await = Some(detail);
         info!("Pre-populated signal cache from warmup data");

@@ -571,7 +571,7 @@
         zoneDiffEl.style.display = 'none';
       }
 
-      confEl.textContent = `信頼度 ${(agg.confidence * 100).toFixed(0)}%`;
+      confEl.textContent = `配分率 ${(agg.normalized * 100).toFixed(0)}%`;
 
       if (detail.calculation_state === 'active') {
         dot.className = 'active';

@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use rust_decimal::prelude::ToPrimitive;
 
-use crate::signal::{Indicator, Signal};
+use crate::signal::{Indicator, IndicatorRawValues};
 use crate::types::market::Candle;
 
 pub struct Bollinger {
@@ -44,7 +44,8 @@ impl Indicator for Bollinger {
         "Bollinger"
     }
 
-    fn update(&mut self, candle: &Candle) -> Option<Signal> {
+    /// ボリンジャーバンドを更新する。売買判断は行わない。
+    fn update(&mut self, candle: &Candle) {
         let close = candle.close.to_f64().unwrap_or(0.0);
 
         self.buffer.push_back(close);
@@ -53,7 +54,7 @@ impl Indicator for Bollinger {
         }
 
         if self.buffer.len() < self.period {
-            return None;
+            return;
         }
 
         let (mean, std) = self.stats();
@@ -66,26 +67,6 @@ impl Indicator for Bollinger {
         } else {
             Some(50.0)
         };
-
-        let signal = if close < lower {
-            let confidence = if bandwidth > 0.0 {
-                ((lower - close) / bandwidth).min(1.0)
-            } else {
-                0.5
-            };
-            Signal::Buy { price: candle.close, confidence }
-        } else if close > upper {
-            let confidence = if bandwidth > 0.0 {
-                ((close - upper) / bandwidth).min(1.0)
-            } else {
-                0.5
-            };
-            Signal::Sell { price: candle.close, confidence }
-        } else {
-            Signal::Hold
-        };
-
-        Some(signal)
     }
 
     fn value(&self) -> Option<f64> {
@@ -101,12 +82,12 @@ impl Indicator for Bollinger {
         self.period
     }
 
-    fn snapshot(&self) -> crate::signal::IndicatorRawValues {
+    fn snapshot(&self) -> IndicatorRawValues {
         let (upper, middle, lower) = match self.band_values() {
             Some((u, m, l)) => (Some(u), Some(m), Some(l)),
             None => (None, None, None),
         };
-        crate::signal::IndicatorRawValues::BollingerBands { upper, middle, lower }
+        IndicatorRawValues::BollingerBands { upper, middle, lower }
     }
 }
 
@@ -143,49 +124,55 @@ mod tests {
     fn warmup_returns_none() {
         let mut bb = Bollinger::new(20, 2.0);
         for i in 0..19 {
-            let sig = bb.update(&candle(100.0 + i as f64));
-            assert!(sig.is_none(), "Expected None at step {}", i);
+            bb.update(&candle(100.0 + i as f64));
+            assert!(bb.value().is_none(), "Expected None at step {}", i);
         }
+    }
+
+    #[test]
+    fn returns_some_after_period_candles() {
+        let mut bb = Bollinger::new(20, 2.0);
+        for i in 0..20 {
+            bb.update(&candle(100.0 + i as f64));
+        }
+        assert!(bb.value().is_some());
     }
 
     #[test]
     fn returns_hold_for_stable_price() {
         let mut bb = Bollinger::new(20, 2.0);
-        // 全部同じ価格 → std=0 → upper=lower=mean → Hold
+        // 全部同じ価格 → std=0 → pct_b = 50
         for _ in 0..20 {
             bb.update(&candle(100.0));
         }
-        let sig = bb.update(&candle(100.0));
-        // std=0 の場合、close=100=lower=upper なので条件分岐によっては Hold
-        assert!(sig.is_some());
+        bb.update(&candle(100.0));
+        // std=0 の場合 pct_b = 50.0
+        assert_eq!(bb.value(), Some(50.0));
     }
 
     #[test]
-    fn detects_oversold_below_lower_band() {
+    fn pct_b_below_zero_when_oversold() {
         // period=20, multiplier=2 で安定した価格帯のバンドに対して急落
         let mut bb = Bollinger::new(20, 2.0);
-        // 安定した価格: mean=1000, わずかな変動 (std≈2.9)
         for i in 0..20 {
             let price = 998.0 + (i % 5) as f64;
             bb.update(&candle(price));
         }
-        // 大幅下落 → lower band (約1000 - 5.8 ≈ 994) を確実に下回る
-        // ただし新しい価格がバッファに入ることでバンドが変わるので、十分低い値を使う
-        let sig = bb.update(&candle(900.0));
-        // lower band を大幅に下回るので Buy
-        assert!(matches!(sig, Some(Signal::Buy { .. })));
+        // 大幅下落 → lower band を大幅に下回る → pct_b < 0
+        bb.update(&candle(900.0));
+        assert!(bb.value().unwrap() < 0.0);
     }
 
     #[test]
-    fn detects_overbought_above_upper_band() {
+    fn pct_b_above_100_when_overbought() {
         let mut bb = Bollinger::new(20, 2.0);
         for i in 0..20 {
             let price = 998.0 + (i % 5) as f64;
             bb.update(&candle(price));
         }
-        // 大幅上昇 → upper band を確実に上回る
-        let sig = bb.update(&candle(1100.0));
-        assert!(matches!(sig, Some(Signal::Sell { .. })));
+        // 大幅上昇 → upper band を確実に上回る → pct_b > 100
+        bb.update(&candle(1100.0));
+        assert!(bb.value().unwrap() > 100.0);
     }
 
     #[test]
@@ -195,6 +182,7 @@ mod tests {
             bb.update(&candle(100.0 + i as f64));
         }
         bb.reset();
-        assert!(bb.update(&candle(100.0)).is_none());
+        bb.update(&candle(100.0));
+        assert!(bb.value().is_none());
     }
 }

@@ -48,6 +48,7 @@
 
           # Ollama モデル設定
           OLLAMA_MODEL = "gemma4:latest";
+          OLLAMA_URL = "http://localhost:11434";
 
           shellHook = ''
             echo "導 (shirube) dev environment ready"

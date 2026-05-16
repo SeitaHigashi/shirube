@@ -3,14 +3,14 @@ use std::collections::VecDeque;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 
-use crate::signal::{Indicator, Signal};
+use crate::signal::{Indicator, IndicatorRawValues};
 use crate::types::market::Candle;
 
 pub struct Sma {
     period: usize,
     buffer: VecDeque<Decimal>,
-    prev_close: Option<Decimal>,
-    prev_sma: Option<f64>,
+    /// 直近の SMA 計算値。ウォームアップ完了後に設定される。
+    current_sma: Option<f64>,
 }
 
 impl Sma {
@@ -19,8 +19,7 @@ impl Sma {
         Self {
             period,
             buffer: VecDeque::with_capacity(period + 1),
-            prev_close: None,
-            prev_sma: None,
+            current_sma: None,
         }
     }
 
@@ -37,7 +36,8 @@ impl Indicator for Sma {
         "SMA"
     }
 
-    fn update(&mut self, candle: &Candle) -> Option<Signal> {
+    /// SMA を更新する。売買判断は行わない。
+    fn update(&mut self, candle: &Candle) {
         let close = candle.close;
 
         self.buffer.push_back(close);
@@ -45,50 +45,26 @@ impl Indicator for Sma {
             self.buffer.pop_front();
         }
 
-        if self.buffer.len() < self.period {
-            self.prev_close = Some(close);
-            return None;
+        if self.buffer.len() >= self.period {
+            self.current_sma = Some(self.compute_sma());
         }
-
-        let sma = self.compute_sma();
-        let close_f = close.to_f64().unwrap_or(0.0);
-
-        let signal = match (self.prev_close, self.prev_sma) {
-            (Some(pc), Some(ps)) => {
-                let pc_f = pc.to_f64().unwrap_or(0.0);
-                if close_f > sma && pc_f <= ps {
-                    Signal::Buy { price: close, confidence: 0.5 }
-                } else if close_f < sma && pc_f >= ps {
-                    Signal::Sell { price: close, confidence: 0.5 }
-                } else {
-                    Signal::Hold
-                }
-            }
-            _ => Signal::Hold,
-        };
-
-        self.prev_close = Some(close);
-        self.prev_sma = Some(sma);
-
-        Some(signal)
     }
 
     fn value(&self) -> Option<f64> {
-        self.prev_sma
+        self.current_sma
     }
 
     fn reset(&mut self) {
         self.buffer.clear();
-        self.prev_close = None;
-        self.prev_sma = None;
+        self.current_sma = None;
     }
 
     fn min_periods(&self) -> usize {
         self.period
     }
 
-    fn snapshot(&self) -> crate::signal::IndicatorRawValues {
-        crate::signal::IndicatorRawValues::Scalar(self.value())
+    fn snapshot(&self) -> IndicatorRawValues {
+        IndicatorRawValues::Scalar(self.value())
     }
 }
 
@@ -114,8 +90,10 @@ mod tests {
     #[test]
     fn warmup_returns_none() {
         let mut sma = Sma::new(3);
-        assert!(sma.update(&candle(dec!(100))).is_none());
-        assert!(sma.update(&candle(dec!(200))).is_none());
+        sma.update(&candle(dec!(100)));
+        assert!(sma.value().is_none());
+        sma.update(&candle(dec!(200)));
+        assert!(sma.value().is_none());
     }
 
     #[test]
@@ -123,23 +101,19 @@ mod tests {
         let mut sma = Sma::new(3);
         sma.update(&candle(dec!(100)));
         sma.update(&candle(dec!(200)));
-        let sig = sma.update(&candle(dec!(300)));
-        assert!(sig.is_some());
+        sma.update(&candle(dec!(300)));
+        assert!(sma.value().is_some());
     }
 
     #[test]
-    fn detects_golden_cross() {
+    fn computes_correct_sma() {
         let mut sma = Sma::new(3);
-        // 最初 3本でウォームアップ (close < sma になるよう設定)
-        // [100, 100, 100] → sma=100, close=100 → Hold
         sma.update(&candle(dec!(100)));
-        sma.update(&candle(dec!(100)));
-        sma.update(&candle(dec!(100))); // sma=100, close=100 → Hold (prev_sma 未設定)
-        // 次の本: [100, 100, 50] → sma≈83.3, close=50 < sma → prev_close=100, prev_sma=100
-        sma.update(&candle(dec!(50)));
-        // 次の本: [100, 50, 200] → sma=116.7, close=200 > sma, prev_close=50 < prev_sma=83.3 → Buy
-        let sig = sma.update(&candle(dec!(200)));
-        assert!(matches!(sig, Some(Signal::Buy { .. })));
+        sma.update(&candle(dec!(200)));
+        sma.update(&candle(dec!(300)));
+        // SMA of [100, 200, 300] = 200
+        let v = sma.value().unwrap();
+        assert!((v - 200.0).abs() < 1e-6, "got {}", v);
     }
 
     #[test]
@@ -148,7 +122,7 @@ mod tests {
         sma.update(&candle(dec!(100)));
         sma.update(&candle(dec!(200)));
         sma.reset();
-        // リセット後は再びウォームアップが必要
-        assert!(sma.update(&candle(dec!(100))).is_none());
+        sma.update(&candle(dec!(100)));
+        assert!(sma.value().is_none());
     }
 }

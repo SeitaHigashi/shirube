@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use rust_decimal::prelude::ToPrimitive;
 
-use crate::signal::{Indicator, Signal};
+use crate::signal::{Indicator, IndicatorRawValues};
 use crate::types::market::Candle;
 
 pub struct Ema {
@@ -11,8 +11,6 @@ pub struct Ema {
     /// SMA 初期化バッファ
     init_buffer: VecDeque<f64>,
     current: Option<f64>,
-    prev_close: Option<f64>,
-    prev_ema: Option<f64>,
 }
 
 impl Ema {
@@ -24,8 +22,6 @@ impl Ema {
             k,
             init_buffer: VecDeque::with_capacity(period + 1),
             current: None,
-            prev_close: None,
-            prev_ema: None,
         }
     }
 
@@ -58,28 +54,10 @@ impl Indicator for Ema {
         "EMA"
     }
 
-    fn update(&mut self, candle: &Candle) -> Option<Signal> {
+    /// EMA を更新する。売買判断は行わない。
+    fn update(&mut self, candle: &Candle) {
         let close_f = candle.close.to_f64().unwrap_or(0.0);
-
-        let ema = self.feed(close_f)?;
-
-        let signal = match (self.prev_close, self.prev_ema) {
-            (Some(pc), Some(pe)) => {
-                if close_f > ema && pc <= pe {
-                    Signal::Buy { price: candle.close, confidence: 0.5 }
-                } else if close_f < ema && pc >= pe {
-                    Signal::Sell { price: candle.close, confidence: 0.5 }
-                } else {
-                    Signal::Hold
-                }
-            }
-            _ => Signal::Hold,
-        };
-
-        self.prev_close = Some(close_f);
-        self.prev_ema = Some(ema);
-
-        Some(signal)
+        self.feed(close_f);
     }
 
     fn value(&self) -> Option<f64> {
@@ -89,16 +67,14 @@ impl Indicator for Ema {
     fn reset(&mut self) {
         self.init_buffer.clear();
         self.current = None;
-        self.prev_close = None;
-        self.prev_ema = None;
     }
 
     fn min_periods(&self) -> usize {
         self.period
     }
 
-    fn snapshot(&self) -> crate::signal::IndicatorRawValues {
-        crate::signal::IndicatorRawValues::Scalar(self.value())
+    fn snapshot(&self) -> IndicatorRawValues {
+        IndicatorRawValues::Scalar(self.value())
     }
 }
 
@@ -123,8 +99,19 @@ mod tests {
     #[test]
     fn warmup_returns_none() {
         let mut ema = Ema::new(3);
-        assert!(ema.update(&candle(100.0)).is_none());
-        assert!(ema.update(&candle(200.0)).is_none());
+        ema.update(&candle(100.0));
+        assert!(ema.value().is_none());
+        ema.update(&candle(200.0));
+        assert!(ema.value().is_none());
+    }
+
+    #[test]
+    fn returns_some_after_period_candles() {
+        let mut ema = Ema::new(3);
+        ema.update(&candle(100.0));
+        ema.update(&candle(200.0));
+        ema.update(&candle(300.0));
+        assert!(ema.value().is_some());
     }
 
     #[test]

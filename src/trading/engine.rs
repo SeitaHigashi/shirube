@@ -174,6 +174,11 @@ impl TradingEngine {
 
     /// Compute the BTC allocation ratio from raw indicator values and news sentiment.
     ///
+    /// NOTE: The internal logic of this function is maintained by hand.
+    /// Do NOT let automated tools rewrite the sub-signal mappings or weighting
+    /// formula. Only input/output signature changes (to fix compile errors) are
+    /// permitted without explicit human review.
+    ///
     /// Derives a directional sub-signal from each available indicator in `raw`,
     /// averages them into a TA normalized value [0.0, 1.0], then combines with
     /// news sentiment using the configured weights.

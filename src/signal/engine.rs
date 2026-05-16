@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use chrono::Utc;
+use rust_decimal::prelude::ToPrimitive;
 use tokio::sync::{broadcast, watch};
 use tokio::time::{interval, MissedTickBehavior};
 use tracing::{info, warn};
@@ -15,11 +16,11 @@ use crate::types::market::Candle;
 ///
 /// # 責務
 /// - インジケータの計算値（IndicatorPoint）の生成
-/// - 各インジケータの個別シグナル（IndicatorSignal）の収集
+/// - 各インジケータの個別値（IndicatorSignal）の収集
 /// - 設定変更に応じたインジケータ再構築
 ///
 /// # 非責務（TradingEngine が担う）
-/// - 配分率の計算（aggregate_with_zone）
+/// - 配分率の計算（compute_btc_target）
 /// - 発注判断・ガードロジック
 pub struct SignalEngine {
     indicators: Vec<Box<dyn Indicator>>,
@@ -96,6 +97,7 @@ impl SignalEngine {
                         Ok(candle) => {
                             let mut point = IndicatorPoint {
                                 time: candle.open_time,
+                                close: candle.close.to_f64(),
                                 sma: None, ema: None, rsi: None,
                                 macd_line: None, signal_line: None, histogram: None,
                                 bb_upper: None, bb_middle: None, bb_lower: None,
@@ -103,7 +105,8 @@ impl SignalEngine {
                             let indicator_signals: Vec<IndicatorSignal> = self.indicators
                                 .iter_mut()
                                 .map(|ind| {
-                                    let signal = ind.update(&candle);
+                                    // update() は void: インジケータは Buy/Sell を返さない
+                                    ind.update(&candle);
                                     let value = ind.value();
                                     // スナップショットで生値を収集して IndicatorPoint に格納
                                     match ind.snapshot() {
@@ -124,7 +127,7 @@ impl SignalEngine {
                                             point.bb_lower = lower;
                                         }
                                     }
-                                    IndicatorSignal { name: ind.name().to_string(), signal, value }
+                                    IndicatorSignal { name: ind.name().to_string(), value }
                                 })
                                 .collect();
                             self.last_raw_indicators = Some(point);
@@ -139,7 +142,7 @@ impl SignalEngine {
                     }
                 }
                 // 250ms タイマー: キャッシュ済みインジケータ結果を IndicatorOutput として送信
-                // NOTE: 集計（aggregate_with_zone）は行わない。判断は TradingEngine が担う。
+                // NOTE: 集計・発注判断は行わない。TradingEngine が担う。
                 _ = ticker.tick() => {
                     if let (Some(ref ind_signals), Some(ref raw)) =
                         (&self.last_indicator_signals, &self.last_raw_indicators)
@@ -178,7 +181,6 @@ impl SignalEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::signal::{Indicator, Signal};
     use tokio::sync::broadcast;
 
     #[tokio::test]
@@ -198,9 +200,8 @@ mod tests {
         };
 
         let (candle_tx, candle_rx) = broadcast::channel::<Candle>(16);
-        let mock = MockIndicator::new("test", vec![
-            Some(Signal::Buy { price: dec!(9000000), confidence: 1.0 }),
-        ]);
+        // MockIndicator takes Vec<Option<f64>> — no Buy/Sell judgment
+        let mock = MockIndicator::new("test", vec![Some(0.7_f64)]);
         let indicators: Vec<Box<dyn Indicator>> = vec![Box::new(mock)];
 
         let cfg = crate::config::TradingConfig::default();
@@ -219,7 +220,7 @@ mod tests {
         // IndicatorOutput にはインジケータ計算値が含まれる（集計は含まない）
         assert_eq!(output.indicators.len(), 1);
         assert_eq!(output.indicators[0].name, "test");
-        assert!(matches!(output.indicators[0].signal, Some(Signal::Buy { .. })));
+        assert_eq!(output.indicators[0].value, Some(0.7));
     }
 
     #[test]
@@ -256,9 +257,7 @@ mod tests {
         };
 
         let (candle_tx, candle_rx) = broadcast::channel::<Candle>(16);
-        let mock = MockIndicator::new("test", vec![
-            Some(Signal::Buy { price: dec!(9000000), confidence: 1.0 }),
-        ]);
+        let mock = MockIndicator::new("test", vec![Some(0.5_f64)]);
         let indicators: Vec<Box<dyn Indicator>> = vec![Box::new(mock)];
 
         let cfg = crate::config::TradingConfig::default();

@@ -1,7 +1,7 @@
 use rust_decimal::prelude::ToPrimitive;
 
 use super::ema::Ema;
-use crate::signal::{Indicator, Signal};
+use crate::signal::{Indicator, IndicatorRawValues};
 use crate::types::market::Candle;
 
 pub struct Macd {
@@ -41,7 +41,8 @@ impl Indicator for Macd {
         "MACD"
     }
 
-    fn update(&mut self, candle: &Candle) -> Option<Signal> {
+    /// MACD を更新する。売買判断は行わない。
+    fn update(&mut self, candle: &Candle) {
         let close = candle.close.to_f64().unwrap_or(0.0);
 
         // fast と slow は常に feed する (slow の init バッファが溜まるよう)
@@ -50,29 +51,18 @@ impl Indicator for Macd {
 
         let (fast_val, slow_val) = match (fast_val, slow_val) {
             (Some(f), Some(s)) => (f, s),
-            _ => return None,
+            _ => return,
         };
         let macd_line = fast_val - slow_val;
 
-        let signal_val = self.signal_ema.feed(macd_line)?;
-        let histogram = macd_line - signal_val;
-
-        let signal = match self.prev_histogram {
-            Some(prev) => {
-                if histogram > 0.0 && prev <= 0.0 {
-                    Signal::Buy { price: candle.close, confidence: (histogram.abs() / (histogram.abs() + 1.0)).min(1.0) }
-                } else if histogram < 0.0 && prev >= 0.0 {
-                    Signal::Sell { price: candle.close, confidence: (histogram.abs() / (histogram.abs() + 1.0)).min(1.0) }
-                } else {
-                    Signal::Hold
-                }
-            }
-            None => Signal::Hold,
+        let signal_val = match self.signal_ema.feed(macd_line) {
+            Some(v) => v,
+            None => return,
         };
+        let histogram = macd_line - signal_val;
 
         self.prev_histogram = Some(histogram);
         self.last_components = Some((macd_line, signal_val, histogram));
-        Some(signal)
     }
 
     fn value(&self) -> Option<f64> {
@@ -92,12 +82,12 @@ impl Indicator for Macd {
         26 + 9 - 1
     }
 
-    fn snapshot(&self) -> crate::signal::IndicatorRawValues {
+    fn snapshot(&self) -> IndicatorRawValues {
         let (macd_line, signal_line, histogram) = match self.last_components {
             Some((ml, sl, h)) => (Some(ml), Some(sl), Some(h)),
             None => (None, None, None),
         };
-        crate::signal::IndicatorRawValues::Macd { macd_line, signal_line, histogram }
+        IndicatorRawValues::Macd { macd_line, signal_line, histogram }
     }
 }
 
@@ -130,8 +120,8 @@ mod tests {
         let mut macd = Macd::default();
         // 34本未満 (slow=26, signal=9 → 26+9-1=34本目まで None)
         for i in 0..33 {
-            let sig = macd.update(&candle(100.0 + i as f64));
-            assert!(sig.is_none(), "Expected None at step {}", i);
+            macd.update(&candle(100.0 + i as f64));
+            assert!(macd.value().is_none(), "Expected None at step {}", i);
         }
     }
 
@@ -142,20 +132,20 @@ mod tests {
         for i in 0..34 {
             macd.update(&candle(100.0 + i as f64));
         }
-        let sig = macd.update(&candle(134.0));
-        assert!(sig.is_some());
+        macd.update(&candle(134.0));
+        assert!(macd.value().is_some());
     }
 
     #[test]
     fn hold_signal_during_trend() {
-        // ウォームアップ後に Hold シグナルが返ることを確認
+        // ウォームアップ後に値が返ることを確認
         let mut macd = Macd::default();
         for i in 0..35 {
             macd.update(&candle(100.0 + i as f64 * 0.5));
         }
-        let sig = macd.update(&candle(117.5));
+        macd.update(&candle(117.5));
         // ウォームアップ完了後は Some が返る
-        assert!(sig.is_some());
+        assert!(macd.value().is_some());
     }
 
     #[test]
@@ -163,6 +153,6 @@ mod tests {
         let mut macd = Macd::default();
         feed_n(&mut macd, 100.0, 40);
         macd.reset();
-        assert!(macd.update(&candle(100.0)).is_none());
+        assert!(macd.value().is_none());
     }
 }

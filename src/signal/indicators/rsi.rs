@@ -1,7 +1,6 @@
-use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 
-use crate::signal::{Indicator, Signal};
+use crate::signal::{Indicator, IndicatorRawValues};
 use crate::types::market::Candle;
 
 pub struct Rsi {
@@ -41,14 +40,15 @@ impl Indicator for Rsi {
         "RSI"
     }
 
-    fn update(&mut self, candle: &Candle) -> Option<Signal> {
+    /// RSI を更新する。売買判断は行わない。
+    fn update(&mut self, candle: &Candle) {
         let close = candle.close.to_f64().unwrap_or(0.0);
 
         // ウォームアップフェーズ: closes を蓄積
         if self.avg_gain.is_none() {
             self.closes.push(close);
             if self.closes.len() <= self.period {
-                return None;
+                return;
             }
             // period+1 本目で最初の avg_gain / avg_loss を計算
             let gains: f64 = self.closes.windows(2)
@@ -60,9 +60,8 @@ impl Indicator for Rsi {
             self.avg_gain = Some(gains);
             self.avg_loss = Some(losses);
             self.prev_close = Some(close);
-            let rsi = self.compute_rsi();
-            self.current_rsi = Some(rsi);
-            return Some(rsi_to_signal(rsi, candle.close));
+            self.current_rsi = Some(self.compute_rsi());
+            return;
         }
 
         // Wilder の平滑化
@@ -76,10 +75,7 @@ impl Indicator for Rsi {
         self.avg_gain = Some(ag);
         self.avg_loss = Some(al);
         self.prev_close = Some(close);
-
-        let rsi = self.compute_rsi();
-        self.current_rsi = Some(rsi);
-        Some(rsi_to_signal(rsi, candle.close))
+        self.current_rsi = Some(self.compute_rsi());
     }
 
     fn value(&self) -> Option<f64> {
@@ -98,18 +94,8 @@ impl Indicator for Rsi {
         self.period + 1
     }
 
-    fn snapshot(&self) -> crate::signal::IndicatorRawValues {
-        crate::signal::IndicatorRawValues::Scalar(self.current_rsi)
-    }
-}
-
-fn rsi_to_signal(rsi: f64, price: Decimal) -> Signal {
-    if rsi < 30.0 {
-        Signal::Buy { price, confidence: (30.0 - rsi) / 30.0 }
-    } else if rsi > 70.0 {
-        Signal::Sell { price, confidence: (rsi - 70.0) / 30.0 }
-    } else {
-        Signal::Hold
+    fn snapshot(&self) -> IndicatorRawValues {
+        IndicatorRawValues::Scalar(self.current_rsi)
     }
 }
 
@@ -117,6 +103,7 @@ fn rsi_to_signal(rsi: f64, price: Decimal) -> Signal {
 mod tests {
     use super::*;
     use chrono::Utc;
+    use rust_decimal::Decimal;
     use rust_decimal_macros::dec;
 
     fn candle(close: f64) -> Candle {
@@ -134,19 +121,18 @@ mod tests {
     fn warmup_returns_none() {
         let mut rsi = Rsi::new(14);
         for i in 0..14 {
-            let sig = rsi.update(&candle(100.0 + i as f64));
-            assert!(sig.is_none(), "Expected None at step {}", i);
+            rsi.update(&candle(100.0 + i as f64));
+            assert!(rsi.value().is_none(), "Expected None at step {}", i);
         }
     }
 
     #[test]
     fn returns_some_after_period_plus_one() {
         let mut rsi = Rsi::new(14);
-        for i in 0..=14 {
+        for i in 0..=15 {
             rsi.update(&candle(100.0 + i as f64));
         }
-        let sig = rsi.update(&candle(115.0));
-        assert!(sig.is_some());
+        assert!(rsi.value().is_some());
     }
 
     #[test]
@@ -156,20 +142,21 @@ mod tests {
         for i in 0..=3 {
             rsi.update(&candle(100.0 + i as f64 * 10.0));
         }
-        let sig = rsi.update(&candle(150.0));
-        // RSI=100 → Sell (>70)
-        assert!(matches!(sig, Some(Signal::Sell { .. })));
+        rsi.update(&candle(150.0));
+        // RSI=100 → value > 70
+        assert!(rsi.value().unwrap() > 70.0);
     }
 
     #[test]
     fn all_losses_gives_oversold() {
         let mut rsi = Rsi::new(3);
-        // 全部下落 → RSI ≈ 0 → Buy
+        // 全部下落 → RSI ≈ 0
         for i in 0..=3 {
             rsi.update(&candle(100.0 - i as f64 * 10.0));
         }
-        let sig = rsi.update(&candle(50.0));
-        assert!(matches!(sig, Some(Signal::Buy { .. })));
+        rsi.update(&candle(50.0));
+        // RSI ≈ 0 → value < 30
+        assert!(rsi.value().unwrap() < 30.0);
     }
 
     #[test]
@@ -179,6 +166,7 @@ mod tests {
             rsi.update(&candle(100.0 + i as f64));
         }
         rsi.reset();
-        assert!(rsi.update(&candle(100.0)).is_none());
+        rsi.update(&candle(100.0));
+        assert!(rsi.value().is_none());
     }
 }

@@ -12,3 +12,6 @@
 # Nix ビルド成果物
 result
 result-*
+
+# 一時ファイル
+/tmp/

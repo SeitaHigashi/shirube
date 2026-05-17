@@ -13,5 +13,9 @@
 result
 result-*
 
+# Frontend
+frontend/node_modules/
+frontend/.svelte-kit/
+
 # 一時ファイル
 /tmp/

@@ -36,6 +36,9 @@
             pkgs.cargo-nextest # 高速テストランナー
             pkgs.cargo-tarpaulin # カバレッジ計測
 
+            # Frontend tooling
+            pkgs.bun
+
             # 基本ツール
             pkgs.pkg-config
             pkgs.openssl

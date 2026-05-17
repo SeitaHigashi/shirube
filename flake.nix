@@ -21,6 +21,40 @@
         };
       in
       {
+        # `nix build` でメインバイナリをビルドする
+        packages.default = pkgs.rustPlatform.buildRustPackage {
+          pname = "shirube";
+          version = "0.1.0";
+          src = ./.;
+          cargoLock.lockFile = ./Cargo.lock;
+
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = [ pkgs.openssl ];
+
+          # ネットワーク・Ollama・bitFlyer を要求するテストは sandbox 内では実行不可
+          doCheck = false;
+
+          meta = {
+            description = "導 (shirube) - bitFlyer BTC/JPY Automated Trading Bot";
+            mainProgram = "shirube";
+          };
+        };
+
+        # `nix flake check` でユニットテストを実行する
+        checks.tests = pkgs.runCommand "shirube-tests"
+          {
+            nativeBuildInputs = [ rustToolchain pkgs.pkg-config pkgs.cargo-nextest ];
+            buildInputs = [ pkgs.openssl ];
+            src = ./.;
+            PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
+            OPENSSL_NO_VENDOR = "1";
+          }
+          ''
+            cp -r $src/. .
+            chmod -R u+w .
+            cargo nextest run --no-fail-fast 2>&1 | tee $out
+          '';
+
         devShells.default = pkgs.mkShell {
           buildInputs = [
             rustToolchain

@@ -41,19 +41,28 @@
         };
 
         # `nix flake check` でユニットテストを実行する
-        checks.tests = pkgs.runCommand "shirube-tests"
-          {
-            nativeBuildInputs = [ rustToolchain pkgs.pkg-config pkgs.cargo-nextest ];
-            buildInputs = [ pkgs.openssl ];
-            src = ./.;
-            PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
-            OPENSSL_NO_VENDOR = "1";
-          }
-          ''
-            cp -r $src/. .
-            chmod -R u+w .
-            cargo nextest run --no-fail-fast 2>&1 | tee $out
+        # NOTE: sandbox 内はネットワーク遮断のため buildRustPackage でベンダー依存を解決する
+        checks.tests = pkgs.rustPlatform.buildRustPackage {
+          pname = "shirube-tests";
+          version = "0.1.0";
+          src = ./.;
+          cargoLock.lockFile = ./Cargo.lock;
+
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = [ pkgs.openssl ];
+
+          PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
+          OPENSSL_NO_VENDOR = "1";
+
+          doCheck = true;
+          checkPhase = ''
+            cargo test --no-fail-fast
           '';
+          # テスト専用 derivation のためインストール成果物は不要
+          installPhase = ''
+            touch $out
+          '';
+        };
 
         devShells.default = pkgs.mkShell {
           buildInputs = [

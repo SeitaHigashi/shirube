@@ -240,7 +240,23 @@ async fn main() -> anyhow::Result<()> {
             .expect("OLLAMA_MODEL environment variable is required");
         let feed_urls: Vec<String> = std::env::var("NEWS_FEED_URLS")
             .unwrap_or_else(|_| {
-                "https://feeds.feedburner.com/CoinDesk,https://cointelegraph.com/rss".to_string()
+                [
+                    // North America
+                    "https://feeds.feedburner.com/CoinDesk",
+                    "https://cointelegraph.com/rss",
+                    "https://www.theblock.co/rss.xml",
+                    "https://decrypt.co/feed",
+                    // Europe
+                    "https://news.bitcoin.com/feed/",
+                    "https://cryptoslate.com/feed/",
+                    // Asia-Pacific
+                    "https://coinpost.jp/?feed=rss2",
+                    "https://forkast.news/feed/",
+                    // Global / broad coverage
+                    "https://ambcrypto.com/feed/",
+                    "https://cryptonews.com/news/feed/",
+                ]
+                .join(",")
             })
             .split(',')
             .map(|s| s.trim().to_string())

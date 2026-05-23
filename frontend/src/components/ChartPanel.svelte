@@ -183,7 +183,9 @@
   async function loadAndRenderIndicators() {
     try {
       const count = RES_COUNT[resolution] ?? 200;
-      const points = await fetchIndicators(resolution, count);
+      // Fetch extra candles beyond the visible window so SMA/EMA have enough
+      // lookback to produce valid values (default SMA period=200, EMA period=100).
+      const points = await fetchIndicators(resolution, count + 300);
       if (!points || points.length === 0) return;
 
       const savedRange = chart.timeScale().getVisibleLogicalRange();

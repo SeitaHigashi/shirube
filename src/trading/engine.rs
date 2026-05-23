@@ -10,6 +10,7 @@ use rust_decimal::Decimal;
 
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 
+use crate::api::routes::balance;
 use crate::config::TradingConfig;
 use crate::exchange::ExchangeClient;
 use crate::news::analyzer::SentimentScore;
@@ -201,59 +202,67 @@ impl TradingEngine {
         news_scores: &[SentimentScore],
         config: &TradingConfig,
     ) -> Option<f64> {
-        let mut sub_signals: Vec<f64> = Vec::new();
+        //let mut sub_signals: Vec<f64> = Vec::new();
 
-        // RSI: oversold (low RSI) → bullish (1.0), overbought (high RSI) → bearish (0.0)
-        if let Some(rsi) = raw.rsi {
-            sub_signals.push(1.0 - (rsi / 100.0).clamp(0.0, 1.0));
-        }
+        //// RSI: oversold (low RSI) → bullish (1.0), overbought (high RSI) → bearish (0.0)
+        //if let Some(rsi) = raw.rsi {
+        //    sub_signals.push(1.0 - (rsi / 100.0).clamp(0.0, 1.0));
+        //}
 
-        // SMA cross: price above SMA → bullish, below → bearish
-        if let (Some(close), Some(sma)) = (raw.close, raw.sma) {
-            sub_signals.push(if close > sma { 1.0 } else if close < sma { 0.0 } else { 0.5 });
-        }
+        //// SMA cross: price above SMA → bullish, below → bearish
+        //if let (Some(close), Some(sma)) = (raw.close, raw.sma) {
+        //    sub_signals.push(if close > sma { 1.0 } else if close < sma { 0.0 } else { 0.5 });
+        //}
 
-        // EMA cross: price above EMA → bullish, below → bearish
-        if let (Some(close), Some(ema)) = (raw.close, raw.ema) {
-            sub_signals.push(if close > ema { 1.0 } else if close < ema { 0.0 } else { 0.5 });
-        }
+        //// EMA cross: price above EMA → bullish, below → bearish
+        //if let (Some(close), Some(ema)) = (raw.close, raw.ema) {
+        //    sub_signals.push(if close > ema { 1.0 } else if close < ema { 0.0 } else { 0.5 });
+        //}
 
-        // MACD histogram: positive → bullish, negative → bearish
-        if let Some(hist) = raw.histogram {
-            sub_signals.push(if hist > 0.0 { 1.0 } else if hist < 0.0 { 0.0 } else { 0.5 });
-        }
+        //// MACD histogram: positive → bullish, negative → bearish
+        //if let Some(hist) = raw.histogram {
+        //    sub_signals.push(if hist > 0.0 { 1.0 } else if hist < 0.0 { 0.0 } else { 0.5 });
+        //}
 
-        // Bollinger %B: near lower band (oversold) → bullish, near upper band → bearish
-        // Computed from close, bb_upper, bb_lower since IndicatorPoint stores band values.
-        if let (Some(close), Some(bb_upper), Some(bb_lower)) = (raw.close, raw.bb_upper, raw.bb_lower) {
-            let bandwidth = bb_upper - bb_lower;
-            let pct_b = if bandwidth > 0.0 {
-                (close - bb_lower) / bandwidth * 100.0
-            } else {
-                50.0 // flat bands → neutral
-            };
-            sub_signals.push(1.0 - (pct_b / 100.0).clamp(0.0, 1.0));
-        }
+        //// Bollinger %B: near lower band (oversold) → bullish, near upper band → bearish
+        //// Computed from close, bb_upper, bb_lower since IndicatorPoint stores band values.
+        //if let (Some(close), Some(bb_upper), Some(bb_lower)) = (raw.close, raw.bb_upper, raw.bb_lower) {
+        //    let bandwidth = bb_upper - bb_lower;
+        //    let pct_b = if bandwidth > 0.0 {
+        //        (close - bb_lower) / bandwidth * 100.0
+        //    } else {
+        //        50.0 // flat bands → neutral
+        //    };
+        //    sub_signals.push(1.0 - (pct_b / 100.0).clamp(0.0, 1.0));
+        //}
 
-        // Warmup: no indicator data available yet
-        if sub_signals.is_empty() {
-            return None;
-        }
+        //// Warmup: no indicator data available yet
+        //if sub_signals.is_empty() {
+        //    return None;
+        //}
 
-        let ta_normalized = sub_signals.iter().sum::<f64>() / sub_signals.len() as f64;
+        //let ta_normalized = sub_signals.iter().sum::<f64>() / sub_signals.len() as f64;
 
-        // Average news sentiment: [-1.0, 1.0] → normalize to [0.0, 1.0]
-        // Empty cache (Ollama unavailable or not yet run) → neutral 0.0
-        let avg_sentiment = if news_scores.is_empty() {
-            0.0
-        } else {
-            news_scores.iter().map(|s| s.score).sum::<f64>() / news_scores.len() as f64
-        };
-        let sentiment_normalized = ((avg_sentiment + 1.0) / 2.0).clamp(0.0, 1.0);
+        //// Average news sentiment: [-1.0, 1.0] → normalize to [0.0, 1.0]
+        //// Empty cache (Ollama unavailable or not yet run) → neutral 0.0
+        //let avg_sentiment = if news_scores.is_empty() {
+        //    0.0
+        //} else {
+        //    news_scores.iter().map(|s| s.score).sum::<f64>() / news_scores.len() as f64
+        //};
+        //let sentiment_normalized = ((avg_sentiment + 1.0) / 2.0).clamp(0.0, 1.0);
 
         // Weighted combination of TA and sentiment signals
-        let combined = ta_normalized * config.ta_weight + sentiment_normalized * config.sentiment_weight;
-        Some(combined.clamp(0.0, 1.0))
+        //let combined = ta_normalized * config.ta_weight + sentiment_normalized * config.sentiment_weight;
+        //Some(combined.clamp(0.0, 1.0))
+        
+        let mut balance = 0.5;
+
+        if let (Some(sma), Some(ema), Some(bb_middle)) = (raw.sma, raw.ema, raw.bb_middle) {
+            balance = 0.5 * ( 1.5 * sma / bb_middle) * (1.2 * ema / sma);
+        }
+        
+        Some(balance.clamp(0.0, 1.0))
     }
 
     /// Process a single IndicatorOutput: compute BTC target from raw indicator values,

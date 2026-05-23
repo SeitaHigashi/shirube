@@ -135,6 +135,9 @@
       if (data.length > 0) {
         candleData = data;
         candleSeries.setData(data);
+        bepUpperLine = null;
+        bepLowerLine = null;
+        if (_currentPrice) updateBepLines(_currentPrice, _feeRate);
         chart.timeScale().fitContent();
         rsiChart.timeScale().fitContent();
         macdChart.timeScale().fitContent();
@@ -167,6 +170,9 @@
       if (savedRange) {
         const offset = newData.length;
         candleSeries.setData(candleData);
+        bepUpperLine = null;
+        bepLowerLine = null;
+        if (_currentPrice) updateBepLines(_currentPrice, _feeRate);
         chart.timeScale().setVisibleLogicalRange({
           from: savedRange.from + offset,
           to: savedRange.to + offset,
@@ -320,6 +326,7 @@
     unsubCandle = wsCandleUpdate.subscribe(bar => {
       if (!bar || !candleSeries) return;
       candleSeries.update(bar);
+      updateBepLines(bar.close, _feeRate);
       const idx = candleData.findIndex(d => d.time === bar.time);
       if (idx >= 0) { candleData[idx] = bar; } else { candleData.push(bar); }
       debouncedRenderIndicators();

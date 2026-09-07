@@ -1,0 +1,24 @@
+{
+  "name": "shorter-hourly-indicator-periods",
+  "kind": "parameter",
+  "rationale": "src/backtest/simulator.rs::Simulator::run feeds compute_indicators() only the exact [from,to] candle slice requested by --from/--to (confirmed by reading the code 2026-09-07) — there is no pre-holdout warmup buffer fetched beforehand. With the default sma_period=200 (hours) and a 336-hour (14-day) holdout window, SMA alone cannot return Some until candle #200, consuming ~60% of the entire holdout before compute_btc_target's SMA-cross sub-signal is ever active; ema_period=100, macd_slow=104, and bollinger_period=60 also eat deep into the same window. This structurally starves the holdout of active-signal candles regardless of which direction the market moves. Shortening every period to standard hourly-timeframe values (RSI 14, MACD 12/26/9, Bollinger 20, SMA/EMA halved) leaves the large majority of the 336-candle window available for an active signal, which should produce a statistically meaningful trade count without touching compute_btc_target's formula at all.",
+  "trading_config": {
+    "allocation_threshold": 0.15,
+    "sma_period": 48,
+    "ema_period": 24,
+    "rsi_period": 14,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 20,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  }
+}

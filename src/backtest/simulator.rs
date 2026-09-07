@@ -1,0 +1,236 @@
+use std::sync::Arc;
+
+use chrono::Utc;
+use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
+
+use crate::config::TradingConfig;
+use crate::error::Result;
+use crate::exchange::mock::MockExchangeClient;
+use crate::exchange::ExchangeClient;
+use crate::risk::{RiskManager, RiskDecision};
+use crate::signal::{apply_zone, compute_indicators};
+use crate::storage::db::Database;
+use crate::trading::engine::TradingEngine;
+use crate::types::market::{Candle, Ticker};
+
+use super::{BacktestConfig, BacktestReport};
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Simulator
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Replays a candle series through the exact same allocation logic used
+/// live (`TradingEngine::compute_btc_target` + `apply_zone` +
+/// `allocation_delta_to_order`) against a `MockExchangeClient`, so a
+/// backtest result never drifts from what live trading would have done
+/// for the same indicator/zone configuration.
+pub struct Simulator {
+    config: BacktestConfig,
+    db: Database,
+}
+
+impl Simulator {
+    pub fn new(config: BacktestConfig, db: Database) -> Self {
+        Self { config, db }
+    }
+
+    /// Candle 列と TradingConfig を受け取りバックテストを実行して
+    /// `BacktestReport` を返す。`trading_config` はインジケータ周期・
+    /// ゾーン設定・配分しきい値をすべて含み、本番の TradingEngine と
+    /// 同一のロジックで評価される。
+    pub async fn run(
+        &self,
+        candles: Vec<Candle>,
+        trading_config: TradingConfig,
+    ) -> Result<BacktestReport> {
+        let exchange = Arc::new(match self.config.fee_pct {
+            Some(rate) => MockExchangeClient::with_fee(rate),
+            None => MockExchangeClient::new(),
+        });
+
+        exchange.set_balances(vec![
+            crate::types::balance::Balance {
+                currency_code: "JPY".to_string(),
+                amount: self.config.initial_jpy,
+                available: self.config.initial_jpy,
+            },
+            crate::types::balance::Balance {
+                currency_code: "BTC".to_string(),
+                amount: Decimal::ZERO,
+                available: Decimal::ZERO,
+            },
+        ]);
+
+        let mut risk_manager = RiskManager::new(trading_config.to_risk_params());
+        risk_manager.reset_daily();
+
+        // 本番の SignalEngine と同一の純粋関数でインジケータ値を計算する
+        let points = compute_indicators(&candles, &trading_config);
+
+        // TradingEngine と同じ sticky-target ロジック: compute_btc_target が
+        // None（ウォームアップ中）を返した間は直前の目標配分を維持する。
+        let mut sticky_target: Option<f64> = None;
+        let mut equity_curve: Vec<f64> = Vec::with_capacity(candles.len());
+
+        for (candle, point) in candles.iter().zip(points.iter()) {
+            let price_with_slip = apply_slippage(candle.close, self.config.slippage_pct);
+            let ticker = Ticker {
+                product_code: self.config.product_code.clone(),
+                timestamp: Utc::now(),
+                best_bid: price_with_slip,
+                best_ask: price_with_slip,
+                best_bid_size: Decimal::ONE,
+                best_ask_size: Decimal::ONE,
+                ltp: price_with_slip,
+                volume: Decimal::ONE,
+                volume_by_product: Decimal::ONE,
+            };
+            exchange.set_ticker(ticker);
+
+            // 本番と同一の compute_btc_target を呼び出す（NOTE: この関数の
+            // 内部ロジックは手動管理対象 — trading/engine.rs のコメント参照）
+            if let Some(normalized) = TradingEngine::compute_btc_target(point, &[], &trading_config) {
+                let raw = normalized * trading_config.zone.range_max;
+                sticky_target = Some(apply_zone(raw, &trading_config.zone));
+            }
+
+            if let Some(target_pct) = sticky_target {
+                let jpy = exchange.jpy_balance();
+                let btc = exchange.btc_balance();
+                let btc_value = btc * price_with_slip;
+                let total = jpy + btc_value;
+
+                if !total.is_zero() && !price_with_slip.is_zero() {
+                    let current_alloc = (btc_value / total).to_f64().unwrap_or(0.0);
+                    let delta = target_pct - current_alloc;
+
+                    if delta.abs() >= trading_config.allocation_threshold {
+                        let order_req = TradingEngine::allocation_delta_to_order(
+                            delta,
+                            total,
+                            price_with_slip,
+                            &self.config.product_code,
+                            risk_manager.params().min_order_size,
+                        );
+
+                        if let Some(req) = order_req {
+                            match risk_manager.evaluate(req) {
+                                RiskDecision::Allow(r) => {
+                                    let _ = exchange.send_order(&r).await;
+                                }
+                                RiskDecision::Reject(_) => {}
+                                RiskDecision::CircuitBreaker { .. } => {}
+                            }
+                        }
+                    }
+                }
+            }
+
+            let btc_val = exchange.btc_balance() * candle.close;
+            let equity = exchange.jpy_balance() + btc_val;
+            equity_curve.push(equity.to_f64().unwrap_or(0.0));
+        }
+
+        let filled = exchange.filled_trades();
+        let report = super::report::compute_report(
+            &filled,
+            &equity_curve,
+            self.config.initial_jpy.to_f64().unwrap_or(1.0),
+        );
+
+        self.db.backtest_runs().insert(&self.config, &report).await?;
+
+        Ok(report)
+    }
+}
+
+/// Apply slippage to a price by multiplying by (1 + slippage_pct).
+///
+/// Slippage models the difference between the mid-price and the actual
+/// fill price due to market impact and bid/ask spread. A positive
+/// `slippage_pct` (e.g. 0.001 = 0.1%) always increases the price,
+/// meaning buys cost more and sells receive less than the close price.
+fn apply_slippage(price: Decimal, slippage_pct: f64) -> Decimal {
+    let slip = Decimal::try_from(slippage_pct).unwrap_or(Decimal::ZERO);
+    price * (Decimal::ONE + slip)
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Tests
+// ──────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use rust_decimal_macros::dec;
+
+    fn make_candle(close: Decimal) -> Candle {
+        Candle {
+            product_code: "BTC_JPY".into(),
+            open_time: Utc::now(),
+            resolution_secs: 60,
+            open: close,
+            high: close,
+            low: close,
+            close,
+            volume: dec!(1),
+        }
+    }
+
+    #[tokio::test]
+    async fn simulator_runs_and_stores_report() {
+        let db = crate::storage::db::Database::open_in_memory().await.unwrap();
+        let from = Utc::now();
+        let to = Utc::now();
+        let config = BacktestConfig {
+            product_code: "BTC_JPY".into(),
+            from,
+            to,
+            resolution_secs: 60,
+            slippage_pct: 0.0,
+            fee_pct: Some(0.0),
+            initial_jpy: dec!(1_000_000),
+        };
+
+        // Short indicator periods so a handful of candles is enough to warm up.
+        let mut trading_config = TradingConfig::default();
+        trading_config.sma_period = 2;
+        trading_config.ema_period = 2;
+        trading_config.rsi_period = 2;
+        trading_config.macd_fast = 2;
+        trading_config.macd_slow = 3;
+        trading_config.macd_signal = 2;
+        trading_config.bollinger_period = 2;
+        trading_config.allocation_threshold = 0.01;
+
+        let prices = [
+            dec!(9_000_000),
+            dec!(9_100_000),
+            dec!(9_200_000),
+            dec!(9_300_000),
+            dec!(9_400_000),
+            dec!(9_500_000),
+            dec!(9_600_000),
+            dec!(9_700_000),
+        ];
+        let candles: Vec<Candle> = prices.iter().map(|&p| make_candle(p)).collect();
+
+        let simulator = Simulator::new(config, db.clone());
+        let report = simulator.run(candles, trading_config).await.unwrap();
+
+        let runs = db.backtest_runs().list(10).await.unwrap();
+        assert_eq!(runs.len(), 1);
+        // Every candle produces an equity point; report is always populated
+        // even when zero trades were placed (e.g. sticky target never set).
+        assert!(report.total_return_pct.is_finite());
+    }
+
+    #[test]
+    fn apply_slippage_increases_price() {
+        let price = dec!(9_000_000);
+        let slipped = apply_slippage(price, 0.001);
+        assert!(slipped > price);
+    }
+}

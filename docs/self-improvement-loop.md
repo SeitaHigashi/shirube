@@ -41,15 +41,21 @@ The promotion rule is implemented in `backtest::report::compare` (see
 `src/backtest/report.rs`) — it is not re-derived by the agent, only
 invoked via `shirube compare-backtest`.
 
-## Hard constraint: `compute_btc_target` is off-limits
+## `compute_btc_target` may be modified via algorithm hypotheses
 
-`src/trading/engine.rs`'s `TradingEngine::compute_btc_target` carries an
-explicit human directive not to let automated tools rewrite its
-sub-signal mappings or weighting formula. **No step in this pipeline may
-edit the body of that function.** See
-`experiments/hypotheses/README.md` for how this constrains
-`kind: "algorithm"` hypotheses. A human wanting to revise the allocation
-formula itself does so by hand, outside this pipeline.
+`src/trading/engine.rs`'s `TradingEngine::compute_btc_target` used to be
+categorically off-limits to this pipeline. That was lifted on 2026-09-08
+after a hand-edit (`fbce478`) had silently degraded it into a formula
+where the `sma` term canceled out algebraically, pinning the signal in
+one allocation zone for 30 days straight and producing exactly one
+trade — a regression only backtesting caught. See
+`experiments/hypotheses/README.md`'s "`compute_btc_target` may be
+modified" section for the exact rules: the change must happen only on
+that hypothesis's own worktree branch, `cargo test` must pass, and a
+promoted change still lands as its own PR against `dev` for human
+review, with the PR description explicitly flagging that
+`compute_btc_target`'s body was touched. A human is of course still free
+to revise the formula by hand outside this pipeline at any time.
 
 ## CLI building blocks
 
@@ -161,10 +167,11 @@ substance:
 > the rebase compiles before continuing.
 > 1. Read `experiments/hypotheses/<name>.json`. If `kind` is `"algorithm"`,
 > implement `code_change_summary` exactly, respecting every item in
-> `constraints` (in particular: never edit the body of
-> `TradingEngine::compute_btc_target`). Run `cargo test` and fix any
-> failure caused by your change before continuing — do not proceed on a
-> red test suite.
+> `constraints`. If the change touches `TradingEngine::compute_btc_target`'s
+> body, that is allowed on this dedicated worktree branch (see
+> `experiments/hypotheses/README.md`), but say so explicitly in your
+> report in step 3 below. Run `cargo test` and fix any failure caused by
+> your change before continuing — do not proceed on a red test suite.
 > 2. Write the hypothesis's `trading_config` field to a temp JSON file.
 > Run `cargo build` then
 > `shirube backtest-variant --db <path-to-a-copy-or-the-shared-read-only-db> --config <temp-config.json> --from <HOLDOUT_START> --to <NOW>`
@@ -200,7 +207,8 @@ For each **promoted** variant:
 - `kind: "algorithm"` — push the worktree's branch and open a PR against
   `dev` with the code diff. Include the same Pros/Cons text and JSON.
   Flag explicitly in the PR description if the diff touched
-  `compute_btc_target`'s signature at all (it must not touch its body).
+  `compute_btc_target` at all (signature or body) so the reviewer gives
+  it the scrutiny an allocation-formula change deserves.
 
 For each **rejected** variant, delete its worktree and branch — nothing
 to PR:
@@ -280,8 +288,9 @@ For each new hypothesis, follow `experiments/hypotheses/README.md`'s
 schema exactly: pick a unique, descriptive kebab-case `name`, write a
 `rationale` that cites the specific observation motivating it (not a
 generic guess), and for `kind: "algorithm"`, include the full
-`constraints` array from the README verbatim (the `compute_btc_target`
-guard in particular — see "Hard constraint" above). Write the new
+`constraints` array from the README verbatim (in particular the
+worktree-branch-only and PR-review requirements for any change touching
+`compute_btc_target` — see the section above). Write the new
 hypothesis as a file in `experiments/hypotheses/<name>.json`. Cap
 generation at 3 new hypotheses per run (see the parameters table) to
 keep daily runs bounded in cost and review burden.

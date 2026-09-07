@@ -10,7 +10,6 @@ use rust_decimal::Decimal;
 
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 
-use crate::api::routes::balance;
 use crate::config::TradingConfig;
 use crate::exchange::ExchangeClient;
 use crate::news::analyzer::SentimentScore;
@@ -175,10 +174,20 @@ impl TradingEngine {
 
     /// Compute the BTC allocation ratio from raw indicator values and news sentiment.
     ///
-    /// NOTE: The internal logic of this function is maintained by hand.
-    /// Do NOT let automated tools rewrite the sub-signal mappings or weighting
-    /// formula. Only input/output signature changes (to fix compile errors) are
-    /// permitted without explicit human review.
+    /// NOTE: This function's body may be modified by the self-improvement-loop
+    /// pipeline's `kind: "algorithm"` hypotheses (see
+    /// `experiments/hypotheses/README.md`), but only on that hypothesis's own
+    /// dedicated worktree branch, never as a direct commit to `dev`/`main`.
+    /// Every such change lands as its own PR for human review before merging —
+    /// see `docs/self-improvement-loop.md`.
+    ///
+    /// Restored 2026-09-08 to the multi-indicator formula below after a
+    /// hand-edit (`fbce478`, "chore: modified trading expression") replaced it
+    /// with `0.9 * ema / bb_middle` (the `sma` term canceled out
+    /// algebraically), which kept the signal pinned inside a single zone for
+    /// an entire 30-day backtest and produced exactly one trade. The
+    /// crossover-based sub-signals below flip direction far more often,
+    /// which is the intended fix.
     ///
     /// Derives a directional sub-signal from each available indicator in `raw`,
     /// averages them into a TA normalized value [0.0, 1.0], then combines with
@@ -202,67 +211,59 @@ impl TradingEngine {
         news_scores: &[SentimentScore],
         config: &TradingConfig,
     ) -> Option<f64> {
-        //let mut sub_signals: Vec<f64> = Vec::new();
+        let mut sub_signals: Vec<f64> = Vec::new();
 
-        //// RSI: oversold (low RSI) → bullish (1.0), overbought (high RSI) → bearish (0.0)
-        //if let Some(rsi) = raw.rsi {
-        //    sub_signals.push(1.0 - (rsi / 100.0).clamp(0.0, 1.0));
-        //}
+        // RSI: oversold (low RSI) → bullish (1.0), overbought (high RSI) → bearish (0.0)
+        if let Some(rsi) = raw.rsi {
+            sub_signals.push(1.0 - (rsi / 100.0).clamp(0.0, 1.0));
+        }
 
-        //// SMA cross: price above SMA → bullish, below → bearish
-        //if let (Some(close), Some(sma)) = (raw.close, raw.sma) {
-        //    sub_signals.push(if close > sma { 1.0 } else if close < sma { 0.0 } else { 0.5 });
-        //}
+        // SMA cross: price above SMA → bullish, below → bearish
+        if let (Some(close), Some(sma)) = (raw.close, raw.sma) {
+            sub_signals.push(if close > sma { 1.0 } else if close < sma { 0.0 } else { 0.5 });
+        }
 
-        //// EMA cross: price above EMA → bullish, below → bearish
-        //if let (Some(close), Some(ema)) = (raw.close, raw.ema) {
-        //    sub_signals.push(if close > ema { 1.0 } else if close < ema { 0.0 } else { 0.5 });
-        //}
+        // EMA cross: price above EMA → bullish, below → bearish
+        if let (Some(close), Some(ema)) = (raw.close, raw.ema) {
+            sub_signals.push(if close > ema { 1.0 } else if close < ema { 0.0 } else { 0.5 });
+        }
 
-        //// MACD histogram: positive → bullish, negative → bearish
-        //if let Some(hist) = raw.histogram {
-        //    sub_signals.push(if hist > 0.0 { 1.0 } else if hist < 0.0 { 0.0 } else { 0.5 });
-        //}
+        // MACD histogram: positive → bullish, negative → bearish
+        if let Some(hist) = raw.histogram {
+            sub_signals.push(if hist > 0.0 { 1.0 } else if hist < 0.0 { 0.0 } else { 0.5 });
+        }
 
-        //// Bollinger %B: near lower band (oversold) → bullish, near upper band → bearish
-        //// Computed from close, bb_upper, bb_lower since IndicatorPoint stores band values.
-        //if let (Some(close), Some(bb_upper), Some(bb_lower)) = (raw.close, raw.bb_upper, raw.bb_lower) {
-        //    let bandwidth = bb_upper - bb_lower;
-        //    let pct_b = if bandwidth > 0.0 {
-        //        (close - bb_lower) / bandwidth * 100.0
-        //    } else {
-        //        50.0 // flat bands → neutral
-        //    };
-        //    sub_signals.push(1.0 - (pct_b / 100.0).clamp(0.0, 1.0));
-        //}
+        // Bollinger %B: near lower band (oversold) → bullish, near upper band → bearish
+        // Computed from close, bb_upper, bb_lower since IndicatorPoint stores band values.
+        if let (Some(close), Some(bb_upper), Some(bb_lower)) = (raw.close, raw.bb_upper, raw.bb_lower) {
+            let bandwidth = bb_upper - bb_lower;
+            let pct_b = if bandwidth > 0.0 {
+                (close - bb_lower) / bandwidth * 100.0
+            } else {
+                50.0 // flat bands → neutral
+            };
+            sub_signals.push(1.0 - (pct_b / 100.0).clamp(0.0, 1.0));
+        }
 
-        //// Warmup: no indicator data available yet
-        //if sub_signals.is_empty() {
-        //    return None;
-        //}
+        // Warmup: no indicator data available yet
+        if sub_signals.is_empty() {
+            return None;
+        }
 
-        //let ta_normalized = sub_signals.iter().sum::<f64>() / sub_signals.len() as f64;
+        let ta_normalized = sub_signals.iter().sum::<f64>() / sub_signals.len() as f64;
 
-        //// Average news sentiment: [-1.0, 1.0] → normalize to [0.0, 1.0]
-        //// Empty cache (Ollama unavailable or not yet run) → neutral 0.0
-        //let avg_sentiment = if news_scores.is_empty() {
-        //    0.0
-        //} else {
-        //    news_scores.iter().map(|s| s.score).sum::<f64>() / news_scores.len() as f64
-        //};
-        //let sentiment_normalized = ((avg_sentiment + 1.0) / 2.0).clamp(0.0, 1.0);
+        // Average news sentiment: [-1.0, 1.0] → normalize to [0.0, 1.0]
+        // Empty cache (Ollama unavailable or not yet run) → neutral 0.0
+        let avg_sentiment = if news_scores.is_empty() {
+            0.0
+        } else {
+            news_scores.iter().map(|s| s.score).sum::<f64>() / news_scores.len() as f64
+        };
+        let sentiment_normalized = ((avg_sentiment + 1.0) / 2.0).clamp(0.0, 1.0);
 
         // Weighted combination of TA and sentiment signals
-        //let combined = ta_normalized * config.ta_weight + sentiment_normalized * config.sentiment_weight;
-        //Some(combined.clamp(0.0, 1.0))
-        
-        let mut balance = 0.5;
-
-        if let (Some(sma), Some(ema), Some(bb_middle)) = (raw.sma, raw.ema, raw.bb_middle) {
-            balance = 0.5 * ( 1.5 * sma / bb_middle) * (1.2 * ema / sma);
-        }
-        
-        Some(balance.clamp(0.0, 1.0))
+        let combined = ta_normalized * config.ta_weight + sentiment_normalized * config.sentiment_weight;
+        Some(combined.clamp(0.0, 1.0))
     }
 
     /// Process a single IndicatorOutput: compute BTC target from raw indicator values,
@@ -634,21 +635,17 @@ mod tests {
         drop(indicator_tx);
 
         engine.run().await;
-        // NOTE: the current placeholder compute_btc_target formula (see its
-        // doc comment) always returns Some(0.5) — even for an all-None
-        // IndicatorPoint — because the sma/ema/bb_middle branch simply
-        // isn't entered and the function falls through to the `balance =
-        // 0.5` default. So this "neutral" input still establishes a sticky
-        // target of 0.5 and, since the mock starts at 0% BTC allocation,
-        // places a single Buy order to reach it.
-        assert_eq!(mock_exchange.placed_orders().len(), 1);
-        assert_eq!(mock_exchange.placed_orders()[0].side, OrderSide::Buy);
+        // All-None IndicatorPoint → compute_btc_target returns None (no
+        // sub-signal derivable) → sticky_target stays None → rebalancing is
+        // skipped entirely, so no order is placed.
+        assert!(mock_exchange.placed_orders().is_empty());
     }
 
     #[tokio::test]
     async fn bullish_allocation_places_buy_order() {
         // JPY=1_000_000, BTC=0, price=9_000_500, fee=0
-        // Strong bullish → target_pct=1.0 → delta=1.0 → Buy
+        // Strong bullish → target_pct≈0.86 → delta≈0.86 (well above
+        // allocation_threshold) → Buy
         let mock_exchange = Arc::new(MockExchangeClient::with_fee(0.0));
         let (indicator_tx, indicator_rx) = broadcast::channel::<IndicatorOutput>(16);
         let params = RiskParams::default();
@@ -698,15 +695,13 @@ mod tests {
         drop(indicator_tx);
 
         engine.run().await;
-        // NOTE: the current placeholder compute_btc_target formula reduces to
-        // `0.9 * ema / bb_middle` when sma/ema/bb_middle are all present (the
-        // sma term cancels out), which is nearly insensitive to this fixture's
-        // ema vs bb_middle difference — it yields ~0.895, still close to the
-        // ~0.90 already-held allocation, so the resulting delta stays under
-        // the allocation_threshold and no rebalance order is placed. This
-        // formula does not yet discriminate the "bearish" case; see the
-        // "DO NOT let automated tools rewrite" comment on compute_btc_target.
-        assert!(mock_exchange.placed_orders().is_empty());
+        // sub_signals: RSI=0.2, SMA-cross=0.0, EMA-cross=0.0, MACD-hist=0.0,
+        // BB%B=0.75 (close sits near the lower band) → ta_normalized=0.19.
+        // combined = 0.19*0.7 + 0.5*0.3 = 0.283 → zone-mapped target≈0.14,
+        // far below the ~0.90 already-held allocation → Sell.
+        let orders = mock_exchange.placed_orders();
+        assert_eq!(orders.len(), 1);
+        assert_eq!(orders[0].side, OrderSide::Sell);
     }
 
     #[tokio::test]
@@ -756,19 +751,13 @@ mod tests {
             macd_line: None, signal_line: None, histogram: None,
             bb_upper: None, bb_middle: None, bb_lower: None,
         };
-        // NOTE: the current placeholder formula (see compute_btc_target's doc
-        // comment) has no warmup guard — it falls through to the `balance =
-        // 0.5` default whenever sma/ema/bb_middle aren't all present, rather
-        // than returning None.
-        assert_eq!(
-            TradingEngine::compute_btc_target(&raw, &[], &make_cfg()),
-            Some(0.5)
-        );
+        // No indicator field is present, so no sub-signal can be derived → warmup → None.
+        assert_eq!(TradingEngine::compute_btc_target(&raw, &[], &make_cfg()), None);
     }
 
     #[test]
     fn compute_btc_target_neutral_rsi_returns_some() {
-        // RSI=50 → sub_signal=0.5 → neutral TA, no news → Some(0.5) (no longer filtered out)
+        // RSI=50 → sub_signal=0.5 → neutral TA, no news → Some(0.5)
         let raw = IndicatorPoint {
             time: chrono::Utc::now(),
             close: None,
@@ -795,11 +784,11 @@ mod tests {
             bb_upper: None, bb_middle: None, bb_lower: None,
         };
         let result = TradingEngine::compute_btc_target(&raw, &[], &make_cfg());
-        // NOTE: ema is None in this fixture, so the placeholder formula's
-        // sma/ema/bb_middle branch never activates and it falls through to
-        // the `balance = 0.5` default regardless of the bullish RSI/SMA
-        // values above.
-        assert_eq!(result, Some(0.5));
+        // RSI sub_signal=0.8, SMA-cross sub_signal=1.0 → ta_normalized=0.9.
+        // No news → sentiment_normalized=0.5. combined = 0.9*0.7 + 0.5*0.3 = 0.78.
+        let val = result.unwrap();
+        assert!((val - 0.78).abs() < 1e-9, "expected ~0.78, got {}", val);
+        assert!(val > 0.5);
     }
 
     #[test]
@@ -814,11 +803,11 @@ mod tests {
             bb_upper: None, bb_middle: None, bb_lower: None,
         };
         let result = TradingEngine::compute_btc_target(&raw, &[], &make_cfg());
-        // NOTE: ema is None in this fixture, so the placeholder formula's
-        // sma/ema/bb_middle branch never activates and it falls through to
-        // the `balance = 0.5` default regardless of the bearish RSI/SMA
-        // values above.
-        assert_eq!(result, Some(0.5));
+        // RSI sub_signal=0.2, SMA-cross sub_signal=0.0 → ta_normalized=0.1.
+        // No news → sentiment_normalized=0.5. combined = 0.1*0.7 + 0.5*0.3 = 0.22.
+        let val = result.unwrap();
+        assert!((val - 0.22).abs() < 1e-9, "expected ~0.22, got {}", val);
+        assert!(val < 0.5);
     }
 
     #[test]
@@ -838,11 +827,11 @@ mod tests {
             published_at: None,
         }];
         let result = TradingEngine::compute_btc_target(&raw, &news, &make_cfg());
-        // NOTE: the current placeholder formula ignores the `news_scores`
-        // parameter entirely (see its doc comment) and sma/ema/bb_middle are
-        // all None here, so it falls through to the `balance = 0.5` default
-        // regardless of how bullish the news is.
-        assert_eq!(result, Some(0.5));
+        // ta_normalized=0.5 (neutral RSI). sentiment_normalized=(0.8+1.0)/2=0.9.
+        // combined = 0.5*0.7 + 0.9*0.3 = 0.62.
+        let val = result.unwrap();
+        assert!((val - 0.62).abs() < 1e-9, "expected ~0.62, got {}", val);
+        assert!(val > 0.5);
     }
 
     #[tokio::test]
@@ -859,21 +848,14 @@ mod tests {
             "BTC_JPY".into(),
         );
 
-        // Only warmup signals — with the current placeholder formula these
-        // still resolve to Some(0.5) (see compute_btc_target's doc comment),
-        // so a sticky_target of 0.5 IS established on the first output and
-        // a single Buy order is placed to reach it. The second (identical)
-        // output should not add a second order since the resulting delta is
-        // then near zero.
+        // Only warmup (all-None) signals — compute_btc_target returns None
+        // for both, so sticky_target is never established and no order is
+        // ever placed.
         indicator_tx.send(hold_output()).unwrap();
         indicator_tx.send(hold_output()).unwrap();
         drop(indicator_tx);
 
         engine.run().await;
-        assert_eq!(
-            mock_exchange.placed_orders().len(),
-            1,
-            "second identical output should not re-trigger a rebalance"
-        );
+        assert!(mock_exchange.placed_orders().is_empty());
     }
 }

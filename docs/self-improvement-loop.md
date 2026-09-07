@@ -94,24 +94,43 @@ shirube backtest-variant --db shirube.db \
 
 ### 2. Run each hypothesis in its own worktree, in parallel
 
+**Important — verified 2026-09-07:** `isolation: "worktree"` branches
+from the repository's default branch (`main` here), *not* from whatever
+branch the coordinator session currently has checked out. Since
+`src/backtest/`, `src/cli.rs`, and `experiments/` only exist on `dev`,
+every worktree agent's prompt **must** explicitly tell it to rebase onto
+`dev` before doing anything else, or `shirube backtest-variant` won't
+exist yet and the agent will silently fall through into normal server
+startup (which opens a real WebSocket connection and starts placing mock
+orders — confirmed by a dry run; the agent has to be killed if this
+happens, since `backtest-variant`'s argument parsing is skipped
+entirely on `main`). Always include step 0 below in the prompt.
+
 For every `experiments/hypotheses/*.json` file (excluding `README.md`),
 launch one `Agent` call with `isolation: "worktree"`, all in a single
 message so they run in parallel. Each agent's prompt should say, in
 substance:
 
-> Read `experiments/hypotheses/<name>.json`. If `kind` is `"algorithm"`,
+> 0. `git fetch origin && git rebase origin/dev`. Resolve any conflicts,
+> preferring `dev`'s current structure over anything you might otherwise
+> assume from `main` (`dev` may have refactored the signal/trading
+> architecture since this doc was written — adapt to whatever
+> `IndicatorPoint`/`compute_indicators()`/`SignalEngine` actually look
+> like on `dev`, not what's described here). Run `cargo build` to confirm
+> the rebase compiles before continuing.
+> 1. Read `experiments/hypotheses/<name>.json`. If `kind` is `"algorithm"`,
 > implement `code_change_summary` exactly, respecting every item in
 > `constraints` (in particular: never edit the body of
 > `TradingEngine::compute_btc_target`). Run `cargo test` and fix any
 > failure caused by your change before continuing — do not proceed on a
-> red test suite. Write the hypothesis's `trading_config` field to a
-> temp JSON file. Run:
-> `cargo build --release` (or reuse the debug binary) then
+> red test suite.
+> 2. Write the hypothesis's `trading_config` field to a temp JSON file.
+> Run `cargo build` then
 > `shirube backtest-variant --db <path-to-a-copy-or-the-shared-read-only-db> --config <temp-config.json> --from <HOLDOUT_START> --to <NOW>`
-> using the exact same `HOLDOUT_START`/`NOW` as the baseline run. Report
-> back: the hypothesis name, the full stdout JSON report, whether
-> `cargo test` passed, and (for algorithm hypotheses) the worktree path
-> and branch name.
+> using the exact same `HOLDOUT_START`/`NOW` as the baseline run.
+> 3. Report back: the hypothesis name, the full stdout JSON report,
+> whether `cargo test` passed, and (for algorithm hypotheses) the
+> worktree path and branch name.
 
 Because backtests only read historical tickers (never place real
 orders), every worktree agent can safely point at the same
@@ -143,7 +162,12 @@ For each **promoted** variant:
   `compute_btc_target`'s signature at all (it must not touch its body).
 
 For each **rejected** variant, delete its worktree and branch — nothing
-to PR.
+to PR:
+
+```bash
+git worktree remove <worktree-path> --force
+git branch -D <worktree-branch>
+```
 
 One PR per promoted variant (never bundle multiple variants into one
 PR), so a bad promotion can be reverted independently.

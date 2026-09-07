@@ -46,25 +46,16 @@
   {#if cfg}
     <h3>リスク管理</h3>
     <div class="settings-grid">
-      <label class="settings-field">最大BTC保有量
-        <input type="number" bind:value={cfg.max_position_btc} step="0.001" min="0.001" />
+      <label class="settings-field settings-field-checkbox">サーキットブレーカー有効化
+        <input type="checkbox" bind:checked={cfg.circuit_breaker_enabled} />
       </label>
-      <label class="settings-field">日次最大損失率
+      <label class="settings-field" title="この率を超える日次ドローダウンでサーキットブレーカーが発動する">日次最大損失率
         <input type="number" bind:value={cfg.max_daily_drawdown} step="0.01" min="0" max="1" />
-      </label>
-      <label class="settings-field">ストップロス率
-        <input type="number" bind:value={cfg.stop_loss_pct} step="0.01" min="0" max="1" />
-      </label>
-      <label class="settings-field">最小注文サイズ(BTC)
-        <input type="number" bind:value={cfg.min_order_size} step="0.001" min="0.001" />
       </label>
     </div>
 
     <h3>シグナル</h3>
     <div class="settings-grid">
-      <label class="settings-field">シグナル閾値
-        <input type="number" bind:value={cfg.signal_threshold} step="0.05" min="0" max="1" />
-      </label>
       <label class="settings-field" title="この幅未満の配分変更は注文しない">配分閾値(dead-band)
         <input type="number" bind:value={cfg.allocation_threshold} step="0.01" min="0" max="1" />
       </label>
@@ -154,6 +145,13 @@
     padding: 4px 8px;
     border-radius: 4px;
     width: 160px;
+  }
+  .settings-field-checkbox {
+    flex-direction: row;
+    align-items: center;
+  }
+  .settings-field-checkbox input {
+    width: auto;
   }
   .save-row {
     display: flex;

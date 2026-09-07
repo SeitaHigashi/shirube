@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{NaiveDate, Utc};
+use chrono::Utc;
 use tokio::sync::{broadcast, RwLock};
 use tokio::time::{interval, MissedTickBehavior};
 use tracing::{debug, info, warn};
@@ -40,9 +40,6 @@ pub struct TradingEngine {
     exchange: Arc<dyn ExchangeClient>,
     risk_manager: RiskManager,
     product_code: String,
-    /// Last UTC date on which `reset_daily` was called; used to detect
-    /// midnight crossings without a dedicated timer task.
-    last_reset_date: Option<NaiveDate>,
     /// Trading configuration (allocation threshold, indicator weights) that can
     /// be updated live from the UI without restarting the engine.
     config: Arc<RwLock<TradingConfig>>,
@@ -73,7 +70,6 @@ impl TradingEngine {
                 exchange,
                 risk_manager,
                 product_code,
-                last_reset_date: None,
                 config: Arc::new(RwLock::new(TradingConfig::default())),
                 order_repo: None,
                 sticky_target: None,
@@ -144,7 +140,7 @@ impl TradingEngine {
         let mut rebalance_ticker = interval(Duration::from_secs(rebalance_interval_secs));
         rebalance_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-        // Worker loop: owns all mutable state (risk_manager, last_reset_date, sticky_target)
+        // Worker loop: owns all mutable state (risk_manager, sticky_target)
         // and processes signals one at a time without racing the receiver.
         loop {
             tokio::select! {
@@ -344,14 +340,6 @@ impl TradingEngine {
             .map(|b| b.available)
             .unwrap_or(Decimal::ZERO);
 
-        // Detect UTC midnight crossing and reset the daily risk baseline.
-        let today = Utc::now().date_naive();
-        if self.last_reset_date != Some(today) {
-            self.risk_manager.reset_daily();
-            self.last_reset_date = Some(today);
-            info!("RiskManager daily reset");
-        }
-
         // Positions represent open CFD/FX exposure; on the spot market
         // the BTC holding lives in the balance instead.
         let btc_position: Decimal = positions.iter().map(|p| p.size).sum();
@@ -368,6 +356,16 @@ impl TradingEngine {
         let btc_price = ticker.ltp;
         let btc_value = btc_held * btc_price;
         let total_value = btc_value + jpy_balance;
+
+        // Re-baseline the daily drawdown tracker off the candle's own timestamp
+        // (not wall-clock) so the same code path also resets correctly when
+        // driven by historical data in a backtest. See RiskManager::observe_time.
+        self.risk_manager.observe_time(output.raw.time, total_value);
+        if let Some(RiskDecision::CircuitBreaker { drawdown_pct }) =
+            self.risk_manager.check_drawdown(total_value)
+        {
+            warn!(drawdown_pct, "Circuit breaker triggered by daily drawdown");
+        }
 
         let min_order_size = self.risk_manager.params().min_order_size;
         let order_req = if total_value.is_zero() || btc_price.is_zero() {
@@ -428,13 +426,6 @@ impl TradingEngine {
             .map(|b| b.available)
             .unwrap_or(Decimal::ZERO);
 
-        let today = Utc::now().date_naive();
-        if self.last_reset_date != Some(today) {
-            self.risk_manager.reset_daily();
-            self.last_reset_date = Some(today);
-            info!("RiskManager daily reset");
-        }
-
         let btc_position: Decimal = positions.iter().map(|p| p.size).sum();
         let btc_balance = balances.iter()
             .find(|b| b.currency_code == "BTC")
@@ -445,6 +436,15 @@ impl TradingEngine {
         let btc_price = ticker.ltp;
         let btc_value = btc_held * btc_price;
         let total_value = btc_value + jpy_balance;
+
+        // This handler only runs off a live wall-clock ticker (never in a
+        // backtest), so Utc::now() is the correct "current time" here.
+        self.risk_manager.observe_time(Utc::now(), total_value);
+        if let Some(RiskDecision::CircuitBreaker { drawdown_pct }) =
+            self.risk_manager.check_drawdown(total_value)
+        {
+            warn!(drawdown_pct, "Circuit breaker triggered by daily drawdown");
+        }
 
         let min_order_size = self.risk_manager.params().min_order_size;
         let order_req = if total_value.is_zero() || btc_price.is_zero() {
@@ -663,6 +663,55 @@ mod tests {
         engine.run().await;
         assert_eq!(mock_exchange.placed_orders().len(), 1);
         assert_eq!(mock_exchange.placed_orders()[0].side, OrderSide::Buy);
+    }
+
+    #[tokio::test]
+    async fn circuit_breaker_blocks_order_after_same_day_drawdown() {
+        // Regression test for the daily-drawdown circuit breaker: a sharp
+        // same-day price crash after an initial buy must trip the breaker
+        // and block the very next rebalance attempt.
+        let mock_exchange = Arc::new(MockExchangeClient::with_fee(0.0));
+        let (_indicator_tx, indicator_rx) = broadcast::channel::<IndicatorOutput>(16);
+        let params = RiskParams {
+            min_order_size: dec!(0.001),
+            circuit_breaker_enabled: true,
+            max_daily_drawdown: 0.05,
+        };
+        let mut cfg = TradingConfig::default();
+        cfg.circuit_breaker_enabled = true;
+        cfg.max_daily_drawdown = 0.05;
+        let (mut engine, _signal_tx) = TradingEngine::new(
+            indicator_rx,
+            mock_exchange.clone(),
+            RiskManager::new(params),
+            "BTC_JPY".into(),
+        );
+        engine = engine.with_config(Arc::new(RwLock::new(cfg)));
+
+        // First bullish signal: establishes the daily drawdown baseline and buys.
+        engine.handle_indicator(bullish_output()).await.unwrap();
+        assert_eq!(mock_exchange.placed_orders().len(), 1, "first signal should buy");
+
+        // Crash the price 50% (same simulated day) — the BTC just bought loses
+        // half its value, which should exceed the 5% daily drawdown limit.
+        let ticker = mock_exchange.get_ticker("BTC_JPY").await.unwrap();
+        let crashed_price = ticker.ltp * dec!(0.5);
+        mock_exchange.set_ticker(crate::types::market::Ticker {
+            ltp: crashed_price,
+            best_bid: crashed_price,
+            best_ask: crashed_price,
+            ..ticker
+        });
+
+        // Same-day bullish signal again: the drawdown check should trip the
+        // breaker before the (otherwise large) rebalance order is evaluated,
+        // so no second order is placed.
+        engine.handle_indicator(bullish_output()).await.unwrap();
+        assert_eq!(
+            mock_exchange.placed_orders().len(),
+            1,
+            "breaker should block the rebalance triggered by the crash"
+        );
     }
 
     #[tokio::test]

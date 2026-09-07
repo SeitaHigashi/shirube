@@ -31,6 +31,15 @@ pub struct TradingConfig {
     /// デフォルト 0.15 (15%)
     pub allocation_threshold: f64,
 
+    /// サーキットブレーカーを有効化するか。デフォルト true。
+    /// 既存DBに保存された古い設定JSONにはこのフィールドが存在しないため、
+    /// 起動時のリスク保護が欠落しないよう `serde(default)` で true にフォールバックする。
+    #[serde(default = "default_circuit_breaker_enabled")]
+    pub circuit_breaker_enabled: bool,
+    /// サーキットブレーカーが発動する日次ドローダウン率。デフォルト 0.05 (5%)
+    #[serde(default = "default_max_daily_drawdown")]
+    pub max_daily_drawdown: f64,
+
     // インジケータ設定
     pub sma_period: usize,
     pub ema_period: usize,
@@ -57,11 +66,15 @@ pub struct TradingConfig {
 }
 
 fn default_rebalance_interval() -> u64 { 60 }
+fn default_circuit_breaker_enabled() -> bool { true }
+fn default_max_daily_drawdown() -> f64 { 0.05 }
 
 impl Default for TradingConfig {
     fn default() -> Self {
         Self {
             allocation_threshold: 0.15,
+            circuit_breaker_enabled: true,
+            max_daily_drawdown: 0.05,
             sma_period: 200,
             ema_period: 100,
             rsi_period: 42,
@@ -83,13 +96,17 @@ impl TradingConfig {
     pub fn to_risk_params(&self) -> RiskParams {
         RiskParams {
             min_order_size: dec!(0.001),
-            circuit_breaker_enabled: false,
+            circuit_breaker_enabled: self.circuit_breaker_enabled,
+            max_daily_drawdown: self.max_daily_drawdown,
         }
     }
 
     pub fn validate(&self) -> Result<(), String> {
         if !(0.0..=1.0).contains(&self.allocation_threshold) {
             return Err("allocation_threshold は 0.0〜1.0 の範囲で指定してください".into());
+        }
+        if !(0.0..=1.0).contains(&self.max_daily_drawdown) {
+            return Err("max_daily_drawdown は 0.0〜1.0 の範囲で指定してください".into());
         }
         if self.macd_slow <= self.macd_fast {
             return Err("macd_slow は macd_fast より大きい値を指定してください".into());
@@ -161,5 +178,36 @@ mod tests {
         let cfg = TradingConfig::default();
         let params = cfg.to_risk_params();
         assert_eq!(params.min_order_size, dec!(0.001));
+    }
+
+    #[test]
+    fn to_risk_params_carries_circuit_breaker_settings() {
+        let mut cfg = TradingConfig::default();
+        cfg.circuit_breaker_enabled = true;
+        cfg.max_daily_drawdown = 0.1;
+        let params = cfg.to_risk_params();
+        assert!(params.circuit_breaker_enabled);
+        assert_eq!(params.max_daily_drawdown, 0.1);
+    }
+
+    #[test]
+    fn validate_rejects_bad_max_daily_drawdown() {
+        let mut cfg = TradingConfig::default();
+        cfg.max_daily_drawdown = 1.5;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn missing_fields_in_stored_json_fall_back_to_safe_defaults() {
+        // Simulates a config JSON persisted before circuit_breaker_enabled /
+        // max_daily_drawdown existed. Must still deserialize, and must default
+        // to the breaker being ON rather than silently disabled.
+        let cfg = TradingConfig::default();
+        let mut json: serde_json::Value = serde_json::to_value(&cfg).unwrap();
+        json.as_object_mut().unwrap().remove("circuit_breaker_enabled");
+        json.as_object_mut().unwrap().remove("max_daily_drawdown");
+        let loaded: TradingConfig = serde_json::from_value(json).unwrap();
+        assert!(loaded.circuit_breaker_enabled);
+        assert_eq!(loaded.max_daily_drawdown, 0.05);
     }
 }

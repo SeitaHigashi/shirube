@@ -53,12 +53,9 @@ export interface NewsItem {
 }
 
 export interface TradingConfig {
-  max_position_btc: number;
-  max_daily_drawdown: number;
-  stop_loss_pct: number;
-  min_order_size: number;
-  signal_threshold: number;
   allocation_threshold: number;
+  circuit_breaker_enabled: boolean;
+  max_daily_drawdown: number;
   ta_weight: number;
   sentiment_weight: number;
   sma_period: number;

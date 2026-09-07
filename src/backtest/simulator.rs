@@ -63,7 +63,6 @@ impl Simulator {
         ]);
 
         let mut risk_manager = RiskManager::new(trading_config.to_risk_params());
-        risk_manager.reset_daily();
 
         // 本番の SignalEngine と同一の純粋関数でインジケータ値を計算する
         let points = compute_indicators(&candles, &trading_config);
@@ -95,12 +94,21 @@ impl Simulator {
                 sticky_target = Some(apply_zone(raw, &trading_config.zone));
             }
 
-            if let Some(target_pct) = sticky_target {
-                let jpy = exchange.jpy_balance();
-                let btc = exchange.btc_balance();
-                let btc_value = btc * price_with_slip;
-                let total = jpy + btc_value;
+            let jpy = exchange.jpy_balance();
+            let btc = exchange.btc_balance();
+            let btc_value = btc * price_with_slip;
+            let total = jpy + btc_value;
 
+            // Re-baseline the daily drawdown tracker off the candle's own
+            // timestamp (not wall-clock), so a multi-day backtest resets the
+            // circuit breaker once per *simulated* day exactly like live
+            // trading resets it once per real day. See RiskManager::observe_time
+            // for why wall-clock time would be wrong here (a whole backtest
+            // runs within a single real-time second).
+            risk_manager.observe_time(candle.open_time, total);
+            risk_manager.check_drawdown(total);
+
+            if let Some(target_pct) = sticky_target {
                 if !total.is_zero() && !price_with_slip.is_zero() {
                     let current_alloc = (btc_value / total).to_f64().unwrap_or(0.0);
                     let delta = target_pct - current_alloc;
@@ -167,9 +175,13 @@ mod tests {
     use rust_decimal_macros::dec;
 
     fn make_candle(close: Decimal) -> Candle {
+        make_candle_at(close, Utc::now())
+    }
+
+    fn make_candle_at(close: Decimal, open_time: chrono::DateTime<Utc>) -> Candle {
         Candle {
             product_code: "BTC_JPY".into(),
-            open_time: Utc::now(),
+            open_time,
             resolution_secs: 60,
             open: close,
             high: close,
@@ -225,6 +237,71 @@ mod tests {
         // Every candle produces an equity point; report is always populated
         // even when zero trades were placed (e.g. sticky target never set).
         assert!(report.total_return_pct.is_finite());
+    }
+
+    #[tokio::test]
+    async fn circuit_breaker_resets_on_next_simulated_day() {
+        // Regression test for the exact backtest problem the breaker was
+        // previously pulled for: a single bad day early in a long backtest
+        // must not permanently freeze trading for every day after it. The
+        // breaker should reset once per *simulated* day (driven by candle
+        // timestamps), not remain tripped for the rest of the run.
+        let db = crate::storage::db::Database::open_in_memory().await.unwrap();
+        let config = BacktestConfig {
+            product_code: "BTC_JPY".into(),
+            from: Utc::now(),
+            to: Utc::now(),
+            resolution_secs: 60,
+            slippage_pct: 0.0,
+            fee_pct: Some(0.0),
+            initial_jpy: dec!(1_000_000),
+        };
+
+        let mut trading_config = TradingConfig::default();
+        trading_config.sma_period = 2;
+        trading_config.ema_period = 2;
+        trading_config.rsi_period = 2;
+        trading_config.macd_fast = 2;
+        trading_config.macd_slow = 3;
+        trading_config.macd_signal = 2;
+        trading_config.bollinger_period = 2;
+        trading_config.allocation_threshold = 0.01;
+        trading_config.circuit_breaker_enabled = true;
+        trading_config.max_daily_drawdown = 0.05;
+
+        use chrono::TimeZone;
+        let day1 = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let day2 = Utc.with_ymd_and_hms(2026, 1, 2, 0, 0, 0).unwrap();
+
+        let mut candles = Vec::new();
+        // Day 1: warmup + bullish ascent (triggers an initial buy), then a
+        // sharp same-day crash that exceeds the 5% daily drawdown limit.
+        let day1_prices = [
+            dec!(9_000_000), dec!(9_100_000), dec!(9_200_000), dec!(9_300_000),
+            dec!(9_400_000), dec!(9_500_000), dec!(9_600_000), dec!(9_700_000),
+            dec!(4_500_000), // crash: >50% drop within the same simulated day
+        ];
+        for p in day1_prices {
+            candles.push(make_candle_at(p, day1));
+        }
+        // Day 2: still bullish (ascending from the crashed price). If the
+        // breaker correctly resets at the day boundary, this should still
+        // place a rebalance trade instead of staying frozen forever.
+        let day2_prices = [
+            dec!(4_600_000), dec!(4_700_000), dec!(4_800_000), dec!(4_900_000),
+        ];
+        for p in day2_prices {
+            candles.push(make_candle_at(p, day2));
+        }
+
+        let simulator = Simulator::new(config, db.clone());
+        let report = simulator.run(candles, trading_config).await.unwrap();
+
+        assert!(
+            report.total_trades >= 2,
+            "breaker should have reset on day 2, allowing a trade after the day-1 crash; got {} trades",
+            report.total_trades
+        );
     }
 
     #[test]

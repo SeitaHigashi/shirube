@@ -1,1 +1,18 @@
-[]
+[
+  {
+    "name": "wider-bollinger-band-2.5std",
+    "content_hash": "e6d6269af668c212d4c4074d9d5ab1722c68146a8e514128e140af10cc400bd3",
+    "tried_at": "2026-09-07T11:48:28Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 0.0,
+    "report_path": null
+  },
+  {
+    "name": "add-volume-weighted-ma-indicator",
+    "content_hash": "7da523ad019e67f7b126f52f22855b7e0e6bc610e97dfdec43a28fde0cf1e40c",
+    "tried_at": "2026-09-07T11:48:28Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 0.0,
+    "report_path": null
+  }
+]

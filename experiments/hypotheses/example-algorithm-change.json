@@ -1,0 +1,30 @@
+{
+  "name": "add-volume-weighted-ma-indicator",
+  "kind": "algorithm",
+  "rationale": "SMA/EMA ignore volume entirely, so thin-volume price spikes can move the target allocation as much as high-conviction moves. A volume-weighted moving average (VWMA) as an additional IndicatorPoint field would let a future (human-reviewed) change to compute_btc_target discount low-volume moves.",
+  "trading_config": {
+    "allocation_threshold": 0.15,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  },
+  "code_change_summary": "Add src/signal/indicators/vwma.rs implementing the Indicator trait (mirroring sma.rs), add a `vwma: Option<f64>` field to IndicatorPoint (src/signal/mod.rs) and populate it in compute_indicators() and SignalEngine::run()'s per-candle snapshot mapping. Do NOT wire it into TradingEngine::compute_btc_target's formula — this hypothesis only adds the raw value for a later human-reviewed change to consume.",
+  "constraints": [
+    "MUST NOT modify the body of TradingEngine::compute_btc_target (sub-signal mappings or weighting formula) — see the 'DO NOT let automated tools rewrite' comment on that function. Signature-only changes to fix a compile error are allowed but must be called out explicitly in the PR description.",
+    "MUST pass `cargo test`",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or anything on the live order-submission path"
+  ]
+}

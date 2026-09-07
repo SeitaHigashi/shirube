@@ -1,0 +1,24 @@
+{
+  "name": "wider-bollinger-band-2.5std",
+  "kind": "parameter",
+  "rationale": "The last weekly report showed several allocation flips during a choppy, low-trend period. A wider Bollinger band (2.5 std instead of 2.0) may reduce false breakout-driven rebalances without needing a code change.",
+  "trading_config": {
+    "allocation_threshold": 0.15,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.5,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  }
+}

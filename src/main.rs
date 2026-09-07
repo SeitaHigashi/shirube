@@ -1,5 +1,6 @@
 mod api;
 mod backtest;
+mod cli;
 mod config;
 mod error;
 mod exchange;
@@ -34,6 +35,13 @@ async fn main() -> anyhow::Result<()> {
     // Print version and exit (used by the auto-updater smoke test)
     if std::env::args().any(|a| a == "--version") {
         println!("{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
+    // Headless subcommands for the automated variant-validation pipeline
+    // (see docs/self-improvement-loop.md). Handled before server startup
+    // so they stay fast and don't require TLS/tracing setup.
+    if cli::dispatch().await? {
         return Ok(());
     }
 

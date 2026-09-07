@@ -4,6 +4,7 @@ pub mod simulator;
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 
 /// Parameters controlling a single backtest run: time range, resolution,
 /// and simulated trading costs. The allocation model (indicator periods,
@@ -25,7 +26,7 @@ pub struct BacktestConfig {
 }
 
 /// Aggregate performance metrics produced by a completed backtest run.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BacktestReport {
     pub total_return_pct: f64,
     pub sharpe_ratio: f64,
@@ -37,7 +38,7 @@ pub struct BacktestReport {
 /// Result of comparing a candidate variant's report against a baseline
 /// report over the same (holdout) period. See `report::compare` for the
 /// promotion rule this encodes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BacktestComparison {
     pub baseline: BacktestReport,
     pub candidate: BacktestReport,

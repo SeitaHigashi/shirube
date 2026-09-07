@@ -22,3 +22,6 @@ frontend/.svelte-kit/
 
 # Claude Code worktree scratch state (used by isolation:"worktree" agents)
 .claude/worktrees/
+
+# Local backtest convenience script (ad-hoc, not part of the CI-facing CLI)
+/scripts/backtest.sh

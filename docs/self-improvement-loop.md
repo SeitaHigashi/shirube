@@ -29,11 +29,13 @@ a vague instruction.
 
 | Parameter | Value |
 |---|---|
+| Cadence | daily, 04:00 JST (19:00 UTC previous day) |
 | Holdout window | last 14 days |
 | Total lookback | 30 days (16 days train + 14 days holdout) |
 | Promotion rule | Sharpe ratio improves >= 10% relative (or >= 0.1 absolute if baseline Sharpe <= 0) **AND** max drawdown does not worsen **AND** candidate trade count >= 50% of baseline's |
 | PR granularity | one PR per promoted variant |
 | Backtest resolution | 3600s (1h) candles, adjust via `--resolution-secs` if a finer/coarser view is needed |
+| New hypotheses generated per run | at most 3 (see "Hypothesis generation" below) |
 
 The promotion rule is implemented in `backtest::report::compare` (see
 `src/backtest/report.rs`) — it is not re-derived by the agent, only
@@ -79,7 +81,31 @@ instance is assumed to use. If the live DB-persisted config
 cycle: query `GET /api/config` on the running instance and overwrite
 `experiments/baseline-config.json` with the result.
 
-## Weekly procedure
+## Tried-hypothesis registry
+
+`experiments/tried.json` is a JSON array tracking every hypothesis this
+pipeline has ever run, so the same idea is never backtested twice:
+
+```json
+[
+  {
+    "name": "wider-bollinger-band-2.5std",
+    "content_hash": "sha256 hex of the hypothesis file's `trading_config` + `kind` + `code_change_summary`",
+    "tried_at": "2026-09-08T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 0.0,
+    "report_path": "experiments/reports/2026-09-08.md"
+  }
+]
+```
+
+`content_hash` (not just `name`) is the dedup key — hash the hypothesis
+file's `trading_config` object, `kind`, and `code_change_summary` (if
+present) with sha256. This means renaming a hypothesis file doesn't let
+it bypass the registry, but genuinely changing its `trading_config`
+values (a real new variant) does get a fresh hash and is eligible again.
+
+## Daily procedure
 
 Let `HOLDOUT_START = now - 14d`, `NOW = now` (UTC, ISO 8601).
 
@@ -92,7 +118,22 @@ shirube backtest-variant --db shirube.db \
   > /tmp/baseline.json
 ```
 
-### 2. Run each hypothesis in its own worktree, in parallel
+### 2. Filter out already-tried hypotheses
+
+Read `experiments/tried.json` (treat a missing file as `[]`). For every
+`experiments/hypotheses/*.json` file (excluding `README.md`), compute
+its `content_hash` the same way and skip it if that hash already appears
+in the registry. What remains is today's `CANDIDATES` list.
+
+### 3. Generate new hypotheses when candidates run low
+
+If `CANDIDATES` has fewer than 2 entries, generate up to
+`3 - len(CANDIDATES)` new ones (see "Hypothesis generation" below)
+before continuing, and add them to `CANDIDATES`. If even after
+generation there is nothing to test, skip straight to step 8 with an
+empty result set — still write a report noting that.
+
+### 4. Run each hypothesis in its own worktree, in parallel
 
 **Important — verified 2026-09-07:** `isolation: "worktree"` branches
 from the repository's default branch (`main` here), *not* from whatever
@@ -137,9 +178,9 @@ orders), every worktree agent can safely point at the same
 `shirube.db` file read-only, or a copy — either works since
 `Simulator` only ever talks to a `MockExchangeClient`.
 
-### 3. Aggregate and decide
+### 5. Aggregate and decide
 
-For each variant report collected in step 2:
+For each variant report collected in step 4:
 
 ```bash
 shirube compare-backtest --baseline /tmp/baseline.json --candidate /tmp/variant-<name>.json
@@ -147,7 +188,7 @@ shirube compare-backtest --baseline /tmp/baseline.json --candidate /tmp/variant-
 
 Collect the `promoted: true` results.
 
-### 4. Open PRs for promoted variants, clean up the rest
+### 6. Open PRs for promoted variants, clean up the rest
 
 For each **promoted** variant:
 - `kind: "parameter"` — open a PR against `dev` that updates
@@ -172,15 +213,82 @@ git branch -D <worktree-branch>
 One PR per promoted variant (never bundle multiple variants into one
 PR), so a bad promotion can be reverted independently.
 
-### 5. Human review
+### 7. Update the tried-hypothesis registry
+
+For every hypothesis run today (whether promoted or rejected), append a
+record to `experiments/tried.json` per the schema above. Do this
+regardless of outcome — a rejected hypothesis must never be re-tested
+just because the registry entry was skipped.
+
+### 8. Write today's report
+
+Write `experiments/reports/<YYYY-MM-DD>.md` (UTC date) with:
+
+```markdown
+# Self-improvement report — <date>
+
+## Baseline
+<the baseline BacktestReport JSON, plus 1-2 sentences of context: any
+notable indicator warmup issue, data gaps, etc.>
+
+## Hypotheses tried today
+| Hypothesis | Kind | Verdict | Sharpe Δ | Max DD Δ | Trades (cand/base) |
+|---|---|---|---|---|---|
+| <name> | parameter/algorithm | promoted/rejected | ... | ... | ... |
+
+(one row per hypothesis tried this run; "no hypotheses tried today —
+N new ones generated for tomorrow" if step 3's candidate list was empty)
+
+## PRs opened
+- <link or branch name> — <one-line summary>
+
+## New hypotheses generated this run
+- **<name>** (<kind>): <rationale, citing the specific observation from
+  this or a recent report that motivated it>
+
+## Running totals
+Total tried: <count from experiments/tried.json>. Total promoted: <count>.
+```
+
+Commit `experiments/tried.json`, the new report file, and any newly
+generated hypothesis files together in one commit directly to `dev`
+(this is data/docs, not a source change subject to PR review — unlike
+promoted algorithm/parameter hypotheses in step 6, which always go
+through a PR). Push it.
+
+### 9. Human review
 
 All PRs land on `dev` per the branch strategy in `CLAUDE.md` — nothing
 in this pipeline merges automatically. A human reviews and merges (or
 requests changes / closes) each PR normally.
 
+## Hypothesis generation
+
+When step 3 needs new hypotheses, read (in order of priority):
+1. The last 5-10 files under `experiments/reports/` (most recent first)
+   for patterns — e.g. a hypothesis that consistently misses the Sharpe
+   threshold by a small margin might suggest a nearby parameter value is
+   worth trying; a report noting choppy/low-trend periods might suggest
+   volatility-sensitive parameters.
+2. `experiments/tried.json` to see what's already been tried (never
+   propose something whose `content_hash` would collide with an existing
+   entry).
+3. The current indicator/config code (`src/config.rs`, `src/signal/`) to
+   know what fields and indicators actually exist.
+
+For each new hypothesis, follow `experiments/hypotheses/README.md`'s
+schema exactly: pick a unique, descriptive kebab-case `name`, write a
+`rationale` that cites the specific observation motivating it (not a
+generic guess), and for `kind: "algorithm"`, include the full
+`constraints` array from the README verbatim (the `compute_btc_target`
+guard in particular — see "Hard constraint" above). Write the new
+hypothesis as a file in `experiments/hypotheses/<name>.json`. Cap
+generation at 3 new hypotheses per run (see the parameters table) to
+keep daily runs bounded in cost and review burden.
+
 ## Scheduling
 
-Register this procedure as a weekly cron routine with the `/schedule`
+Register this procedure as a daily cron routine with the `/schedule`
 skill, pointing its prompt at this document (`docs/self-improvement-loop.md`)
 so the scheduled agent re-reads the current version each run rather than
 having the steps baked into the routine's own prompt text.
@@ -189,7 +297,7 @@ having the steps baked into the routine's own prompt text.
 
 A cloud routine gets a fresh git checkout with no accumulated
 `shirube.db` — there is no running instance's ticker history to read.
-Before step 1 of the weekly procedure, the routine must build its own
+Before step 1 of the daily procedure, the routine must build its own
 `shirube.db` for this run:
 
 ```bash

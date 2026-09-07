@@ -19,3 +19,6 @@ frontend/.svelte-kit/
 
 # 一時ファイル
 /tmp/
+
+# Claude Code worktree scratch state (used by isolation:"worktree" agents)
+.claude/worktrees/

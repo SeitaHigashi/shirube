@@ -23,7 +23,7 @@
   },
   "code_change_summary": "Add src/signal/indicators/vwma.rs implementing the Indicator trait (mirroring sma.rs), add a `vwma: Option<f64>` field to IndicatorPoint (src/signal/mod.rs) and populate it in compute_indicators() and SignalEngine::run()'s per-candle snapshot mapping. Do NOT wire it into TradingEngine::compute_btc_target's formula — this hypothesis only adds the raw value for a later human-reviewed change to consume.",
   "constraints": [
-    "MUST NOT modify the body of TradingEngine::compute_btc_target (sub-signal mappings or weighting formula) — see the 'DO NOT let automated tools rewrite' comment on that function. Signature-only changes to fix a compile error are allowed but must be called out explicitly in the PR description.",
+    "This hypothesis is intentionally additive-only: it MUST NOT modify the body of TradingEngine::compute_btc_target. compute_btc_target CAN be modified by other algorithm hypotheses (on their own worktree branch, with a promoted change flagged explicitly in its PR description — see experiments/hypotheses/README.md), but this one adds a raw indicator value for a later, separate change to consume instead.",
     "MUST pass `cargo test`",
     "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or anything on the live order-submission path"
   ]

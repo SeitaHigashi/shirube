@@ -34,25 +34,39 @@ one JSON hypothesis; the weekly routine feeds each one to its own
   `trading_config` to score it. A promoted algorithm hypothesis becomes a
   real PR against `dev` with the code diff.
 
-## Hard constraint on `kind: "algorithm"` hypotheses
+## `compute_btc_target` may be modified by `kind: "algorithm"` hypotheses
 
-`TradingEngine::compute_btc_target` (src/trading/engine.rs) carries an
-explicit human directive:
+As of 2026-09-08, `TradingEngine::compute_btc_target`
+(`src/trading/engine.rs`) is no longer categorically off-limits — a prior
+hand-edit (`fbce478`) had replaced its multi-indicator formula with one
+where the `sma` term canceled out algebraically, pinning the signal
+inside a single allocation zone for an entire 30-day backtest and
+producing exactly one trade for the whole window. That regression is why
+the constraint below was relaxed: an automated hypothesis is now allowed
+to fix or improve this function's body, subject to the same isolation
+this pipeline already uses for every other algorithm hypothesis:
 
-> NOTE: The internal logic of this function is maintained by hand. Do NOT
-> let automated tools rewrite the sub-signal mappings or weighting
-> formula.
+- The change is made only on that hypothesis's own dedicated
+  `isolation: "worktree"` branch — **never** as a direct commit to
+  `dev`/`main`.
+- `cargo test` must pass, including the `compute_btc_target_*` unit tests
+  in `src/trading/engine.rs` (update their expected values if the new
+  formula legitimately changes them — don't weaken or delete a test just
+  to make it pass).
+- A promoted change still becomes its own PR against `dev` (per the
+  pipeline's step 6) and is never merged automatically — a human reviews
+  it like any other algorithm hypothesis. **Flag explicitly in the PR
+  description whenever a diff touches `compute_btc_target`'s body**, so
+  the reviewer gives it the scrutiny an allocation-formula change
+  deserves.
 
-**No hypothesis, and no worktree agent acting on one, may modify the body
-of `compute_btc_target` (the sub-signal mappings or the weighting
-formula).** Only input/output signature changes needed to fix a compile
-error are permitted, and even those should be flagged in the PR
-description for explicit human review. Algorithm hypotheses should target
-additive changes instead: new indicators, new `IndicatorPoint` fields,
-changes to how indicators are constructed/reset, etc. Every
-`kind: "algorithm"` hypothesis file must include this constraint
-explicitly in its `constraints` array so the worktree agent sees it
-without having to go read this README.
+Algorithm hypotheses may still prefer additive changes (new indicators,
+new `IndicatorPoint` fields, changes to how indicators are
+constructed/reset) when that's a sufficient fix — but a hypothesis whose
+`rationale` specifically targets `compute_btc_target`'s own sub-signal
+mappings or weighting formula (e.g. "the signal is stuck in one zone",
+"trade count is too low") is now a valid `kind: "algorithm"` hypothesis
+in its own right.
 
 ## Example files
 

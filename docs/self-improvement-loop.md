@@ -184,3 +184,61 @@ Register this procedure as a weekly cron routine with the `/schedule`
 skill, pointing its prompt at this document (`docs/self-improvement-loop.md`)
 so the scheduled agent re-reads the current version each run rather than
 having the steps baked into the routine's own prompt text.
+
+## Running as a cloud routine: data bootstrap
+
+A cloud routine gets a fresh git checkout with no accumulated
+`shirube.db` — there is no running instance's ticker history to read.
+Before step 1 of the weekly procedure, the routine must build its own
+`shirube.db` for this run:
+
+```bash
+# 1. Checkout dev — the routine's default checkout is the repo's default
+#    branch (main), which does NOT have src/backtest/, src/cli.rs, or
+#    experiments/. This bit the manual dry-run validation (2026-09-07)
+#    when a worktree agent inherited from main; the same applies here.
+git fetch origin && git checkout dev && git pull
+
+# 2. Build once so `shirube` subcommands are available.
+cargo build --release
+
+# 3. Initialize a fresh DB's schema (any subcommand that opens the DB
+#    works; this one is a fast no-op against an empty range).
+rm -f ./run.db
+./target/release/shirube backtest-variant --db ./run.db \
+  --config experiments/baseline-config.json \
+  --from $(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ) --to $(date -u +%Y-%m-%dT%H:%M:%SZ) \
+  || true   # expected to fail with "no candles found" — that's fine, schema is now created
+
+# 4. Fetch 30 days of real hourly BTC/JPY prices from CoinGecko's public,
+#    keyless API and seed them into ./run.db's tickers table.
+curl -s "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=jpy&days=30&interval=hourly" \
+  -o /tmp/btc_jpy_30d.json
+
+python3 - <<'PYEOF'
+import sqlite3, json, datetime
+d = json.load(open('/tmp/btc_jpy_30d.json'))
+conn = sqlite3.connect('./run.db')
+rows = []
+for ts_ms, price in d['prices']:
+    ts = datetime.datetime.fromtimestamp(ts_ms/1000, datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    p = str(price)
+    rows.append(('BTC_JPY', ts, p, p, '0.1', '0.1', p, p, p, p, '1', '1'))
+conn.executemany('''INSERT OR IGNORE INTO tickers
+    (product_code, timestamp, best_bid, best_ask, best_bid_size, best_ask_size,
+     ltp_open, ltp, ltp_high, ltp_low, volume, volume_by_product)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''', rows)
+conn.commit()
+print(f"seeded {len(rows)} ticker rows")
+PYEOF
+```
+
+Use `./run.db` as the `--db` for every `backtest-variant` call this
+cycle (baseline and every variant). This is CoinGecko's aggregate market
+price, not bitFlyer's own order book — an approximation accepted for
+this pipeline's relative (variant-vs-baseline) comparisons, not meant to
+match bitFlyer's exact historical prices. If a real `shirube.db` export
+from the running instance becomes available later, prefer that instead
+(see the note in "CLI building blocks" above about keeping
+`experiments/baseline-config.json` in sync with the live DB-persisted
+config).

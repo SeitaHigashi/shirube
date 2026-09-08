@@ -62,5 +62,29 @@
     "verdict": "rejected",
     "sharpe_improvement_pct": -5.188880769844879,
     "report_path": "experiments/reports/2026-09-08.md"
+  },
+  {
+    "name": "full-ta-weight-no-sentiment",
+    "content_hash": "62f314f45cc6119209387e34f764a3a0175aa8232d7ada68d2f4c863e20ab58e",
+    "tried_at": "2026-09-08T16:35:50Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -0.6737796167435608,
+    "report_path": "experiments/reports/2026-09-08.md"
+  },
+  {
+    "name": "damped-crossover-lower-threshold",
+    "content_hash": "122e8980a0f7ad2942c4a09406d9f05f546daa20d20ba29588bf44bc11c7f4f7",
+    "tried_at": "2026-09-08T16:35:50Z",
+    "verdict": "promoted",
+    "sharpe_improvement_pct": 0.8484224006907981,
+    "report_path": "experiments/reports/2026-09-08.md"
+  },
+  {
+    "name": "trend-weighted-subsignals",
+    "content_hash": "354b05ead3b828dbd7f626a302f6f8843f79d45f987f932980961ceacdcb30b0",
+    "tried_at": "2026-09-08T16:35:50Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -1.2366469277633152,
+    "report_path": "experiments/reports/2026-09-08.md"
   }
 ]

@@ -9,6 +9,7 @@ mod news;
 mod risk;
 mod signal;
 mod storage;
+mod sync_ext;
 mod trading;
 mod types;
 mod updater;
@@ -84,12 +85,17 @@ async fn main() -> anyhow::Result<()> {
     };
     let trading_config = Arc::new(RwLock::new(trading_config_value));
 
-    let has_api_keys =
-        std::env::var("BITFLYER_API_KEY").is_ok() && std::env::var("BITFLYER_API_SECRET").is_ok();
+    // Read both credentials once: pattern-matching on the pair avoids the
+    // is_ok()-then-unwrap() dance and keeps "present" and "usable" in sync.
+    let api_credentials = match (
+        std::env::var("BITFLYER_API_KEY"),
+        std::env::var("BITFLYER_API_SECRET"),
+    ) {
+        (Ok(key), Ok(secret)) => Some((key, secret)),
+        _ => None,
+    };
 
-    let client: Arc<dyn ExchangeClient> = if has_api_keys {
-        let key = std::env::var("BITFLYER_API_KEY").unwrap();
-        let secret = std::env::var("BITFLYER_API_SECRET").unwrap();
+    let client: Arc<dyn ExchangeClient> = if let Some((key, secret)) = api_credentials {
         info!("Using BitFlyerRestClient with real API keys");
         Arc::new(exchange::bitflyer::rest::BitFlyerRestClient::new(key, secret))
     } else {
@@ -243,10 +249,14 @@ async fn main() -> anyhow::Result<()> {
     {
         let cache = Arc::clone(&news_cache);
         let news_repo = db.news_sentiments();
+        // NOTE: Ollama is an optional dependency — NewsAnalyzer falls back to
+        // score = 0.0 when the server is unreachable, so a missing env var must
+        // never abort startup. These defaults match the documented ones in
+        // README.md / CLAUDE.md; flake.nix overrides them for real deployments.
         let ollama_url = std::env::var("OLLAMA_URL")
-            .expect("OLLAMA_URL environment variable is required");
-        let ollama_model = std::env::var("OLLAMA_MODEL")
-            .expect("OLLAMA_MODEL environment variable is required");
+            .unwrap_or_else(|_| "http://localhost:11434".to_string());
+        let ollama_model =
+            std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "llama3".to_string());
         let feed_urls: Vec<String> = std::env::var("NEWS_FEED_URLS")
             .unwrap_or_else(|_| {
                 [

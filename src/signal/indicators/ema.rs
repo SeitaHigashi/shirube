@@ -32,7 +32,7 @@ impl Ema {
 
     /// close 値だけ食わせて EMA を更新する（MACD 内部利用）
     pub fn feed(&mut self, close: f64) -> Option<f64> {
-        if self.current.is_none() {
+        let Some(prev) = self.current else {
             self.init_buffer.push_back(close);
             if self.init_buffer.len() < self.period {
                 return None;
@@ -42,8 +42,9 @@ impl Ema {
             let sma = sum / self.init_buffer.len() as f64;
             self.current = Some(sma);
             return self.current;
-        }
-        let ema = close * self.k + self.current.unwrap() * (1.0 - self.k);
+        };
+        // EMA_t = close * k + EMA_{t-1} * (1 - k)
+        let ema = close * self.k + prev * (1.0 - self.k);
         self.current = Some(ema);
         self.current
     }

@@ -1,6 +1,8 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use crate::sync_ext::MutexExt;
+
 use tracing::debug;
 
 /// トークンバケット方式のレートリミッター。
@@ -48,8 +50,8 @@ impl RateLimiter {
     /// - `None`: 取得成功
     /// - `Some(duration)`: 待機が必要な時間
     fn try_acquire(&self) -> Option<Duration> {
-        let mut tokens = self.tokens.lock().unwrap();
-        let mut last_refill = self.last_refill.lock().unwrap();
+        let mut tokens = self.tokens.lock_or_recover();
+        let mut last_refill = self.last_refill.lock_or_recover();
 
         // 経過時間に応じてトークンを補充
         let now = Instant::now();

@@ -342,7 +342,7 @@ impl TickerRepository {
         let deleted2 = self
             .compact_zone(
                 product_code,
-                DateTime::<Utc>::from_timestamp(0, 0).unwrap(),
+                DateTime::<Utc>::UNIX_EPOCH,
                 day7_ago,
                 60,
             )
@@ -422,23 +422,29 @@ impl TickerRepository {
         let mut ids_to_delete: Vec<i64> = Vec::new();
 
         for indices in buckets.values() {
-            // id 昇順なので indices[0] が MIN(id) = 代表行
-            let rep_idx = *indices.iter().min().unwrap();
+            // raw_rows は id 昇順で取得し、その順に push しているので indices も
+            // 昇順。よって first() が MIN(id) = 代表行、last() が終値の行になる
+            // （O(n) の min()/max() 走査は不要）。空バケットは push 時に必ず
+            // 1件入るため発生しないが、panic させず読み飛ばす。
+            let (Some(&rep_idx), Some(&last_idx)) = (indices.first(), indices.last()) else {
+                continue;
+            };
             let rep = &raw_rows[rep_idx];
+            // 最後の行（最大 id）の終値・スプレッド・出来高を代表値として使う
+            let last = &raw_rows[last_idx];
 
+            // 非空が保証されているためフォールバックは到達しないが、
+            // 到達した場合も代表行の値を使えば意味的に正しい。
             let high = indices
                 .iter()
                 .map(|&i| raw_rows[i].ltp_high)
                 .max()
-                .unwrap();
+                .unwrap_or(rep.ltp_high);
             let low = indices
                 .iter()
                 .map(|&i| raw_rows[i].ltp_low)
                 .min()
-                .unwrap();
-            // 最後の行（最大 id）の終値・スプレッド・出来高を代表値として使う
-            let last_idx = *indices.iter().max().unwrap();
-            let last = &raw_rows[last_idx];
+                .unwrap_or(rep.ltp_low);
 
             updates.push(BucketUpdate {
                 id: rep.id,

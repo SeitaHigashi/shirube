@@ -9,6 +9,7 @@ use rust_decimal_macros::dec;
 use crate::error::{Error, Result};
 use crate::exchange::ExchangeClient;
 use crate::storage::mock_state::MockStateRepository;
+use crate::sync_ext::RwLockExt;
 use crate::types::{
     balance::{Balance, Position},
     market::{MyExecution, Ticker},
@@ -142,8 +143,8 @@ impl MockExchangeClient {
         let trades = repo.load_filled_trades().await?;
         // 累計取引量を約定履歴から再計算してティア制手数料を正しく復元する
         let volume: Decimal = trades.iter().map(|t| t.price * t.size).sum();
-        *client.volume_jpy.write().unwrap() = volume;
-        *client.filled_trades.write().unwrap() = trades;
+        *client.volume_jpy.write_or_recover() = volume;
+        *client.filled_trades.write_or_recover() = trades;
 
         client.db = Some(Arc::new(repo));
         Ok(client)
@@ -151,7 +152,7 @@ impl MockExchangeClient {
 
     /// ticker の ltp / bid / ask を一括更新する（バックテスト用）。
     pub fn set_price(&self, price: Decimal) {
-        let mut t = self.ticker.write().unwrap();
+        let mut t = self.ticker.write_or_recover();
         t.ltp = price;
         t.best_bid = price;
         t.best_ask = price;
@@ -159,25 +160,24 @@ impl MockExchangeClient {
     }
 
     pub fn set_ticker(&self, ticker: Ticker) {
-        *self.ticker.write().unwrap() = ticker;
+        *self.ticker.write_or_recover() = ticker;
     }
 
     pub fn set_balances(&self, balances: Vec<Balance>) {
-        *self.balances.write().unwrap() = balances;
+        *self.balances.write_or_recover() = balances;
     }
 
     pub fn placed_orders(&self) -> Vec<Order> {
-        self.orders.read().unwrap().clone()
+        self.orders.read_or_recover().clone()
     }
 
     pub fn filled_trades(&self) -> Vec<FilledTrade> {
-        self.filled_trades.read().unwrap().clone()
+        self.filled_trades.read_or_recover().clone()
     }
 
     pub fn jpy_balance(&self) -> Decimal {
         self.balances
-            .read()
-            .unwrap()
+            .read_or_recover()
             .iter()
             .find(|b| b.currency_code == "JPY")
             .map(|b| b.amount)
@@ -186,8 +186,7 @@ impl MockExchangeClient {
 
     pub fn btc_balance(&self) -> Decimal {
         self.balances
-            .read()
-            .unwrap()
+            .read_or_recover()
             .iter()
             .find(|b| b.currency_code == "BTC")
             .map(|b| b.amount)
@@ -195,7 +194,7 @@ impl MockExchangeClient {
     }
 
     fn update_balance(&self, currency: &str, delta: Decimal) -> Result<()> {
-        let mut balances = self.balances.write().unwrap();
+        let mut balances = self.balances.write_or_recover();
         let bal = balances
             .iter_mut()
             .find(|b| b.currency_code == currency)
@@ -215,14 +214,14 @@ impl MockExchangeClient {
 #[async_trait]
 impl ExchangeClient for MockExchangeClient {
     async fn get_ticker(&self, product_code: &str) -> Result<Ticker> {
-        let mut ticker = self.ticker.read().unwrap().clone();
+        let mut ticker = self.ticker.read_or_recover().clone();
         ticker.product_code = product_code.to_string();
         ticker.timestamp = Utc::now();
         Ok(ticker)
     }
 
     async fn get_balance(&self) -> Result<Vec<Balance>> {
-        Ok(self.balances.read().unwrap().clone())
+        Ok(self.balances.read_or_recover().clone())
     }
 
     async fn get_positions(&self, _product_code: &str) -> Result<Vec<Position>> {
@@ -230,7 +229,7 @@ impl ExchangeClient for MockExchangeClient {
     }
 
     async fn send_order(&self, req: &OrderRequest) -> Result<String> {
-        let exec_price = self.ticker.read().unwrap().ltp;
+        let exec_price = self.ticker.read_or_recover().ltp;
         if exec_price == Decimal::ZERO {
             return Err(Error::Other(anyhow::anyhow!("current price not set")));
         }
@@ -241,7 +240,7 @@ impl ExchangeClient for MockExchangeClient {
 
         // 累計取引量を加算（ティア制手数料の計算に使用）
         if self.override_fee.is_none() {
-            *self.volume_jpy.write().unwrap() += cost;
+            *self.volume_jpy.write_or_recover() += cost;
         }
 
         match req.side {
@@ -264,7 +263,7 @@ impl ExchangeClient for MockExchangeClient {
             size: req.size,
             fee,
         };
-        self.filled_trades.write().unwrap().push(trade.clone());
+        self.filled_trades.write_or_recover().push(trade.clone());
 
         let id = self.order_counter.fetch_add(1, Ordering::SeqCst);
         let acceptance_id = format!("MOCK-{:06}", id);
@@ -281,11 +280,11 @@ impl ExchangeClient for MockExchangeClient {
             created_at: now,
             updated_at: now,
         };
-        self.orders.write().unwrap().push(order);
+        self.orders.write_or_recover().push(order);
 
         // DB が設定されている場合は状態を永続化する（失敗しても注文自体は成功扱い）
         if let Some(db) = &self.db {
-            let balances = self.balances.read().unwrap().clone();
+            let balances = self.balances.read_or_recover().clone();
             let next_counter = id + 1;
             if let Err(e) = db.save_balances(&balances).await {
                 tracing::warn!("MockExchangeClient: failed to save balances to DB: {}", e);
@@ -302,7 +301,7 @@ impl ExchangeClient for MockExchangeClient {
     }
 
     async fn cancel_all_orders(&self, _product_code: &str) -> Result<()> {
-        let mut orders = self.orders.write().unwrap();
+        let mut orders = self.orders.write_or_recover();
         for order in orders.iter_mut() {
             if order.status == OrderStatus::Active {
                 order.status = OrderStatus::Canceled;
@@ -318,7 +317,7 @@ impl ExchangeClient for MockExchangeClient {
         status: Option<&str>,
         count: Option<u32>,
     ) -> Result<Vec<Order>> {
-        let orders = self.orders.read().unwrap();
+        let orders = self.orders.read_or_recover();
         let mut result: Vec<Order> = orders
             .iter()
             .filter(|o| o.product_code == product_code)
@@ -345,7 +344,7 @@ impl ExchangeClient for MockExchangeClient {
     }
 
     async fn cancel_order(&self, _product_code: &str, acceptance_id: &str) -> Result<()> {
-        let mut orders = self.orders.write().unwrap();
+        let mut orders = self.orders.write_or_recover();
         let order = orders
             .iter_mut()
             .find(|o| o.acceptance_id == acceptance_id)
@@ -371,7 +370,7 @@ impl ExchangeClient for MockExchangeClient {
         before: Option<i64>,
         after: Option<i64>,
     ) -> Result<Vec<MyExecution>> {
-        let trades = self.filled_trades.read().unwrap();
+        let trades = self.filled_trades.read_or_recover();
         let mut result: Vec<MyExecution> = trades
             .iter()
             .enumerate()
@@ -400,7 +399,7 @@ impl ExchangeClient for MockExchangeClient {
         if let Some(rate) = self.override_fee {
             return rate;
         }
-        fee_from_volume(*self.volume_jpy.read().unwrap())
+        fee_from_volume(*self.volume_jpy.read_or_recover())
     }
 }
 
@@ -544,7 +543,7 @@ mod tests {
         let client = MockExchangeClient::new();
         // Active な注文を2件手動挿入
         {
-            let mut orders = client.orders.write().unwrap();
+            let mut orders = client.orders.write_or_recover();
             for (i, id) in ["MOCK-A", "MOCK-B"].iter().enumerate() {
                 orders.push(Order {
                     id: Some(i as i64 + 1),
@@ -678,7 +677,7 @@ mod tests {
         // send_order は即時Completedになるため、手動でActiveな注文を挿入してテスト
         let client = MockExchangeClient::new();
         {
-            let mut orders = client.orders.write().unwrap();
+            let mut orders = client.orders.write_or_recover();
             orders.push(Order {
                 id: Some(99),
                 acceptance_id: "MOCK-ACTIVE".to_string(),

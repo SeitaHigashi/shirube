@@ -101,7 +101,6 @@ impl BacktestRunRepository {
             })
             .await?;
 
-        use chrono::TimeZone;
         let mut result = Vec::with_capacity(records.len());
         for (
             id,
@@ -121,10 +120,10 @@ impl BacktestRunRepository {
         {
             let from = DateTime::parse_from_rfc3339(&from_time)
                 .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc.timestamp_opt(0, 0).unwrap());
+                .unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
             let to = DateTime::parse_from_rfc3339(&to_time)
                 .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc.timestamp_opt(0, 0).unwrap());
+                .unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
             result.push(BacktestRunRecord {
                 id,
                 config: BacktestConfig {

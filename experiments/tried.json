@@ -14,5 +14,29 @@
     "verdict": "rejected",
     "sharpe_improvement_pct": 0.0,
     "report_path": null
+  },
+  {
+    "name": "shorter-hourly-indicator-periods",
+    "content_hash": "6014c84d00dc6d81336a6f2e118df286a1ff3477aa30a2504622ff82eeef854c",
+    "tried_at": "2026-09-08T00:11:53Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 14.806324475962835,
+    "report_path": "experiments/reports/2026-09-08.md"
+  },
+  {
+    "name": "lower-allocation-threshold",
+    "content_hash": "e37da478edf2b034ddb8543664ff3246ca79e4215ca1e0c531a92e0941c10c98",
+    "tried_at": "2026-09-08T00:11:53Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -1.9550552266836334,
+    "report_path": "experiments/reports/2026-09-08.md"
+  },
+  {
+    "name": "continuous-crossover-subsignals",
+    "content_hash": "bda9e0f7e8a29e28c1efeb7ad3e37c483c55c633aa5dcf80d8a38cf439cc2369",
+    "tried_at": "2026-09-08T00:11:53Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 16.54397116426815,
+    "report_path": "experiments/reports/2026-09-08.md"
   }
 ]

@@ -36,10 +36,40 @@ a vague instruction.
 | PR granularity | one PR per promoted variant |
 | Backtest resolution | 3600s (1h) candles, adjust via `--resolution-secs` if a finer/coarser view is needed |
 | New hypotheses generated per run | at most 3 (see "Hypothesis generation" below) |
+| Trade frequency | **non-binding guideline**: roughly 4-10 trades/day (see below) |
 
 The promotion rule is implemented in `backtest::report::compare` (see
 `src/backtest/report.rs`) — it is not re-derived by the agent, only
 invoked via `shirube compare-backtest`.
+
+### Trade frequency is a guideline, not a criterion
+
+A rough target of **4-10 trades per day** is a useful sense of the
+activity level this strategy is meant to operate at — enough turnover to
+react to intraday moves, not so much that fees and slippage dominate.
+Over a 90-day backtest that corresponds to about 360-900 trades; the
+baseline as of 2026-09-09 sits at 173 trades over 90 days (~1.9/day),
+i.e. below the range.
+
+This number carries **no force whatsoever**:
+
+- It is **not** part of the promotion rule and must never be added to
+  `backtest::report::compare`. Promotion is decided solely by the
+  Sharpe / drawdown / trade-count-ratio criteria in the table above.
+- A variant landing outside 4-10 trades/day is **not** disqualified. If
+  it clears the promotion rule, it gets promoted — results are what
+  count, unconditionally.
+- A variant landing inside the range earns **no** credit for that alone.
+  Hitting the target while failing the promotion rule is still a
+  rejection.
+
+Its only role is as an **idea source during hypothesis generation**: when
+the current trade count sits well outside the range, that is a hint worth
+turning into a testable hypothesis (e.g. a distance-to-zone-boundary or
+signal-threshold parameter that would plausibly raise or lower turnover).
+The backtest then decides whether that idea was any good. Record the
+observed trades/day in each run's report so the trend stays visible, but
+never let it override a backtest result in either direction.
 
 ## `compute_btc_target` may be modified via algorithm hypotheses
 
@@ -237,7 +267,9 @@ Write `experiments/reports/<YYYY-MM-DD>.md` (UTC date) with:
 
 ## Baseline
 <the baseline BacktestReport JSON, plus 1-2 sentences of context: any
-notable indicator warmup issue, data gaps, etc.>
+notable indicator warmup issue, data gaps, etc. Also note the observed
+trades/day (total_trades / window length in days) against the 4-10
+guideline — recorded for trend visibility only, never as a pass/fail.>
 
 ## Literature reviewed this run
 | Paper | Link | Pros | Cons | Outcome |
@@ -338,7 +370,12 @@ hypothesis from Step 1. Read (in order of priority):
    for patterns — e.g. a hypothesis that consistently misses the Sharpe
    threshold by a small margin might suggest a nearby parameter value is
    worth trying; a report noting choppy/low-trend periods might suggest
-   volatility-sensitive parameters.
+   volatility-sensitive parameters. Also check the recorded trades/day
+   against the 4-10 guideline above: a baseline sitting well outside it
+   is a hint that a turnover-affecting parameter is worth testing. Treat
+   it strictly as a source of candidate ideas — the backtest still
+   decides, and a hypothesis is never proposed *because* it would move
+   the trade count toward the range.
 2. `experiments/tried.json` to see what's already been tried (never
    propose something whose `content_hash` would collide with an existing
    entry).

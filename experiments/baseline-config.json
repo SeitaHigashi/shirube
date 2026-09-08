@@ -1,5 +1,5 @@
 {
-  "allocation_threshold": 0.15,
+  "allocation_threshold": 0.1,
   "sma_period": 200,
   "ema_period": 100,
   "rsi_period": 42,

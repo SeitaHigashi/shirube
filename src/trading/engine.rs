@@ -193,12 +193,30 @@ impl TradingEngine {
     ///
     /// # Sub-signal mappings
     /// - RSI:       (1.0 - rsi/100)       — low RSI (oversold) → 1.0 (bullish)
-    /// - SMA cross: close > sma → 1.0, close < sma → 0.0
-    /// - EMA cross: close > ema → 1.0, close < ema → 0.0
-    /// - MACD hist: histogram > 0 → 1.0, < 0 → 0.0
+    /// - SMA cross: damped continuous cross, saturating at ±0.5% from the SMA
+    ///              `(((close - sma) / sma) / 0.005).clamp(-1, 1) * 0.5 + 0.5`
+    /// - EMA cross: same damped mapping with the EMA as the reference line
+    /// - MACD hist: `((histogram / bb_middle) / 0.005).clamp(-1, 1) * 0.5 + 0.5`,
+    ///              i.e. the histogram scaled by its magnitude relative to the
+    ///              Bollinger midline, saturating at the same 0.5% relative
+    ///              distance. Falls back to the sign-based step mapping
+    ///              (>0 → 1.0, <0 → 0.0, ==0 → 0.5) when `bb_middle` is `None`
+    ///              or non-positive, so the sub-signal is never dropped.
     /// - BB %B:     (1.0 - pct_b/100) clamped — near lower band → bullish
     ///
+    /// NOTE: The SMA/EMA/MACD sub-signals were originally hard step functions
+    /// (`close > sma → 1.0` etc.). They are damped continuous ramps instead so
+    /// that a price hovering a few basis points either side of its reference
+    /// line produces a proportionally small tilt rather than a full-swing
+    /// 0.0/1.0 flip. The 0.5% saturation band is deliberately narrow: beyond
+    /// half a percent of separation the mapping is identical to the old step
+    /// function, so only genuinely marginal crossings are damped. RSI's
+    /// sub-signal and Bollinger %B's sub-signal are already continuous and are
+    /// intentionally left unchanged.
+    ///
     /// # Formula
+    ///   cross_sub_signal = ((x / ref) / SATURATION).clamp(-1, 1) * 0.5 + 0.5
+    ///                                                     ∈ [0.0, 1.0]
     ///   ta_normalized    = avg(sub_signals)              ∈ [0.0, 1.0]
     ///   sentiment_norm   = (avg_sentiment + 1.0) / 2.0  ∈ [0.0, 1.0]
     ///   combined         = ta_normalized * ta_weight + sentiment_norm * sentiment_weight
@@ -207,26 +225,61 @@ impl TradingEngine {
         news_scores: &[SentimentScore],
         config: &TradingConfig,
     ) -> Option<f64> {
+        /// Relative distance from a reference line at which a damped crossover
+        /// sub-signal reaches full saturation (0.0 or 1.0). 0.5% — beyond this
+        /// separation the mapping matches the old hard step function exactly.
+        const CROSS_SATURATION: f64 = 0.005;
+
+        /// Map a signed relative deviation onto [0.0, 1.0] with linear damping
+        /// inside ±`CROSS_SATURATION` and hard saturation outside it.
+        ///
+        /// `(relative / 0.005).clamp(-1.0, 1.0) * 0.5 + 0.5`
+        /// → relative = 0 gives 0.5 (neutral), +0.5% or more gives 1.0
+        ///   (fully bullish), -0.5% or less gives 0.0 (fully bearish).
+        fn damped_cross(relative: f64) -> f64 {
+            (relative / CROSS_SATURATION).clamp(-1.0, 1.0) * 0.5 + 0.5
+        }
+
         let mut sub_signals: Vec<f64> = Vec::new();
 
         // RSI: oversold (low RSI) → bullish (1.0), overbought (high RSI) → bearish (0.0)
+        // NOTE: already continuous — intentionally left unchanged.
         if let Some(rsi) = raw.rsi {
             sub_signals.push(1.0 - (rsi / 100.0).clamp(0.0, 1.0));
         }
 
-        // SMA cross: price above SMA → bullish, below → bearish
+        // SMA cross (damped): price above SMA → bullish, below → bearish, with
+        // the swing proportional to the relative gap until it saturates at 0.5%.
+        // A non-positive SMA would make the relative distance meaningless, so
+        // such a point contributes no sub-signal.
         if let (Some(close), Some(sma)) = (raw.close, raw.sma) {
-            sub_signals.push(if close > sma { 1.0 } else if close < sma { 0.0 } else { 0.5 });
+            if sma > 0.0 {
+                sub_signals.push(damped_cross((close - sma) / sma));
+            }
         }
 
-        // EMA cross: price above EMA → bullish, below → bearish
+        // EMA cross (damped): identical mapping with the EMA as the reference line.
         if let (Some(close), Some(ema)) = (raw.close, raw.ema) {
-            sub_signals.push(if close > ema { 1.0 } else if close < ema { 0.0 } else { 0.5 });
+            if ema > 0.0 {
+                sub_signals.push(damped_cross((close - ema) / ema));
+            }
         }
 
-        // MACD histogram: positive → bullish, negative → bearish
+        // MACD histogram (damped): the histogram is an absolute price-unit
+        // quantity, so it is scaled by the Bollinger midline to get a relative
+        // magnitude before the same 0.5%-saturation mapping is applied.
+        // Fallback: without a usable bb_middle there is no scale reference, so
+        // the original sign-based step mapping is used rather than dropping the
+        // sub-signal entirely.
         if let Some(hist) = raw.histogram {
-            sub_signals.push(if hist > 0.0 { 1.0 } else if hist < 0.0 { 0.0 } else { 0.5 });
+            match raw.bb_middle {
+                Some(bb_middle) if bb_middle > 0.0 => {
+                    sub_signals.push(damped_cross(hist / bb_middle));
+                }
+                _ => {
+                    sub_signals.push(if hist > 0.0 { 1.0 } else if hist < 0.0 { 0.0 } else { 0.5 });
+                }
+            }
         }
 
         // Bollinger %B: near lower band (oversold) → bullish, near upper band → bearish
@@ -833,7 +886,9 @@ mod tests {
             bb_upper: None, bb_middle: None, bb_lower: None,
         };
         let result = TradingEngine::compute_btc_target(&raw, &[], &make_cfg());
-        // RSI sub_signal=0.8, SMA-cross sub_signal=1.0 → ta_normalized=0.9.
+        // RSI sub_signal=0.8. SMA-cross: (10100-10000)/10000 = +1.0% relative,
+        // which is past the 0.5% saturation band → sub_signal=1.0.
+        // → ta_normalized=0.9.
         // No news → sentiment_normalized=0.5. combined = 0.9*0.7 + 0.5*0.3 = 0.78.
         let val = result.unwrap();
         assert!((val - 0.78).abs() < 1e-9, "expected ~0.78, got {}", val);
@@ -852,11 +907,62 @@ mod tests {
             bb_upper: None, bb_middle: None, bb_lower: None,
         };
         let result = TradingEngine::compute_btc_target(&raw, &[], &make_cfg());
-        // RSI sub_signal=0.2, SMA-cross sub_signal=0.0 → ta_normalized=0.1.
+        // RSI sub_signal=0.2. SMA-cross: (9900-10000)/10000 = -1.0% relative,
+        // past the 0.5% saturation band → sub_signal=0.0.
+        // → ta_normalized=0.1.
         // No news → sentiment_normalized=0.5. combined = 0.1*0.7 + 0.5*0.3 = 0.22.
         let val = result.unwrap();
         assert!((val - 0.22).abs() < 1e-9, "expected ~0.22, got {}", val);
         assert!(val < 0.5);
+    }
+
+    #[test]
+    fn compute_btc_target_damped_cross_inside_saturation_band() {
+        // close is only +0.25% above both SMA and EMA — half of the 0.5%
+        // saturation band — so the damped crossover sub-signals must be 0.75
+        // rather than the 1.0 a hard step function would produce.
+        let raw = IndicatorPoint {
+            time: chrono::Utc::now(),
+            close: Some(10_025.0),
+            sma: Some(10_000.0),
+            ema: Some(10_000.0),
+            rsi: Some(50.0),
+            macd_line: None, signal_line: None, histogram: None,
+            bb_upper: None, bb_middle: None, bb_lower: None,
+        };
+        let result = TradingEngine::compute_btc_target(&raw, &[], &make_cfg());
+        // RSI sub_signal=0.5, SMA-cross=0.75, EMA-cross=0.75
+        // → ta_normalized = (0.5 + 0.75 + 0.75) / 3 = 0.666666...
+        // No news → sentiment_normalized=0.5.
+        // combined = 0.6666667*0.7 + 0.5*0.3 = 0.6166667.
+        let val = result.unwrap();
+        let expected = (2.0 / 3.0) * 0.7 + 0.5 * 0.3;
+        assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
+        // Strictly between neutral and the fully-saturated 0.78 of the strong-buy case.
+        assert!(val > 0.5 && val < 0.78);
+    }
+
+    #[test]
+    fn compute_btc_target_macd_histogram_damped_and_fallback() {
+        // With a usable bb_middle the histogram is scaled relative to it:
+        // 25 / 10_000 = +0.25% → damped sub_signal = 0.75.
+        let damped = IndicatorPoint {
+            time: chrono::Utc::now(),
+            close: None,
+            sma: None, ema: None, rsi: None,
+            macd_line: None, signal_line: None, histogram: Some(25.0),
+            bb_upper: None, bb_middle: Some(10_000.0), bb_lower: None,
+        };
+        let val = TradingEngine::compute_btc_target(&damped, &[], &make_cfg()).unwrap();
+        // ta_normalized = 0.75 (single sub-signal) → 0.75*0.7 + 0.5*0.3 = 0.675
+        assert!((val - 0.675).abs() < 1e-9, "expected ~0.675, got {}", val);
+
+        // Without bb_middle the sub-signal falls back to the sign-based step
+        // mapping (positive histogram → 1.0) instead of being dropped.
+        let fallback = IndicatorPoint { bb_middle: None, ..damped };
+        let val = TradingEngine::compute_btc_target(&fallback, &[], &make_cfg()).unwrap();
+        // ta_normalized = 1.0 → 1.0*0.7 + 0.5*0.3 = 0.85
+        assert!((val - 0.85).abs() < 1e-9, "expected ~0.85, got {}", val);
     }
 
     #[test]

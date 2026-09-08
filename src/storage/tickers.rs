@@ -224,6 +224,10 @@ impl TickerRepository {
 
     /// tickers テーブルから任意の resolution_secs でキャンドルを集約して返す。
     /// ltp_open/ltp_high/ltp_low/ltp を OHLC として使用する。
+    ///
+    /// `limit` が `None` の場合は `[from, to]` 全体を返す。バックテストは
+    /// 期間全体を評価する必要があるため、ここで暗黙に件数を打ち切ると
+    /// `ORDER BY bucket_ts ASC` の性質上、期間の後半が黙って捨てられる。
     pub async fn get_aggregated(
         &self,
         product_code: &str,
@@ -235,7 +239,8 @@ impl TickerRepository {
         let pc = product_code.to_string();
         let from_str = from.to_rfc3339();
         let to_str = to.to_rfc3339();
-        let limit = limit.unwrap_or(1000);
+        // SQLite treats a negative LIMIT as "no limit".
+        let limit: i64 = limit.map(i64::from).unwrap_or(-1);
         let res = resolution_secs as i64;
 
         let candles = self
@@ -607,6 +612,38 @@ mod tests {
             volume: dec!(1000),
             volume_by_product: dec!(1000),
         }
+    }
+
+    /// `limit: None` must return the whole `[from, to]` range. A previous
+    /// implicit cap of 1000 silently truncated backtests longer than ~41
+    /// days at 1h resolution, dropping the *newest* candles because the
+    /// query orders ascending.
+    #[tokio::test]
+    async fn get_aggregated_without_limit_returns_full_range() {
+        let db = Database::open_in_memory().await.unwrap();
+        let repo = db.tickers();
+
+        let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let hours = 1200;
+        for h in 0..hours {
+            let ts = start + chrono::Duration::hours(h);
+            repo.insert(&make_ticker(ts, dec!(9000000) + Decimal::from(h)))
+                .await
+                .unwrap();
+        }
+        let end = start + chrono::Duration::hours(hours);
+
+        let unlimited = repo
+            .get_aggregated("BTC_JPY", 3600, start, end, None)
+            .await
+            .unwrap();
+        assert_eq!(unlimited.len(), hours as usize);
+
+        let capped = repo
+            .get_aggregated("BTC_JPY", 3600, start, end, Some(500))
+            .await
+            .unwrap();
+        assert_eq!(capped.len(), 500);
     }
 
     #[tokio::test]

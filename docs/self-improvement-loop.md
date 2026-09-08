@@ -31,7 +31,7 @@ a vague instruction.
 |---|---|
 | Cadence | daily, 04:00 JST (19:00 UTC previous day) |
 | Holdout window | last 14 days |
-| Total lookback | 30 days (16 days train + 14 days holdout) |
+| Total lookback | 90 days (76 days train + 14 days holdout) |
 | Promotion rule | Sharpe ratio improves >= 10% relative (or >= 0.1 absolute if baseline Sharpe <= 0) **AND** max drawdown does not worsen **AND** candidate trade count >= 50% of baseline's |
 | PR granularity | one PR per promoted variant |
 | Backtest resolution | 3600s (1h) candles, adjust via `--resolution-secs` if a finer/coarser view is needed |
@@ -393,14 +393,16 @@ rm -f ./run.db
   --from $(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ) --to $(date -u +%Y-%m-%dT%H:%M:%SZ) \
   || true   # expected to fail with "no candles found" — that's fine, schema is now created
 
-# 4. Fetch 30 days of real hourly BTC/JPY prices from CoinGecko's public,
-#    keyless API and seed them into ./run.db's tickers table.
-curl -s "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=jpy&days=30&interval=hourly" \
-  -o /tmp/btc_jpy_30d.json
+# 4. Fetch 90 days of real hourly BTC/JPY prices from CoinGecko's public,
+#    keyless API and seed them into ./run.db's tickers table. 90 days is
+#    also the free-tier ceiling for hourly granularity (CoinGecko serves
+#    daily-only data beyond that on the keyless API).
+curl -s "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=jpy&days=90&interval=hourly" \
+  -o /tmp/btc_jpy_90d.json
 
 python3 - <<'PYEOF'
 import sqlite3, json, datetime
-d = json.load(open('/tmp/btc_jpy_30d.json'))
+d = json.load(open('/tmp/btc_jpy_90d.json'))
 conn = sqlite3.connect('./run.db')
 rows = []
 for ts_ms, price in d['prices']:

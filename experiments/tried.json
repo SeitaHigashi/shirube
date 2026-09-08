@@ -1,7 +1,7 @@
 [
   {
     "name": "wider-bollinger-band-2.5std",
-    "content_hash": "e6d6269af668c212d4c4074d9d5ab1722c68146a8e514128e140af10cc400bd3",
+    "content_hash": "fb8d38af7260bcfdf02ba508d959e6fe792b50a5a460b78ab604c5b6b36ef7a7",
     "tried_at": "2026-09-07T11:48:28Z",
     "verdict": "rejected",
     "sharpe_improvement_pct": 0.0,
@@ -9,7 +9,7 @@
   },
   {
     "name": "add-volume-weighted-ma-indicator",
-    "content_hash": "7da523ad019e67f7b126f52f22855b7e0e6bc610e97dfdec43a28fde0cf1e40c",
+    "content_hash": "dc3ac79176c69fc348ea9ffb7b366de94788b8acedbe37f6c92fe612496ef7b4",
     "tried_at": "2026-09-07T11:48:28Z",
     "verdict": "rejected",
     "sharpe_improvement_pct": 0.0,
@@ -41,7 +41,7 @@
   },
   {
     "name": "medium-hourly-indicator-periods",
-    "content_hash": "d2cddee7e638cf372ea2cf467396dfd90de11448ac6407367b8db56c1b259732",
+    "content_hash": "6aeb81facff609b846d8c58ed47a4d2442327b492946ce1aa4b92291c1bf2f9b",
     "tried_at": "2026-09-08T12:16:00Z",
     "verdict": "rejected",
     "sharpe_improvement_pct": 3.9377503505006004,
@@ -65,7 +65,7 @@
   },
   {
     "name": "full-ta-weight-no-sentiment",
-    "content_hash": "62f314f45cc6119209387e34f764a3a0175aa8232d7ada68d2f4c863e20ab58e",
+    "content_hash": "c950ae016e815f35112e3e9e4da2a4540df904c788596c033175e3d4a735ecdb",
     "tried_at": "2026-09-08T16:35:50Z",
     "verdict": "rejected",
     "sharpe_improvement_pct": -0.6737796167435608,
@@ -85,6 +85,30 @@
     "tried_at": "2026-09-08T16:35:50Z",
     "verdict": "rejected",
     "sharpe_improvement_pct": -1.2366469277633152,
+    "report_path": "experiments/reports/2026-09-08.md"
+  },
+  {
+    "name": "narrow-zone-band",
+    "content_hash": "67656691b4857ec4a0bf897431f59fea5e5fe959949ba0e830e3256a61ce3ec7",
+    "tried_at": "2026-09-08T19:36:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -0.7550657468882633,
+    "report_path": "experiments/reports/2026-09-08.md"
+  },
+  {
+    "name": "tighter-daily-drawdown-breaker",
+    "content_hash": "b52f63df180db6df73e638849e109e4b4263b9e4bc8b6f80e06375ee7f0fba0c",
+    "tried_at": "2026-09-08T19:36:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 0.0,
+    "report_path": "experiments/reports/2026-09-08.md"
+  },
+  {
+    "name": "sma-regime-gate",
+    "content_hash": "fc56f29dd85ea7bd2d0c22d390bc23ae3dcbe294d103120c4960ab90751c13cb",
+    "tried_at": "2026-09-08T19:36:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 0.0,
     "report_path": "experiments/reports/2026-09-08.md"
   }
 ]

@@ -1,7 +1,7 @@
 use crate::exchange::mock::FilledTrade;
 use crate::types::order::OrderSide;
 
-use super::{BacktestComparison, BacktestReport};
+use super::{BacktestComparison, BacktestReport, RiskEventCounts};
 
 /// 人間が読みやすい形式でレポートを出力する
 pub fn format_report(report: &BacktestReport) -> String {
@@ -11,12 +11,16 @@ pub fn format_report(report: &BacktestReport) -> String {
          Sharpe Ratio : {:.3}\n\
          Max Drawdown : {:.2}%\n\
          Win Rate     : {:.1}%\n\
-         Total Trades : {}",
+         Total Trades : {}\n\
+         CB Trips     : {}\n\
+         Rejected     : {}",
         report.total_return_pct,
         report.sharpe_ratio,
         report.max_drawdown_pct,
         report.win_rate * 100.0,
         report.total_trades,
+        report.circuit_breaker_trips,
+        report.orders_rejected,
     )
 }
 
@@ -28,6 +32,7 @@ pub(crate) fn compute_report(
     equity_curve: &[f64],
     initial_jpy: f64,
     resolution_secs: u32,
+    risk_events: RiskEventCounts,
 ) -> BacktestReport {
     let total_trades = trades.len() as u32;
 
@@ -44,6 +49,8 @@ pub(crate) fn compute_report(
         max_drawdown_pct,
         win_rate,
         total_trades,
+        circuit_breaker_trips: risk_events.circuit_breaker_trips,
+        orders_rejected: risk_events.orders_rejected,
     }
 }
 
@@ -289,6 +296,8 @@ mod tests {
             max_drawdown_pct: 3.21,
             win_rate: 0.55,
             total_trades: 42,
+            circuit_breaker_trips: 2,
+            orders_rejected: 7,
         };
         let s = format_report(&report);
         assert!(s.contains("12.34"));
@@ -296,6 +305,8 @@ mod tests {
         assert!(s.contains("3.21"));
         assert!(s.contains("55.0"));
         assert!(s.contains("42"));
+        assert!(s.contains("CB Trips     : 2"));
+        assert!(s.contains("Rejected     : 7"));
     }
 
     /// The annualization factor must follow `resolution_secs`; a 1h
@@ -332,6 +343,8 @@ mod tests {
             max_drawdown_pct: dd,
             win_rate: 0.5,
             total_trades: trades,
+            circuit_breaker_trips: 0,
+            orders_rejected: 0,
         }
     }
 

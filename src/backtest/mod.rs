@@ -33,6 +33,38 @@ pub struct BacktestReport {
     pub max_drawdown_pct: f64,
     pub win_rate: f64,
     pub total_trades: u32,
+    /// How many times the daily-drawdown circuit breaker tripped during the
+    /// run (at most once per simulated day, since `RiskManager` clears the
+    /// flag at each day boundary).
+    ///
+    /// NOTE: `#[serde(default)]` so that report JSON written before this
+    /// field existed still parses — `shirube compare-backtest` reads
+    /// baseline reports saved by earlier runs.
+    #[serde(default)]
+    pub circuit_breaker_trips: u32,
+    /// How many orders `RiskManager::evaluate` refused (circuit breaker
+    /// active, or size below the exchange minimum). An order counted here
+    /// never reached the exchange, so it is absent from `total_trades`.
+    #[serde(default)]
+    pub orders_rejected: u32,
+}
+
+/// Risk-gate activity observed during a backtest run.
+///
+/// # Why this is counted
+///
+/// `Simulator::run` discards every `RiskDecision` it does not act on, so a
+/// risk-gate setting that never fires and one that fires constantly used to
+/// be indistinguishable from the report alone. Establishing which had
+/// happened for a single `max_daily_drawdown` hypothesis (2026-09-08) took
+/// four extra backtests plus a separate price-series analysis, and the
+/// obvious proxy is wrong: blocking a rebalance on a down day defers the
+/// exposure change to a later candle rather than removing a trade, so
+/// `total_trades` can be identical whether or not the breaker fired.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RiskEventCounts {
+    pub circuit_breaker_trips: u32,
+    pub orders_rejected: u32,
 }
 
 /// Result of comparing a candidate variant's report against a baseline

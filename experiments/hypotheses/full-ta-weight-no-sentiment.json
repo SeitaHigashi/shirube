@@ -1,0 +1,26 @@
+{
+  "name": "full-ta-weight-no-sentiment",
+  "kind": "parameter",
+  "rationale": "src/backtest/simulator.rs:92 calls TradingEngine::compute_btc_target(point, &[], &trading_config) -- the news slice is always empty in a backtest, so sentiment_normalized is pinned at the constant 0.5 and contributes a fixed sentiment_weight*0.5 = 0.15 offset. With the baseline's ta_weight=0.7 the combined signal can therefore only ever span [0.15, 0.85], while the zone boundaries sit at hold_jpy_below=0.2 / hold_btc_above=0.8: reaching zone A (all-JPY) requires ta_normalized < 0.0714 and zone C (all-BTC) requires ta_normalized > 0.9286, i.e. essentially all five sub-signals saturated in the same direction at once. That compression is a plausible contributor to the muted turnover the 2026-09-08 report kept observing (baseline 36-37 trades over 14 days, ~2.6/day, well under the 4-10/day guideline) and to variants clustering near the middle of the interpolation zone. Setting ta_weight=1.0 / sentiment_weight=0.0 restores the full [0.0, 1.0] range for the TA signal, making both extreme zones reachable. It is also directly meaningful in live operation: NewsAnalyzer falls back to score=0.0 whenever Ollama is unavailable, which produces the same constant-0.5 neutral term, so this variant measures what the strategy does when the sentiment channel is honestly treated as carrying no information rather than as a range-compressing constant.",
+  "trading_config": {
+    "allocation_threshold": 0.15,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 1.0,
+    "sentiment_weight": 0.0,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  }
+}

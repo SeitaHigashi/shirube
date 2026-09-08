@@ -1,0 +1,34 @@
+{
+  "name": "damped-crossover-lower-threshold",
+  "kind": "algorithm",
+  "rationale": "The 2026-09-08 report (Run 2) closes by naming this exact follow-up as the strongest lead so far: damped-crossover-subsignals (0.5%-saturation continuous SMA/EMA/MACD sub-signals) improved Sharpe by +10.06 absolute AND improved max drawdown by 0.90pp (4.64% -> 3.74%), yet was rejected solely because its trade count reached 47% of baseline (17 vs 36) -- three percentage points under the 50% floor. Its predecessor continuous-crossover-subsignals (2% band) had the same shape at 27%. The pattern across both runs is that the continuous mapping genuinely improves signal quality but suppresses turnover, and neither run tried relaxing anything else to recover the missing trades. Meanwhile lower-allocation-threshold (2026-09-08 Run 1) showed that dropping allocation_threshold 0.15 -> 0.05 in isolation, on top of the unmodified step-function sub-signals, over-fires: it raised trades to 178% of baseline but made both Sharpe (-1.96) and drawdown (+0.30pp) worse. This hypothesis tests the combination the report recommends -- the 0.5%-saturation continuous mapping plus a modest allocation_threshold relaxation to 0.10 (deliberately half-way, not the 0.05 that over-fired) -- on the theory that the damped mapping's noise rejection is what makes a lower gate safe, and that together they clear the 50% trade-count floor while keeping the Sharpe and drawdown gains.",
+  "trading_config": {
+    "allocation_threshold": 0.10,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  },
+  "code_change_summary": "In TradingEngine::compute_btc_target (src/trading/engine.rs), replace the SMA-cross and EMA-cross step functions with a continuous, clamped mapping saturating at a 0.5% relative distance from the reference line: sub_signal = (((close - reference) / reference) / 0.005).clamp(-1.0, 1.0) * 0.5 + 0.5, applied identically with sma and with ema as the reference. Apply the same narrowed-band continuous mapping to the MACD histogram sub-signal (scale the histogram by its magnitude relative to bb_middle, using the same 0.005 relative-saturation threshold) instead of using only its sign; if bb_middle is None or non-positive, fall back to the existing sign-based step mapping for the histogram so the sub-signal is never dropped. RSI's sub-signal and Bollinger %B's sub-signal are already continuous and MUST be left unchanged. This is the same code change as the (rejected, no-longer-present) damped-crossover-subsignals hypothesis -- the new variable being tested here is the combination with allocation_threshold=0.10 in trading_config, not the mapping itself. Update the function's doc comment to describe the new 0.5%-saturation formulas, and update the expected values in the compute_btc_target_* unit tests in src/trading/engine.rs's test module to match the new outputs (the warmup/None test and any RSI-only test are unaffected since they do not exercise sma/ema/histogram).",
+  "constraints": [
+    "This hypothesis modifies the body of TradingEngine::compute_btc_target. This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST NOT change TradingEngine::compute_btc_target's signature (its parameter list or return type) -- only its body.",
+    "MUST pass `cargo test`, including the compute_btc_target_* unit tests in src/trading/engine.rs -- update their expected values if the new formula legitimately changes them (do not weaken or delete a test just to make it pass).",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff touches compute_btc_target's body, so the reviewer gives it the scrutiny an allocation-formula change deserves.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or anything on the live order-submission path."
+  ]
+}

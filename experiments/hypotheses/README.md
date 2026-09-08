@@ -17,7 +17,23 @@ one JSON hypothesis; the weekly routine feeds each one to its own
   "trading_config": { /* full TradingConfig, see experiments/baseline-config.json */ },
   "code_change_summary": "Only for kind=algorithm. Plain-language description
                 of the source change the worktree agent should make.",
-  "constraints": [ "Only for kind=algorithm. Explicit boundaries — see below." ]
+  "constraints": [ "Only for kind=algorithm. Explicit boundaries — see below." ],
+  "paper_reference": {
+    "title": "Only present when this hypothesis was motivated by a paper
+              found during the literature-survey step (see
+              docs/self-improvement-loop.md's 'Literature survey' section).
+              Omit this whole field for hypotheses generated purely from
+              internal report/config observations.",
+    "authors": "...",
+    "venue_year": "e.g. arXiv:2401.xxxxx, 2024",
+    "url": "https://...",
+    "key_claim": "One sentence: what the paper claims.",
+    "pros": "Why this claim is plausibly relevant to shirube's setup.",
+    "cons": "Why it should not be trusted at face value here — market/
+             timeframe/instrument mismatch, no fee/slippage modeling,
+             small sample, etc. This is what justifies still gating
+             promotion on shirube's own backtest, not the paper's numbers."
+  }
 }
 ```
 

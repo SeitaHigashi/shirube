@@ -239,6 +239,14 @@ Write `experiments/reports/<YYYY-MM-DD>.md` (UTC date) with:
 <the baseline BacktestReport JSON, plus 1-2 sentences of context: any
 notable indicator warmup issue, data gaps, etc.>
 
+## Literature reviewed this run
+| Paper | Link | Pros | Cons | Outcome |
+|---|---|---|---|---|
+| <title, authors, venue/year> | <url> | <1 sentence> | <1 sentence> | adopted as `<hypothesis-name>` / not adopted (why) |
+
+("no papers reviewed this run" if Step 1 of "Hypothesis generation" was
+skipped, e.g. because step 3 didn't need new hypotheses.)
+
 ## Hypotheses tried today
 | Hypothesis | Kind | Verdict | Sharpe Δ | Max DD Δ | Trades (cand/base) |
 |---|---|---|---|---|---|
@@ -252,7 +260,9 @@ N new ones generated for tomorrow" if step 3's candidate list was empty)
 
 ## New hypotheses generated this run
 - **<name>** (<kind>): <rationale, citing the specific observation from
-  this or a recent report that motivated it>
+  this or a recent report that motivated it — or, if literature-motivated,
+  the paper's title/URL and key claim, plus a one-line summary of the
+  Pros/Cons that justified turning it into a hypothesis>
 
 ## Running totals
 Total tried: <count from experiments/tried.json>. Total promoted: <count>.
@@ -272,7 +282,58 @@ requests changes / closes) each PR normally.
 
 ## Hypothesis generation
 
-When step 3 needs new hypotheses, read (in order of priority):
+When step 3 needs new hypotheses, do the following, in order.
+
+### Step 1: literature survey
+
+Before drafting anything, spend this step looking for published research
+that bears on what recent reports have struggled with. This is a source
+of *ideas*, not of trusted conclusions — a paper's reported Sharpe ratio
+was almost always measured on a different market, timeframe, fee/
+slippage model, and sample period than shirube's BTC/JPY setup, so it
+never substitutes for shirube's own backtest gate (the Sharpe/drawdown/
+trade-count promotion rule in the parameters table still decides
+everything, unconditionally).
+
+1. Pick 1-3 search queries derived from what the last 5-10 reports under
+   `experiments/reports/` actually struggled with (e.g. "bitcoin
+   technical indicator ensemble trading strategy", "circuit breaker
+   drawdown control crypto trading", "Bollinger Band RSI combined signal
+   cryptocurrency backtest"). Use `WebSearch` against arXiv, SSRN, and
+   similar sources; prefer papers with an accessible abstract (arXiv
+   preprints are usually easiest to pull in full).
+2. For each paper worth reading past the abstract, use `WebFetch` to pull
+   it and write a short **Pros/Cons** comparison against shirube's
+   current logic (composite TA signal in `src/signal/engine.rs`,
+   allocation formula in `TradingEngine::compute_btc_target`, risk gates
+   in `src/risk/manager.rs`):
+   - **Pros**: the specific claim, and why it's plausibly transferable to
+     shirube's setup (same asset class, similar timeframe, addresses a
+     weakness a recent report actually observed, etc.).
+   - **Cons**: reasons to discount the claim here — different instrument/
+     market microstructure, no modeled fees/slippage, a pre-2020 sample
+     that predates BTC's current liquidity/derivatives regime, small N or
+     no out-of-sample test, parameter values tuned on the same data
+     they're evaluated on, etc. Every paper gets at least one Con — the
+     point of this step is explicitly *not* to accept the paper at face
+     value.
+   - Decide: does this paper motivate a concrete, testable hypothesis?
+     If yes, carry the Pros/Cons and full citation into that hypothesis's
+     `paper_reference` field (see `experiments/hypotheses/README.md`'s
+     schema) when it's drafted in Step 3 below. If no (Cons dominate, or
+     it doesn't map to anything shirube can express as a
+     `trading_config`/code change), record it in today's report's
+     "Literature reviewed this run" section as *not adopted*, with why.
+3. Keep this bounded: review at most 3-5 papers per run, and let it
+   consume at most one of the up-to-3 new hypotheses generated per run
+   (see the parameters table) — the other slots stay available for ideas
+   drawn from internal report/config patterns (Step 2 below), so this
+   phase augments rather than replaces the existing generation source.
+
+### Step 2: internal-pattern sources
+
+Used for any generation slots not already spent on a literature-motivated
+hypothesis from Step 1. Read (in order of priority):
 1. The last 5-10 files under `experiments/reports/` (most recent first)
    for patterns — e.g. a hypothesis that consistently misses the Sharpe
    threshold by a small margin might suggest a nearby parameter value is
@@ -284,14 +345,19 @@ When step 3 needs new hypotheses, read (in order of priority):
 3. The current indicator/config code (`src/config.rs`, `src/signal/`) to
    know what fields and indicators actually exist.
 
-For each new hypothesis, follow `experiments/hypotheses/README.md`'s
-schema exactly: pick a unique, descriptive kebab-case `name`, write a
-`rationale` that cites the specific observation motivating it (not a
-generic guess), and for `kind: "algorithm"`, include the full
-`constraints` array from the README verbatim (in particular the
-worktree-branch-only and PR-review requirements for any change touching
-`compute_btc_target` — see the section above). Write the new
-hypothesis as a file in `experiments/hypotheses/<name>.json`. Cap
+### Step 3: draft the hypothesis
+
+For each new hypothesis (whether literature-motivated per Step 1, or
+drawn from internal patterns per Step 2), follow
+`experiments/hypotheses/README.md`'s schema exactly: pick a unique,
+descriptive kebab-case `name`, write a `rationale` that cites the
+specific observation motivating it (not a generic guess — for a
+literature-motivated hypothesis, cite the paper's key claim here too),
+attach `paper_reference` when applicable, and for `kind: "algorithm"`,
+include the full `constraints` array from the README verbatim (in
+particular the worktree-branch-only and PR-review requirements for any
+change touching `compute_btc_target` — see the section above). Write the
+new hypothesis as a file in `experiments/hypotheses/<name>.json`. Cap
 generation at 3 new hypotheses per run (see the parameters table) to
 keep daily runs bounded in cost and review burden.
 

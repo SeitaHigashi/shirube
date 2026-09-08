@@ -145,6 +145,7 @@ impl Simulator {
             &filled,
             &equity_curve,
             self.config.initial_jpy.to_f64().unwrap_or(1.0),
+            self.config.resolution_secs,
         );
 
         self.db.backtest_runs().insert(&self.config, &report).await?;

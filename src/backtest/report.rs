@@ -27,6 +27,7 @@ pub(crate) fn compute_report(
     trades: &[FilledTrade],
     equity_curve: &[f64],
     initial_jpy: f64,
+    resolution_secs: u32,
 ) -> BacktestReport {
     let total_trades = trades.len() as u32;
 
@@ -34,7 +35,7 @@ pub(crate) fn compute_report(
     let total_return_pct = (final_equity - initial_jpy) / initial_jpy * 100.0;
 
     let max_drawdown_pct = calculate_max_drawdown(equity_curve);
-    let sharpe_ratio = calculate_sharpe(equity_curve);
+    let sharpe_ratio = calculate_sharpe(equity_curve, resolution_secs);
     let win_rate = calculate_win_rate(trades);
 
     BacktestReport {
@@ -74,6 +75,10 @@ fn calculate_max_drawdown(equity: &[f64]) -> f64 {
     max_dd
 }
 
+/// Number of seconds in a 365-day year, used to derive how many candles
+/// of a given resolution fall in one year.
+const SECONDS_PER_YEAR: f64 = 365.0 * 24.0 * 60.0 * 60.0;
+
 /// Calculate the annualized Sharpe ratio from a per-candle equity curve.
 ///
 /// Per-candle returns are computed as:
@@ -82,12 +87,16 @@ fn calculate_max_drawdown(equity: &[f64]) -> f64 {
 /// The Sharpe ratio is then:
 ///   Sharpe = mean(r) / std(r) * sqrt(periods_per_year)
 ///
-/// For 60-second candles the annualization factor is:
-///   sqrt(60 min/hr * 24 hr/day * 365 days/yr) = sqrt(525_600) ≈ 725.0
+/// `periods_per_year` is derived from `resolution_secs` rather than being
+/// fixed, since the annualization factor differs by an order of magnitude
+/// across resolutions — e.g. sqrt(525_600) ≈ 725 for 60s candles but
+/// sqrt(8_760) ≈ 93.6 for 1h candles. A hardcoded 60s factor previously
+/// inflated every 1h backtest's Sharpe by sqrt(60) ≈ 7.75x.
 ///
-/// Returns 0.0 for flat or insufficient equity data.
-fn calculate_sharpe(equity: &[f64]) -> f64 {
-    if equity.len() < 2 {
+/// Returns 0.0 for flat or insufficient equity data, and for a
+/// `resolution_secs` of 0 (no meaningful period length).
+fn calculate_sharpe(equity: &[f64], resolution_secs: u32) -> f64 {
+    if equity.len() < 2 || resolution_secs == 0 {
         return 0.0;
     }
     let returns: Vec<f64> = equity
@@ -101,10 +110,10 @@ fn calculate_sharpe(equity: &[f64]) -> f64 {
     if std_dev == 0.0 {
         return 0.0;
     }
-    // Annualize: 525_600 = minutes per year (60s candles), sqrt converts
-    // per-candle Sharpe to annualized Sharpe
-    let annualize = (525_600.0f64).sqrt();
-    mean / std_dev * annualize
+    // Convert the per-candle Sharpe to an annualized one using the number
+    // of candles of this resolution that fit in a year.
+    let periods_per_year = SECONDS_PER_YEAR / f64::from(resolution_secs);
+    mean / std_dev * periods_per_year.sqrt()
 }
 
 /// Calculate the win rate using a LIFO buy-price stack.
@@ -287,6 +296,33 @@ mod tests {
         assert!(s.contains("3.21"));
         assert!(s.contains("55.0"));
         assert!(s.contains("42"));
+    }
+
+    /// The annualization factor must follow `resolution_secs`; a 1h
+    /// backtest's Sharpe should be sqrt(60) smaller than the same equity
+    /// curve interpreted as 60s candles, not identical to it.
+    #[test]
+    fn sharpe_annualization_scales_with_resolution() {
+        // Alternating small gains/losses with a positive drift.
+        let equity: Vec<f64> = (0..100)
+            .map(|i| 1_000_000.0 * (1.0 + 0.001 * i as f64 + if i % 2 == 0 { 0.0002 } else { 0.0 }))
+            .collect();
+
+        let sharpe_1m = calculate_sharpe(&equity, 60);
+        let sharpe_1h = calculate_sharpe(&equity, 3600);
+
+        // sqrt(3600/60) = sqrt(60) ≈ 7.746
+        let ratio = sharpe_1m / sharpe_1h;
+        assert!(
+            (ratio - 60.0f64.sqrt()).abs() < 1e-6,
+            "expected sqrt(60) ratio, got {ratio}"
+        );
+    }
+
+    #[test]
+    fn sharpe_is_zero_for_zero_resolution() {
+        let equity = vec![1.0, 1.1, 1.2];
+        assert_eq!(calculate_sharpe(&equity, 0), 0.0);
     }
 
     fn report(sharpe: f64, dd: f64, trades: u32) -> BacktestReport {

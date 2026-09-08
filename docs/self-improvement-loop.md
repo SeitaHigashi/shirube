@@ -87,6 +87,66 @@ review, with the PR description explicitly flagging that
 `compute_btc_target`'s body was touched. A human is of course still free
 to revise the formula by hand outside this pipeline at any time.
 
+## Enabling changes: the loop may fix and extend the program itself
+
+Everything above describes changes that *are* the experiment — a variant
+whose value is decided by the backtest. But improving the strategy
+sometimes requires changing the program first: a capability that does not
+exist yet, or a defect that makes the measurements themselves wrong.
+Those changes cannot be scored by the promotion rule (a bug fix has no
+Sharpe delta of its own, and a missing capability cannot be backtested
+until it exists), so they need their own route.
+
+**Standing authorization:** when a needed feature is missing or a defect
+is blocking or distorting the work, the agent may implement it on its own
+judgement and open a PR, without a hypothesis file and without waiting to
+be asked. This is expected behavior, not an exception to apologize for.
+
+Scope is the whole repository, not just the signal/allocation path.
+Legitimate targets include `src/risk/`, `src/storage/`, `src/backtest/`
+(the harness itself), `src/config.rs` (including adding new
+`TradingConfig` fields, with `validate()` and the DB round-trip updated
+to match), the `shirube` subcommands in `src/cli.rs`, and this document.
+
+### Rules
+
+- **Own branch, own PR, against `dev`.** Never a direct commit to `dev`
+  or `main`, and never bundled into a hypothesis's variant PR — an
+  enabling change must be reviewable and revertible on its own. If a
+  hypothesis needs the change to run at all, land it as a separate PR and
+  say in the hypothesis PR that it depends on it.
+- **`cargo test` must pass**, and the change carries a regression test
+  whenever the behavior is testable. Never weaken or delete an existing
+  test to make a change pass.
+- **Not gated on the promotion rule.** These PRs are judged on
+  correctness by a human reviewer, not on Sharpe/drawdown, so they are
+  opened whether or not any variant was promoted that run.
+- **Quantify the effect on past results when a fix invalidates them.** A
+  defect in the measurement path means earlier reports were wrong; state
+  in the PR description what the numbers were and what they become, so
+  the historical reports under `experiments/reports/` can be read with
+  that correction in mind.
+- **Stay proportionate.** Fix what blocks or distorts the current work
+  and things found directly adjacent to it. This authorization is not a
+  mandate for unrelated refactors, dependency upgrades, or style passes.
+- **Anything touching live trading behavior gets flagged explicitly** in
+  the PR description — order placement, risk gates, and the auto-updater
+  affect real money on the running instance and deserve the same scrutiny
+  as a `compute_btc_target` change.
+- **Record it in the run's report** under "Enabling changes" (see the
+  report template in step 8), so the trail stays visible even when no
+  hypothesis was promoted.
+
+Two real examples, both found by a human on 2026-09-09 and exactly the
+kind of thing this section exists to let the loop catch itself:
+`TickerRepository::get_aggregated` silently capped `limit: None` at 1000
+rows, so every backtest longer than ~41.7 days at 1h resolution
+discarded its newest candles and a 60-day and 90-day run returned
+byte-identical reports (`a1fdc36`); and `calculate_sharpe` hardcoded a
+60-second annualization factor, inflating every 1h backtest's Sharpe by
+sqrt(60) ≈ 7.75x (`1d016b4`). Neither could have become a PR under the
+promoted-variants-only rule in step 6.
+
 ## CLI building blocks
 
 Two `shirube` subcommands exist specifically for this pipeline (see
@@ -209,6 +269,14 @@ substance:
 > 3. Report back: the hypothesis name, the full stdout JSON report,
 > whether `cargo test` passed, and (for algorithm hypotheses) the
 > worktree path and branch name.
+> 4. If you hit a missing capability or a defect that blocks or distorts
+> this hypothesis — especially anything that makes the backtest numbers
+> themselves untrustworthy — you are authorized to fix it (see "Enabling
+> changes" in `docs/self-improvement-loop.md`). Keep it on a separate
+> branch from the hypothesis diff, add a regression test, and report it
+> separately in step 3 so the coordinator can open its own PR. Report a
+> suspected defect you chose not to fix as well, rather than silently
+> working around it.
 
 Because backtests only read historical tickers (never place real
 orders), every worktree agent can safely point at the same
@@ -247,6 +315,14 @@ to PR:
 git worktree remove <worktree-path> --force
 git branch -D <worktree-branch>
 ```
+
+**Enabling changes are separate from this.** Any fix or capability
+reported under step 4's item 4 gets its own PR against `dev` regardless
+of whether the hypothesis that surfaced it was promoted or rejected — a
+rejected variant can still have uncovered a real bug, and deleting its
+worktree must not discard the fix. Cherry-pick or re-apply the change
+onto its own branch off `dev` before removing the worktree. These PRs are
+judged on correctness by the reviewer, not on the promotion rule.
 
 One PR per promoted variant (never bundle multiple variants into one
 PR), so a bad promotion can be reverted independently.
@@ -289,6 +365,15 @@ N new ones generated for tomorrow" if step 3's candidate list was empty)
 
 ## PRs opened
 - <link or branch name> — <one-line summary>
+
+## Enabling changes
+- <link or branch name> — <what was missing or broken, and what it
+  affected. For a defect in the measurement path, state what past
+  reports said and what the corrected numbers are.>
+
+("none this run" if no capability was added and no defect was fixed.
+Also list here any suspected defect that was found but deliberately not
+fixed, with the reason.)
 
 ## New hypotheses generated this run
 - **<name>** (<kind>): <rationale, citing the specific observation from

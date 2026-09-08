@@ -84,6 +84,21 @@ mappings or weighting formula (e.g. "the signal is stuck in one zone",
 "trade count is too low") is now a valid `kind: "algorithm"` hypothesis
 in its own right.
 
+## Changes that are not hypotheses
+
+A hypothesis is a change whose value the backtest decides. Some needed
+changes aren't that: a capability the program lacks, or a defect that
+makes the measurements themselves wrong. Those have no Sharpe delta to
+score, so they don't belong in this directory.
+
+They are still allowed — see "Enabling changes" in
+`docs/self-improvement-loop.md` for the standing authorization and rules.
+In short: implement it on your own judgement, keep it on a branch
+separate from any hypothesis diff, add a regression test, and report it
+so it gets its own PR against `dev`. Don't file it as a hypothesis with
+an invented `trading_config` just to fit the schema, and don't silently
+work around a defect you could fix.
+
 ## Example files
 
 - `example-parameter-tuning.json` — widens the Bollinger band width

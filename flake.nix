@@ -26,7 +26,12 @@
           pname = "shirube";
           version = "0.1.0";
           src = ./.;
-          cargoLock.lockFile = ./Cargo.lock;
+          # NOTE: cargoLock.lockFile (importCargoLock) fetches each crate individually
+          # from crates.io's download API, which has been sporadically returning
+          # 403 Forbidden on shared CI IPs (GitHub Actions). cargoHash uses
+          # fetchCargoVendor (a single `cargo vendor` FOD via cargo's own HTTP
+          # client) instead, which does not hit this issue.
+          cargoHash = "sha256-2DKPjzrxx8fkf+0785WnLGuOWA6Z2ySlHoNDSgJqmtk=";
 
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = [ pkgs.openssl ];
@@ -46,7 +51,9 @@
           pname = "shirube-tests";
           version = "0.1.0";
           src = ./.;
-          cargoLock.lockFile = ./Cargo.lock;
+          # NOTE: see packages.default for why cargoHash (fetchCargoVendor) is
+          # used instead of cargoLock.lockFile (importCargoLock).
+          cargoHash = "sha256-2DKPjzrxx8fkf+0785WnLGuOWA6Z2ySlHoNDSgJqmtk=";
 
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = [ pkgs.openssl ];

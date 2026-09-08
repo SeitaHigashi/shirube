@@ -1,0 +1,26 @@
+{
+  "name": "narrow-zone-band",
+  "kind": "parameter",
+  "rationale": "The zone boundaries (hold_jpy_below=0.2 / hold_btc_above=0.8) have never been moved, and they are unreachable in practice. Simulator::run passes an empty news slice (src/backtest/simulator.rs:92), so sentiment_normalized is pinned at 0.5 and the combined signal can only span [0.15, 0.85] at the baseline's ta_weight=0.7; zone A (all-JPY) therefore needs ta_normalized < 0.0714 and zone C (all-BTC) needs ta_normalized > 0.9286, i.e. essentially all five sub-signals saturated in the same direction. The 2026-09-08 run tested the other way of removing that compression -- full-ta-weight-no-sentiment set ta_weight=1.0 -- and it was rejected (Sharpe -0.674, drawdown +0.62pp), but that variant also changed what the signal means, not just where the decision boundaries sit. This hypothesis leaves the weights alone and narrows the band instead (0.35 / 0.65), which both makes the extreme zones reachable under the real [0.15, 0.85] range and roughly doubles the slope of the interpolation in between, so a given signal move produces a larger allocation move. That directly targets the trend the last three runs recorded: turnover has fallen 37 -> 34 -> 25 trades per 14-day holdout (2.6 -> 2.4 -> 1.79 trades/day) against a 4-10/day guideline, with allocations clustering mid-zone.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.35,
+      "hold_btc_above": 0.65
+    },
+    "rebalance_interval_secs": 60
+  }
+}

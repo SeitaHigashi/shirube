@@ -1,0 +1,44 @@
+{
+  "name": "volatility-scaled-zone-width",
+  "kind": "algorithm",
+  "rationale": "Motivated by arXiv:2602.11708 (see paper_reference below), whose 'dynamic trailing stop mechanism calibrated to intra-day volatility regimes' improved risk-adjusted crypto trend-following returns by adapting exit sensitivity to current volatility rather than using a fixed threshold. shirube has no stop-loss concept, but its closest structural analog is the zone-based neutral dead-band (ZoneConfig.hold_jpy_below/hold_btc_above) that apply_zone() maps the normalized signal through before it becomes the allocation target -- a fixed-width dead-band, like a fixed trailing stop, is arguably mismatched across regimes: during high-volatility periods a fixed-width band lets noisy price action clear the threshold and trigger rebalances that a wider, volatility-scaled band would filter out, while during calm periods a fixed band may be needlessly wide and slow to react to a genuine move. This also targets a pattern from the 2026-09-08 report: the near-miss rejection of shorter-hourly-indicator-periods was decided by a drawdown difference of only 0.002pp, suggesting the pipeline is currently drawdown-sensitive at the margin in a way a volatility-aware dead-band might help rather than a further indicator-period change.",
+  "trading_config": {
+    "allocation_threshold": 0.15,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  },
+  "code_change_summary": "Add a new function (e.g. `pub(crate) fn volatility_adjusted_zone(base: &ZoneConfig, raw: &IndicatorPoint) -> ZoneConfig`) near `apply_zone` in src/signal/mod.rs. It must NOT modify TradingEngine::compute_btc_target's signature or body at all -- it only changes which ZoneConfig gets passed into apply_zone at each call site. Implementation: when raw.bb_upper/raw.bb_lower/raw.close are all Some and close > 0.0, compute bandwidth_pct = (bb_upper - bb_lower) / close * 100.0 as a volatility proxy; clamp it to [1.0, 10.0] and linearly rescale to scale in [0.0, 1.0] (scale = (bandwidth_pct.clamp(1.0,10.0) - 1.0) / 9.0). Compute center = (base.hold_jpy_below + base.hold_btc_above) / 2.0 and half_width = (base.hold_btc_above - base.hold_jpy_below) / 2.0, then widened_half_width = half_width * (0.7 + 0.6 * scale) (narrower by up to 30% at low volatility, wider by up to 30% at high volatility). Return a new ZoneConfig with hold_jpy_below = (center - widened_half_width).clamp(0.0, base.range_max), hold_btc_above = (center + widened_half_width).clamp(0.0, base.range_max), range_max = base.range_max -- if the clamped result would leave hold_jpy_below >= hold_btc_above, return `base.clone()` unchanged instead as a safety fallback. When any of bb_upper/bb_lower/close is None (indicator warmup), return `base.clone()` unchanged. Then update both call sites that currently pass `&cfg.zone` (or equivalent) straight into `apply_zone` -- `TradingEngine::handle_indicator` in src/trading/engine.rs and the equivalent block in src/backtest/simulator.rs's `Simulator::run` -- to first compute `let effective_zone = volatility_adjusted_zone(&cfg.zone, &output.raw)` (or the simulator's equivalent `point`/`raw` variable) and pass `&effective_zone` to `apply_zone` instead, so backtest and live share the identical adjusted-zone logic. Add unit tests for `volatility_adjusted_zone` covering: high-bandwidth widening, low-bandwidth narrowing, the None-input passthrough case, and the degenerate-clamp fallback case.",
+  "constraints": [
+    "This hypothesis MUST NOT modify TradingEngine::compute_btc_target's signature or body in any way -- confirm via `git diff` before finishing that the function is byte-for-byte unchanged. All logic goes into the new `volatility_adjusted_zone` function and its two call sites.",
+    "This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST pass `cargo test`, including new unit tests for `volatility_adjusted_zone` and the existing apply_zone/compute_btc_target test suites (which should be unaffected since compute_btc_target itself is untouched).",
+    "Both src/trading/engine.rs::handle_indicator and src/backtest/simulator.rs::Simulator::run MUST be updated together so live and backtest use the identical adjusted-zone computation -- a change to only one would make backtest results not representative of live behavior.",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or anything on the live order-submission path."
+  ],
+  "paper_reference": {
+    "title": "Systematic Trend-Following with Adaptive Portfolio Construction: Enhancing Risk-Adjusted Alpha in Cryptocurrency Markets",
+    "authors": "unavailable from abstract fetch",
+    "venue_year": "arXiv:2602.11708, 2026",
+    "url": "https://arxiv.org/abs/2602.11708",
+    "key_claim": "A trend-following framework (AdaptiveTrend) combining 6-hour-bar trend-following, monthly adaptive portfolio construction, a dynamic trailing-stop mechanism calibrated to intra-day volatility regimes, and rolling-Sharpe asset selection achieved a 2.41 annualized Sharpe ratio and -12.7% max drawdown (Calmar 3.18) across 150+ crypto pairs over a 36-month (2022-2024) out-of-sample window, outperforming TSMOM and buy-and-hold benchmarks.",
+    "pros": "Directly targets shirube's current pain point (drawdown sensitivity at the margin, per the 2026-09-08 report's near-miss rejection) via a volatility-calibrated mechanism, on the same asset class (crypto) and a broadly similar trend-following signal philosophy; the core idea -- widen the 'don't react' band when volatility is high, narrow it when volatility is low -- is a reasonable analog of a volatility-calibrated trailing stop adapted to shirube's zone-based (not stop-loss-based) allocation architecture.",
+    "cons": "The paper's headline results come from a materially different strategy shape than shirube's -- 150+-asset cross-sectional selection with monthly rebalancing and an actual trailing-stop exit mechanism, evaluated over a 36-month window spanning both the 2022 crypto bear and the 2023-24 bull, versus shirube's single-asset (BTC/JPY) composite signal backtested over a single 14-day holdout; the abstract does not disclose exact fee/slippage assumptions; and the specific numeric constants used in this hypothesis's implementation (the [1,10]% bandwidth range, the 0.7-1.3 widening factor) are heuristic translations of the paper's *concept*, not values taken from the paper itself, so shirube's own backtest gate -- not the paper's reported Sharpe/drawdown -- is what actually decides promotion here."
+  }
+}

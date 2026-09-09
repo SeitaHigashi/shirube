@@ -23,6 +23,19 @@ pub struct BacktestConfig {
     /// None の場合は MockExchangeClient のティア制手数料を自動適用する。
     pub fee_pct: Option<f64>,
     pub initial_jpy: Decimal,
+    /// Number of leading candles in the series handed to `Simulator::run`
+    /// that lie *before* `from` and exist only to warm the indicators up.
+    ///
+    /// NOTE: without this, indicators are warmed from the first in-window
+    /// candle, so a long-period indicator is `None` for a large leading
+    /// fraction of the evaluation window (e.g. SMA(200) over a 336-candle
+    /// hourly window is undefined for 199 of them — 59% of the run). Those
+    /// candles are fed through the indicator pipeline but are excluded from
+    /// trading, the equity curve and the report, so the measured window is
+    /// exactly `[from, to]` with fully warmed indicators throughout.
+    ///
+    /// Defaults to 0, which reproduces the previous behavior byte-for-byte.
+    pub warmup_candles: usize,
 }
 
 /// Aggregate performance metrics produced by a completed backtest run.

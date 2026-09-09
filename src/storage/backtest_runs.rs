@@ -134,6 +134,10 @@ impl BacktestRunRepository {
                     slippage_pct,
                     fee_pct: Some(fee_pct),
                     initial_jpy: Decimal::from_str(&initial_jpy).unwrap_or_default(),
+                    // NOTE: warmup is an input to the run, not a property of
+                    // the measured window, so it is not persisted in
+                    // backtest_runs; reconstructed rows report 0.
+                    warmup_candles: 0,
                 },
                 report: BacktestReport {
                     total_return_pct,
@@ -165,6 +169,7 @@ mod tests {
             slippage_pct: 0.001,
             fee_pct: Some(0.0015),
             initial_jpy: dec!(1_000_000),
+            warmup_candles: 0,
         }
     }
 

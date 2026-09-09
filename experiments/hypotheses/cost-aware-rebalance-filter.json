@@ -1,0 +1,45 @@
+{
+  "name": "cost-aware-rebalance-filter",
+  "kind": "algorithm",
+  "rationale": "Literature-motivated. shirube's only turnover control is allocation_threshold, a fixed minimum |delta| that is blind to how strong the signal behind the rebalance is: a 0.10 allocation move on a barely-off-neutral signal costs exactly as much as one on a saturated signal, and today's baseline pays that cost 91.8 times a day (1285 trades over the 14-day holdout) for total_return_pct -6.72 at win_rate 0.732 -- the cost-dominated shape docs/self-improvement-loop.md flags as the most obvious hypothesis source available. Kirilenko-style cost-aware gating (arXiv:2606.00060, key claim below) reports that permitting a position change only when the expected move exceeds a transaction-cost-based threshold cut turnover by 97.6% (10,619 -> 251 trades) and turned a -64%/yr, Sharpe -1.25 naive strategy into +65.4%/yr, Sharpe 1.09 on hourly BTC. This hypothesis ports that gate, and only that gate: an additional conviction-versus-cost test alongside the existing allocation_threshold, leaving every signal formula untouched. It is a genuinely different rule from higher-allocation-threshold, which raises one fixed bar for every trade regardless of conviction; here a weak-signal rebalance must be large to be worth paying for while a saturated-signal rebalance still passes at the current size.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  },
+  "code_change_summary": "Add a cost-aware execution filter as a new pure associated function on TradingEngine (src/trading/engine.rs), e.g. `pub(crate) fn cost_filter_allows(normalized_signal: f64, delta: f64) -> bool`, and apply it as an ADDITIONAL gate wherever the existing allocation_threshold gate already lives -- both live sites in src/trading/engine.rs (the `delta.abs() < allocation_threshold` checks around lines 485 and 562) and the backtest site in src/backtest/simulator.rs (the `delta.abs() >= trading_config.allocation_threshold` check around line 138). Applying it in both places is required: a filter live in the backtest but dead in production would make every future backtest number untransferable (the 2026-09-09 report records this trap explicitly). The rule, adapted from arXiv:2606.00060's |r_hat| > lambda * c * |pos* - pos|: treat the signal's distance from neutral as the conviction proxy and require `2.0 * (normalized_signal - 0.5).abs() * EXPECTED_MOVE_PER_BAR > LAMBDA * ROUND_TRIP_COST_PCT * delta.abs()`. Define all three as named private constants with doc comments stating the formula, its source and how each number was obtained: LAMBDA = 2.0 (the paper's own strictness multiplier), ROUND_TRIP_COST_PCT = 0.0025 (bitFlyer's 0.15% top-tier taker fee plus the pipeline's 0.1% default --slippage-pct), and EXPECTED_MOVE_PER_BAR = 0.00065, the standard deviation of 1-minute BTC/JPY returns measured over the pre-holdout training window ONLY (2026-08-09T04:03Z -> 2026-08-26T19:15Z, 18,648 bars, sd = 0.0647%) so no holdout data enters the constant. A fully saturated signal (normalized 0.15 or 0.85 at ta_weight 0.7 with the simulator's empty news slice) must still be able to pass at the current minimum trade size -- verify this arithmetically before running, and if the constants make the gate reject every possible trade, say so in your report rather than silently retuning them. The gate only ever SUPPRESSES trades that allocation_threshold would have allowed; it must never enable a trade allocation_threshold rejects. Feed it the normalized value compute_btc_target returned on the current candle (`agg_normalized` in handle_indicator, the `normalized` binding in Simulator::run); where only a sticky target is available and no fresh normalized value exists on this iteration, carry the last computed normalized value alongside the sticky target rather than inventing one. Add unit tests covering: a saturated signal with a minimum-size delta passing, a near-neutral signal with the same delta being rejected, and the monotonicity property that for fixed conviction a larger delta is never easier to pass than a smaller one.",
+  "constraints": [
+    "MUST NOT modify the body or the signature of TradingEngine::compute_btc_target. This hypothesis is a gate applied to the allocation delta AFTER compute_btc_target has produced its value; the allocation formula itself is out of scope for this change.",
+    "This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST apply the filter at both the live sites in src/trading/engine.rs and the backtest site in src/backtest/simulator.rs, so live and backtest behavior cannot diverge.",
+    "MUST pass `cargo test`, including the existing compute_btc_target_* and Simulator unit tests -- update expected values only where the new gate legitimately changes them, and do not weaken or delete a test just to make it pass.",
+    "MUST derive every constant from data strictly older than HOLDOUT_START, or from published fee/slippage figures, and say in a code comment which. No constant may be fitted on the holdout window.",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff changes when live orders are placed, since it adds a gate on the live order path.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or the order-submission mechanics themselves (the gate decides whether allocation_delta_to_order is called; it must not change how an order is built or sent)."
+  ],
+  "paper_reference": {
+    "title": "Machine Learning-Based Bitcoin Trading Under Transaction Costs: Evidence From Walk-Forward Forecasting",
+    "authors": "see arXiv listing",
+    "venue_year": "arXiv:2606.00060, 2026",
+    "url": "https://arxiv.org/html/2606.00060",
+    "key_claim": "Naive sign-based hourly BTC strategies that are profitable gross become unprofitable once a 10bp all-in transaction cost is imposed; a cost-aware execution filter that permits a position change only when the forecast magnitude exceeds lambda * c * |target_position - current_position| (lambda = 2.0, c = 0.001) cut trades from 10,619 to 251 (-97.6%) and moved the best configuration from -64% annualized return / Sharpe -1.25 to +65.4% / Sharpe 1.09.",
+    "pros": "Same asset (BTC), same direction of problem (a high-turnover rule whose gross edge is eaten by costs), and an explicitly out-of-sample protocol: 27-fold rolling walk-forward with 12-month train / 3-month validation / 3-month test windows over 70,128 hourly observations spanning 2018-2026, so the effect is not a single-window artifact. The gate itself is arithmetic on quantities shirube already computes (a conviction proxy and the allocation delta), needing no new estimator, no new data source, and no change to any signal formula -- and it addresses the exact deficit today's baseline shows, 91.8 trades/day at win_rate 0.732 with a negative return.",
+    "cons": "Their gate is driven by a calibrated one-step-ahead RETURN FORECAST; shirube has no return forecast, so this port substitutes the composite signal's distance from neutral as a conviction proxy and rescales it by a training-window volatility constant -- a substitution the paper says nothing about and which could make the gate fire on the wrong quantity entirely. Instrument and venue differ (BTC/USDT perpetual futures on Binance vs BTC/JPY spot on bitFlyer), timeframe differs by 60x (hourly vs 1-minute), and their flat 10bp cost is well below shirube's ~25bp. Most importantly the authors state their own limit plainly: 'none of the reported cost-aware strategies significantly outperforms buy-and-hold in Sharpe-ratio terms after Holm correction', performance is uneven across regimes, and feature effects are statistically weak -- so the headline Sharpe 1.09 is not a result to transfer, only a mechanism worth testing. shirube's own backtest gate decides, exactly as docs/self-improvement-loop.md requires."
+  }
+}

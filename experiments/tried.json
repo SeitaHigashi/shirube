@@ -110,5 +110,29 @@
     "verdict": "rejected",
     "sharpe_improvement_pct": 0.0,
     "report_path": "experiments/reports/2026-09-08.md"
+  },
+  {
+    "name": "wide-zone-band",
+    "content_hash": "fab2a98affec3fe9e6379fef0335dff590a5b540cdc31f142271f4d8d56f191c",
+    "tried_at": "2026-09-09T03:16:00Z",
+    "verdict": "promoted",
+    "sharpe_improvement_pct": 0.49095172499840967,
+    "report_path": "experiments/reports/2026-09-09.md"
+  },
+  {
+    "name": "mean-reversion-weighted-subsignals",
+    "content_hash": "37779570b229e7a568cb1c0b595757748d1324f4ddf7ecad208491a273b2e022",
+    "tried_at": "2026-09-09T03:16:00Z",
+    "verdict": "promoted",
+    "sharpe_improvement_pct": 2.2395116023459343,
+    "report_path": "experiments/reports/2026-09-09.md"
+  },
+  {
+    "name": "realized-vol-scaled-exposure",
+    "content_hash": "97c82753019fd573cdaa8f7bcb162a5b1bab84efe61b5e38de5515843688a23a",
+    "tried_at": "2026-09-09T03:16:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -0.13991387377509934,
+    "report_path": "experiments/reports/2026-09-09.md"
   }
 ]

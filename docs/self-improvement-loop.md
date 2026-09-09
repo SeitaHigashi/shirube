@@ -30,9 +30,9 @@ a vague instruction.
 | Parameter | Value |
 |---|---|
 | Cadence | daily, 04:00 JST (19:00 UTC previous day) |
-| Price data | bitFlyer public execution history via `shirube backfill-executions` (31 days pulled, 30 evaluated) |
+| Price data | bitFlyer public execution history via `shirube backfill-executions`, accumulated across runs in the `backtest-data` release asset (`scripts/backtest-data.sh`) |
 | Holdout window | last 14 days |
-| Total lookback | **30 days** (16 days train + 14 days holdout) — bounded by bitFlyer's 31-day execution retention, see "Data source" below |
+| Total lookback | **30 days** (16 days train + 14 days holdout) — a floor, not a ceiling: the carried-over DB grows past bitFlyer's 31-day retention by ~1 day per run, see "Why the DB is carried over" below |
 | Promotion rule | Sharpe ratio improves >= 10% relative (or >= 0.1 absolute if baseline Sharpe <= 0) **AND** max drawdown does not worsen **AND** candidate trade count >= 50% of baseline's |
 | PR granularity | one PR per promoted variant |
 | Backtest resolution | **60s (1m) candles** — matches live trading; see "Resolution must match live" below |
@@ -85,6 +85,50 @@ with a full bucket and will burst 200 requests, which trips bitFlyer's
 public IP limit (~500 requests / 5 minutes) and returns status -1.
 `backtest::backfill` paces itself and retries -1 under exponential
 backoff.
+
+### Why the DB is carried over
+
+bitFlyer's 31-day retention wall caps what a *single* backfill can reach,
+but not what the pipeline can accumulate. Bars are written
+`INSERT OR IGNORE` on `UNIQUE(product_code, timestamp)`, so re-running
+`backfill-executions` against an existing DB extends it forward and never
+rewrites stored history. Verified 2026-09-09: re-running `--days 1`
+against a 33,184-bar DB left the oldest bar untouched, advanced the
+newest, added 179 rows, and produced zero duplicate timestamps.
+
+So a DB that survives between runs grows past the wall: 31 days at
+bootstrap, then roughly one more day per daily run. The lookback in
+"Fixed parameters" is therefore a **floor that rises over time**, not a
+permanent ceiling — after a few months the holdout can be widened, which
+is the single most valuable thing that can happen to this pipeline's
+statistical power. Revisit the 30-day figure once the stored DB comfortably
+exceeds it.
+
+Carrying it over also makes the daily run cheap: `--days 2` takes about 40
+seconds instead of the 10-12 minutes a full 31-day pull needs.
+
+**Why a release asset.** The DB is generated data that grows, so it does
+not belong in git history; Actions cache evicts after 7 days; and object
+storage would need credentials the routine does not have. A release asset
+is outside git history, is served by GitHub, needs nothing beyond the
+routine's existing token, and allows 2GB per file (currently 1.3MB gzipped
+from a 7MB DB, growing roughly 300KB per month).
+
+**Why the tag is `backtest-data` and must stay non-semver.** `self_update`'s
+`update()` calls `get_latest_releases()`, which lists *every* release —
+including prereleases — and filters with
+`bump_is_greater(current, &r.version).unwrap_or(false)`. A non-semver tag
+fails that parse and is dropped, so the auto-updater on the live trading
+instance cannot see it. Renaming this tag to anything semver-shaped would
+offer a running instance a bogus "release" to install. The release is also
+marked prerelease so it never appears as "Latest"; verified 2026-09-09 that
+`/releases/latest` still resolves to `v0.1.109`.
+
+**The asset is public**, because the repo is. That is acceptable here: the
+contents are bitFlyer's public trade prints, which are already public
+information. Do not extend this mechanism to carry anything account-derived
+(order history, balances, or a `shirube.db` exported from the live
+instance) — that would publish private trading activity.
 
 ### Resolution must match live
 
@@ -590,10 +634,14 @@ having the steps baked into the routine's own prompt text.
 
 ## Running as a cloud routine: data bootstrap
 
-A cloud routine gets a fresh git checkout with no accumulated
-`shirube.db` — there is no running instance's ticker history to read.
-Before step 1 of the daily procedure, the routine must build its own
-`shirube.db` for this run:
+A cloud routine gets a fresh git checkout, so nothing on local disk
+survives between runs. The DB is instead carried across runs as a
+**GitHub Release asset** on the dedicated `backtest-data` tag, wrapped by
+`scripts/backtest-data.sh` — see "Why the DB is carried over" below for
+why this matters and why a release asset specifically.
+
+Before step 1 of the daily procedure, the routine restores that DB and
+tops it up:
 
 ```bash
 # 1. Checkout dev — the routine's default checkout is the repo's default
@@ -605,26 +653,45 @@ git fetch origin && git checkout dev && git pull
 # 2. Build once so `shirube` subcommands are available.
 cargo build --release
 
-# 4. Backfill 31 days of real bitFlyer BTC/JPY 1-minute OHLCV bars from the
-#    public execution tape. This creates the schema itself, so no separate
-#    schema-init step is needed. ~900 requests paced at ~80 req/min, so
-#    budget 10-12 minutes. 31 days is bitFlyer's entire retention window;
-#    the extra day beyond the 30-day evaluation range is indicator warmup.
+# 3. Restore the accumulated DB from the backtest-data release, and ask it
+#    how much history is missing. BACKFILL_DAYS is 31 on the very first run
+#    (no stored DB yet), 2 on a normal daily run, and larger if the routine
+#    has not run for a while — so a skipped day never leaves a hole in the
+#    middle of the window.
+eval "$(scripts/backtest-data.sh pull --db ./run.db | grep '^BACKFILL_DAYS=')"
+
+# 4. Top up with fresh bitFlyer 1-minute OHLCV bars from the public
+#    execution tape. Bars are written INSERT OR IGNORE on
+#    UNIQUE(product_code, timestamp), so this extends the DB forward and
+#    never rewrites stored history. A daily --days 2 run takes ~40s; the
+#    first-run --days 31 takes 10-12 minutes (~900 requests at ~80 req/min).
 ./target/release/shirube backfill-executions \
-  --db ./run.db --product BTC_JPY --days 31 --resolution-secs 60
+  --db ./run.db --product BTC_JPY --days "$BACKFILL_DAYS" --resolution-secs 60
+
+# 5. Publish the topped-up DB back so tomorrow's run starts from it. Do this
+#    BEFORE the backtests, not after: the data is worth keeping even if the
+#    rest of the cycle fails.
+scripts/backtest-data.sh push --db ./run.db
 ```
 
-The command prints a `BackfillStats` JSON. Sanity-check it before running
-any backtest this cycle:
+`backfill-executions` prints a `BackfillStats` JSON, and `pull` reports
+the restored row count and range. Sanity-check both before running any
+backtest this cycle:
 
-- `bars_written` should be on the order of 30k-35k (a 1-minute bar exists
-  only for minutes that actually traded; the 2026-09-09 run wrote 33,184
-  bars from 394,535 executions in 790 requests, i.e. 74% of the 44,640
-  minutes in 31 days).
-- `oldest_bar` should be close to 31 days ago. If `hit_history_limit` is
-  `true` that is normal and expected — it means the walk reached the
-  retention wall rather than stopping early.
-- If `bars_written` is far below that, or `executions_fetched` is small,
+- The DB's total row count should be **at least** what the previous run
+  stored, and should grow by roughly 1,000-1,100 bars per elapsed day. A
+  count that went *down* means the wrong DB was restored — stop and
+  investigate rather than pushing over the stored copy.
+- `oldest_bar` in `BackfillStats` reflects only what this run fetched, not
+  the DB's full range; on a daily `--days 2` run it will be two days ago,
+  which is correct. Check the DB itself for total coverage.
+- `hit_history_limit: true` is expected on a first-run `--days 31` (the
+  walk reached bitFlyer's retention wall) and unexpected on `--days 2`.
+- On the first run, `bars_written` should be on the order of 30k-35k. The
+  2026-09-09 bootstrap wrote 33,184 bars from 394,535 executions in 790
+  requests — 74% of the 44,640 minutes in 31 days, because a 1-minute bar
+  exists only for minutes that actually traded.
+- If `executions_fetched` is small relative to the days requested,
   something throttled the run; re-run rather than backtesting on a
   truncated window.
 
@@ -637,8 +704,12 @@ margin; those candles are fetched before `--from` and excluded from the
 report, which is what the extra backfilled day is for.
 
 These are bitFlyer's own trade prints for BTC_JPY, so the bars are the
-real market the bot trades rather than an approximation. The remaining
-caveat is the 31-day retention wall (see "Data source" above): if a real
-`shirube.db` export from the running instance becomes available, prefer
-it, since the live DB accumulates history past that wall and would allow
-a longer lookback than 30 days.
+real market the bot trades rather than an approximation, and the 31-day
+retention wall is worked around by accumulation rather than by finding a
+different source (see "Why the DB is carried over" above).
+
+A `shirube.db` exported from the running instance would also have history
+past the wall, but do **not** route it through the `backtest-data` release:
+that asset is public, and a live DB carries order and balance history. If
+that export is ever wanted, take only its `tickers` rows and merge them
+into the accumulated DB locally.

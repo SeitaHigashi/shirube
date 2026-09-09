@@ -12,8 +12,8 @@
   "sentiment_weight": 0.3,
   "zone": {
     "range_max": 1.0,
-    "hold_jpy_below": 0.2,
-    "hold_btc_above": 0.8
+    "hold_jpy_below": 0.1,
+    "hold_btc_above": 0.9
   },
   "rebalance_interval_secs": 60
 }

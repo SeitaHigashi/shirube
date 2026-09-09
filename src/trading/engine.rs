@@ -50,6 +50,14 @@ pub struct TradingEngine {
     /// used as-is when subsequent signals are neutral so that a neutral market
     /// does not force a rebalance back to 50%.
     sticky_target: Option<f64>,
+    /// The normalized composite signal value ∈ [0.0, 1.0] that produced the
+    /// current `sticky_target`. Carried alongside it so the cost-aware
+    /// execution filter (`cost_filter_allows`) always has the real conviction
+    /// behind the standing target, instead of inventing a neutral 0.5 on
+    /// iterations where `compute_btc_target` returned `None` (warm-up /
+    /// neutral) or where no fresh indicator point exists at all (the periodic
+    /// rebalance tick). Moves in lockstep with `sticky_target`.
+    last_normalized: Option<f64>,
     /// Latest news sentiment scores from the news analysis task.
     /// Used to incorporate news into the BTC allocation target calculation.
     news_cache: Arc<RwLock<Vec<SentimentScore>>>,
@@ -73,6 +81,7 @@ impl TradingEngine {
                 config: Arc::new(RwLock::new(TradingConfig::default())),
                 order_repo: None,
                 sticky_target: None,
+                last_normalized: None,
                 news_cache: Arc::new(RwLock::new(vec![])),
             },
             signal_tx,
@@ -369,6 +378,71 @@ impl TradingEngine {
         Some(combined.clamp(0.0, 1.0))
     }
 
+    /// Cost-aware execution filter: decide whether a rebalance of size `delta`
+    /// is worth the round-trip transaction cost it will incur, given the
+    /// conviction behind it.
+    ///
+    /// This is an *additional* gate that runs alongside — never instead of —
+    /// the existing `allocation_threshold` check. It can only ever SUPPRESS a
+    /// rebalance that `allocation_threshold` would have allowed; it never
+    /// enables one that `allocation_threshold` rejects.
+    ///
+    /// # Formula
+    ///
+    /// Adapted from arXiv:2606.00060 (cost-aware execution filter for
+    /// walk-forward BTC forecasting), whose rule is
+    /// `|r_hat| > lambda * c * |pos* - pos|` — permit a position change only
+    /// when the expected one-step return exceeds the cost of making it.
+    ///
+    /// shirube has no calibrated return forecast, so `|r_hat|` is substituted
+    /// with a conviction proxy: the composite signal's distance from neutral,
+    /// rescaled to a per-bar expected move.
+    ///
+    /// ```text
+    /// conviction   = 2 * |normalized_signal - 0.5|            ∈ [0.0, 1.0]
+    /// expected_move = conviction * EXPECTED_MOVE_PER_BAR      ∈ [0, 6.5e-4]
+    /// cost          = LAMBDA * ROUND_TRIP_COST_PCT * |delta|
+    /// allow         = expected_move > cost
+    /// ```
+    ///
+    /// `normalized_signal` is the value `compute_btc_target` returned (or, on
+    /// an iteration with no fresh value, the last one it returned — see
+    /// `last_normalized`); `delta` is the signed allocation change in
+    /// fractional units (0.1 = shift 10% of portfolio value).
+    ///
+    /// NOTE: the substitution of a signal-distance proxy for a calibrated
+    /// return forecast is this port's main risk — the source paper says
+    /// nothing about it. See `experiments/hypotheses/cost-aware-rebalance-filter.json`.
+    pub(crate) fn cost_filter_allows(normalized_signal: f64, delta: f64) -> bool {
+        /// Strictness multiplier on the cost term. Source: arXiv:2606.00060
+        /// uses lambda = 2.0 for its reported best configuration — a published
+        /// figure, not fitted on any shirube data.
+        const LAMBDA: f64 = 2.0;
+
+        /// All-in round-trip cost of a rebalance, as a fraction of the traded
+        /// notional. 0.25% = bitFlyer's 0.15% top-tier taker fee plus the
+        /// backtest pipeline's 0.1% default `--slippage-pct`. Source: published
+        /// venue fee schedule + pipeline default, not fitted on any window.
+        const ROUND_TRIP_COST_PCT: f64 = 0.0025;
+
+        /// Typical absolute size of a one-bar BTC/JPY return, used to convert
+        /// the unitless conviction proxy into a comparable return magnitude.
+        /// 0.00065 = the standard deviation of 1-minute BTC/JPY returns
+        /// (0.0647%) measured over the PRE-HOLDOUT training window only,
+        /// 2026-08-09T04:03Z → 2026-08-26T19:15Z (18,648 bars). Derived from
+        /// data strictly older than HOLDOUT_START, so no holdout data enters
+        /// this constant.
+        const EXPECTED_MOVE_PER_BAR: f64 = 0.00065;
+
+        // Conviction proxy: distance from the neutral 0.5 midpoint, doubled so
+        // that a fully saturated signal (0.0 or 1.0) maps to 1.0.
+        let conviction = 2.0 * (normalized_signal - 0.5).abs();
+        let expected_move = conviction * EXPECTED_MOVE_PER_BAR;
+        let cost = LAMBDA * ROUND_TRIP_COST_PCT * delta.abs();
+
+        expected_move > cost
+    }
+
     /// Process a single IndicatorOutput: compute BTC target from raw indicator values,
     /// update sticky target, broadcast SignalDetail for API consumers and place orders.
     ///
@@ -400,6 +474,10 @@ impl TradingEngine {
         // a neutral market does not force a rebalance back to 50%.
         if let Some(t) = maybe_target {
             self.sticky_target = Some(t);
+            // Keep the conviction that produced this target in lockstep with it,
+            // so the cost filter below always gates on the real signal strength
+            // rather than a neutral placeholder.
+            self.last_normalized = Some(agg_normalized);
             debug!(target = t, "Sticky target updated");
         }
 
@@ -482,7 +560,15 @@ impl TradingEngine {
                 .to_f64()
                 .unwrap_or(0.0);
             let delta = target_pct - current_alloc;
-            if delta.abs() < allocation_threshold {
+            // Two independent gates, both of which must permit the rebalance:
+            //   1. allocation_threshold — fixed minimum move size (pre-existing)
+            //   2. cost_filter_allows   — conviction must outweigh round-trip cost
+            // The cost filter is applied to the delta *after* compute_btc_target
+            // has produced its target; it never changes the target itself.
+            let gate_normalized = self.last_normalized.unwrap_or(0.5);
+            if delta.abs() < allocation_threshold
+                || !Self::cost_filter_allows(gate_normalized, delta)
+            {
                 None
             } else {
                 Self::allocation_delta_to_order(
@@ -559,7 +645,13 @@ impl TradingEngine {
         } else {
             let current_alloc = (btc_value / total_value).to_f64().unwrap_or(0.0);
             let delta = target_pct - current_alloc;
-            if delta.abs() < allocation_threshold {
+            // Same two-gate rule as handle_indicator. No fresh normalized value
+            // exists on a periodic rebalance tick, so the conviction carried
+            // alongside the sticky target is used rather than a made-up one.
+            let gate_normalized = self.last_normalized.unwrap_or(0.5);
+            if delta.abs() < allocation_threshold
+                || !Self::cost_filter_allows(gate_normalized, delta)
+            {
                 None
             } else {
                 Self::allocation_delta_to_order(delta, total_value, btc_price, &self.product_code, min_order_size)
@@ -703,6 +795,58 @@ mod tests {
         }
     }
 
+    /// Build an IndicatorOutput whose every sub-signal is fully bullish, so
+    /// `compute_btc_target` returns the saturated maximum (ta_normalized = 1.0
+    /// → combined = 1.0*0.7 + 0.5*0.3 = 0.85 with an empty news slice).
+    ///
+    /// NOTE: added for the cost-aware execution filter. The filter admits a
+    /// rebalance only while `|delta| < 0.26 * |normalized - 0.5|`, so the
+    /// partially-bullish `bullish_output()` (normalized ≈ 0.589, band width
+    /// 0.023) leaves almost no room to place an order at all. Tests that need
+    /// to exercise the order path use this saturated fixture instead, which
+    /// gives the widest band the filter can ever offer (0.091).
+    fn saturated_bullish_output() -> IndicatorOutput {
+        IndicatorOutput {
+            indicators: vec![IndicatorSignal { name: "RSI".into(), value: Some(0.0) }],
+            raw: IndicatorPoint {
+                time: chrono::Utc::now(),
+                close: Some(9_800.0),
+                sma: Some(9_000.0),      // close 8.9% above → cross saturated 1.0
+                ema: Some(9_000.0),      // close 8.9% above → cross saturated 1.0
+                rsi: Some(0.0),          // maximally oversold → 1.0
+                macd_line: Some(50.0),
+                signal_line: Some(30.0),
+                histogram: Some(100.0),  // strongly positive → saturated 1.0
+                bb_upper: Some(10_200.0),
+                bb_middle: Some(10_000.0),
+                bb_lower: Some(9_800.0), // close == lower band → %B = 0 → 1.0
+            },
+            calculated_at: chrono::Utc::now(),
+        }
+    }
+
+    /// Mirror image of `saturated_bullish_output()`: every sub-signal fully
+    /// bearish, so `compute_btc_target` returns 0.15 (the saturated minimum).
+    fn saturated_bearish_output() -> IndicatorOutput {
+        IndicatorOutput {
+            indicators: vec![IndicatorSignal { name: "RSI".into(), value: Some(100.0) }],
+            raw: IndicatorPoint {
+                time: chrono::Utc::now(),
+                close: Some(10_200.0),
+                sma: Some(11_000.0),      // close 7.3% below → cross saturated 0.0
+                ema: Some(11_000.0),      // close 7.3% below → cross saturated 0.0
+                rsi: Some(100.0),         // maximally overbought → 0.0
+                macd_line: Some(-50.0),
+                signal_line: Some(-30.0),
+                histogram: Some(-100.0),  // strongly negative → saturated 0.0
+                bb_upper: Some(10_200.0),
+                bb_middle: Some(10_000.0),
+                bb_lower: Some(9_800.0),  // close == upper band → %B = 100 → 0.0
+            },
+            calculated_at: chrono::Utc::now(),
+        }
+    }
+
     /// Build an IndicatorOutput with strong bearish raw values.
     /// RSI=80 (overbought), close < SMA, negative histogram, high %B.
     fn bearish_output() -> IndicatorOutput {
@@ -750,10 +894,31 @@ mod tests {
 
     #[tokio::test]
     async fn bullish_allocation_places_buy_order() {
-        // JPY=1_000_000, BTC=0, price=9_000_500, fee=0
-        // Strong bullish → target_pct≈0.86 → delta≈0.86 (well above
-        // allocation_threshold) → Buy
+        // price=9_000_000, fee=0. Starting allocation 95% BTC
+        // (BTC 0.095 = 855_000 JPY, JPY 45_000 → total 900_000).
+        //
+        // NOTE: rebalancing in from 0% BTC — as this test used to — is no
+        // longer reachable under the cost-aware execution filter, which admits
+        // a rebalance only while |delta| < 0.26 * |normalized - 0.5| (at most
+        // 0.091, at full saturation). The scenario is therefore a saturated
+        // bullish signal (normalized 0.85 → zone target 1.0) against an
+        // already-high 95% allocation, giving delta = 0.05: above
+        // allocation_threshold and inside the cost filter's band, so both
+        // gates permit the order and the Buy path is still covered end to end.
         let mock_exchange = Arc::new(MockExchangeClient::with_fee(0.0));
+        mock_exchange.set_price(dec!(9_000_000));
+        mock_exchange.set_balances(vec![
+            crate::types::balance::Balance {
+                currency_code: "JPY".to_string(),
+                amount: dec!(45_000),
+                available: dec!(45_000),
+            },
+            crate::types::balance::Balance {
+                currency_code: "BTC".to_string(),
+                amount: dec!(0.095),
+                available: dec!(0.095),
+            },
+        ]);
         let (indicator_tx, indicator_rx) = broadcast::channel::<IndicatorOutput>(16);
         let params = RiskParams::default();
         let (engine, _signal_tx) = TradingEngine::new(
@@ -762,9 +927,11 @@ mod tests {
             RiskManager::new(params),
             "BTC_JPY".into(),
         );
-        let engine = engine.with_config(Arc::new(RwLock::new(TradingConfig::default())));
+        let mut cfg = TradingConfig::default();
+        cfg.allocation_threshold = 0.01;
+        let engine = engine.with_config(Arc::new(RwLock::new(cfg)));
 
-        indicator_tx.send(bullish_output()).unwrap();
+        indicator_tx.send(saturated_bullish_output()).unwrap();
         drop(indicator_tx);
 
         engine.run().await;
@@ -778,6 +945,20 @@ mod tests {
         // same-day price crash after an initial buy must trip the breaker
         // and block the very next rebalance attempt.
         let mock_exchange = Arc::new(MockExchangeClient::with_fee(0.0));
+        mock_exchange.set_price(dec!(9_000_000));
+        // Start at 75% BTC (0.075 BTC = 675_000 JPY, JPY 225_000 → 900_000).
+        mock_exchange.set_balances(vec![
+            crate::types::balance::Balance {
+                currency_code: "JPY".to_string(),
+                amount: dec!(225_000),
+                available: dec!(225_000),
+            },
+            crate::types::balance::Balance {
+                currency_code: "BTC".to_string(),
+                amount: dec!(0.075),
+                available: dec!(0.075),
+            },
+        ]);
         let (_indicator_tx, indicator_rx) = broadcast::channel::<IndicatorOutput>(16);
         let params = RiskParams {
             min_order_size: dec!(0.001),
@@ -787,6 +968,14 @@ mod tests {
         let mut cfg = TradingConfig::default();
         cfg.circuit_breaker_enabled = true;
         cfg.max_daily_drawdown = 0.05;
+        // NOTE: sized so BOTH the second rebalance's gates permit an order and
+        // only the circuit breaker refuses it — otherwise the assertion below
+        // would pass vacuously because the cost filter had already suppressed
+        // the rebalance. hold_btc_above = 1.0 maps the saturated signal
+        // (normalized 0.85) to target 0.8125 rather than an all-in 1.0, so the
+        // post-crash allocation drift stays inside the filter's band.
+        cfg.allocation_threshold = 0.01;
+        cfg.zone.hold_btc_above = 1.0;
         let (mut engine, _signal_tx) = TradingEngine::new(
             indicator_rx,
             mock_exchange.clone(),
@@ -795,14 +984,16 @@ mod tests {
         );
         engine = engine.with_config(Arc::new(RwLock::new(cfg)));
 
-        // First bullish signal: establishes the daily drawdown baseline and buys.
-        engine.handle_indicator(bullish_output()).await.unwrap();
+        // First bullish signal: establishes the daily drawdown baseline and buys
+        // from 75% up to the 81.25% target (delta 0.0625, inside both gates).
+        engine.handle_indicator(saturated_bullish_output()).await.unwrap();
         assert_eq!(mock_exchange.placed_orders().len(), 1, "first signal should buy");
 
-        // Crash the price 50% (same simulated day) — the BTC just bought loses
-        // half its value, which should exceed the 5% daily drawdown limit.
+        // Crash the price 15% (same simulated day): equity falls ~12.2%, well
+        // past the 5% daily drawdown limit, while the resulting allocation
+        // drift (delta ≈ 0.026) still clears both allocation gates.
         let ticker = mock_exchange.get_ticker("BTC_JPY").await.unwrap();
-        let crashed_price = ticker.ltp * dec!(0.5);
+        let crashed_price = ticker.ltp * dec!(0.85);
         mock_exchange.set_ticker(crate::types::market::Ticker {
             ltp: crashed_price,
             best_bid: crashed_price,
@@ -811,9 +1002,9 @@ mod tests {
         });
 
         // Same-day bullish signal again: the drawdown check should trip the
-        // breaker before the (otherwise large) rebalance order is evaluated,
-        // so no second order is placed.
-        engine.handle_indicator(bullish_output()).await.unwrap();
+        // breaker before the rebalance order is evaluated, so no second order
+        // is placed.
+        engine.handle_indicator(saturated_bullish_output()).await.unwrap();
         assert_eq!(
             mock_exchange.placed_orders().len(),
             1,
@@ -824,17 +1015,22 @@ mod tests {
     #[tokio::test]
     async fn bearish_allocation_places_sell_order() {
         let mock_exchange = Arc::new(MockExchangeClient::new());
-        // BTC を多く保有した状態 → current_alloc 高い → bearish → sell
+        mock_exchange.set_price(dec!(9_000_000));
+        // Mirror of the Buy test: a saturated bearish signal (normalized 0.15
+        // → zone target 0.0) against a small 5% BTC allocation
+        // (BTC 0.005 = 45_000 JPY, JPY 855_000 → total 900_000), so
+        // delta = -0.05 clears allocation_threshold while staying inside the
+        // cost filter's 0.091-wide band at full saturation.
         mock_exchange.set_balances(vec![
             crate::types::balance::Balance {
                 currency_code: "JPY".to_string(),
-                amount: dec!(100_000),
-                available: dec!(100_000),
+                amount: dec!(855_000),
+                available: dec!(855_000),
             },
             crate::types::balance::Balance {
                 currency_code: "BTC".to_string(),
-                amount: dec!(0.1),
-                available: dec!(0.1),
+                amount: dec!(0.005),
+                available: dec!(0.005),
             },
         ]);
 
@@ -846,17 +1042,14 @@ mod tests {
             RiskManager::new(params),
             "BTC_JPY".into(),
         );
+        let mut cfg = TradingConfig::default();
+        cfg.allocation_threshold = 0.01;
+        let engine = engine.with_config(Arc::new(RwLock::new(cfg)));
 
-        indicator_tx.send(bearish_output()).unwrap();
+        indicator_tx.send(saturated_bearish_output()).unwrap();
         drop(indicator_tx);
 
         engine.run().await;
-        // sub_signals (value, family weight):
-        //   RSI=0.2 (1.0), BB%B=0.75 (1.0, close sits near the lower band),
-        //   SMA-cross=0.0 (0.25), EMA-cross=0.0 (0.25), MACD-hist=0.3 (0.25)
-        // → ta_normalized = (0.2 + 0.75 + 0.25*0.3) / 2.75 ≈ 0.3727
-        // combined ≈ 0.3727*0.7 + 0.5*0.3 ≈ 0.4109 → zone-mapped target ≈ 0.35,
-        // far below the ~0.90 already-held allocation → Sell.
         let orders = mock_exchange.placed_orders();
         assert_eq!(orders.len(), 1);
         assert_eq!(orders[0].side, OrderSide::Sell);
@@ -1087,6 +1280,93 @@ mod tests {
         let val = result.unwrap();
         assert!((val - 0.62).abs() < 1e-9, "expected ~0.62, got {}", val);
         assert!(val > 0.5);
+    }
+
+    // ---- cost_filter_allows unit tests ----
+    //
+    // Gate: 2*|normalized-0.5| * 6.5e-4  >  2.0 * 0.0025 * |delta|
+    // ⇔ |delta| < |normalized-0.5| * 0.26
+    // A fully saturated signal at ta_weight 0.7 with an empty news slice is
+    // 0.85 (or 0.15), i.e. |normalized-0.5| = 0.35, so the largest delta a
+    // saturated signal can ever pass is 0.35 * 0.26 = 0.091.
+
+    #[test]
+    fn cost_filter_saturated_signal_passes_small_delta() {
+        // Saturated bullish signal (0.85) with a 5% allocation move: the
+        // conviction term clears the cost term, so the trade is permitted.
+        assert!(TradingEngine::cost_filter_allows(0.85, 0.05));
+        // Mirror-image bearish saturation behaves identically (sign-symmetric).
+        assert!(TradingEngine::cost_filter_allows(0.15, -0.05));
+    }
+
+    #[test]
+    fn cost_filter_near_neutral_signal_rejects_same_delta() {
+        // Same 5% move, but on a barely-off-neutral signal: the conviction term
+        // is ~1/17 of the saturated case and no longer covers the cost.
+        assert!(!TradingEngine::cost_filter_allows(0.52, 0.05));
+        assert!(!TradingEngine::cost_filter_allows(0.48, -0.05));
+        // Exactly neutral has zero conviction and can never pass any delta.
+        assert!(!TradingEngine::cost_filter_allows(0.5, 0.001));
+    }
+
+    #[test]
+    fn cost_filter_is_monotone_in_delta() {
+        // Property: for fixed conviction, a larger |delta| is never easier to
+        // pass than a smaller one — cost grows linearly in |delta| while the
+        // conviction term is independent of it.
+        for &normalized in &[0.15, 0.3, 0.5, 0.62, 0.85, 1.0] {
+            let mut prev = true;
+            for step in 0..60 {
+                let delta = step as f64 * 0.005;
+                let allowed = TradingEngine::cost_filter_allows(normalized, delta);
+                assert!(
+                    !(allowed && !prev),
+                    "gate re-opened at larger delta: normalized={} delta={}",
+                    normalized,
+                    delta
+                );
+                prev = allowed;
+            }
+        }
+    }
+
+    #[test]
+    fn cost_filter_rejects_every_trade_at_default_allocation_threshold() {
+        // FINDING (documented, not a design goal): with the hypothesis's own
+        // trading_config (allocation_threshold = 0.1) the two gates are
+        // mutually exclusive. allocation_threshold requires |delta| >= 0.1,
+        // while even a fully saturated 0.85/0.15 signal only clears the cost
+        // gate below |delta| = 0.091. The composite gate therefore admits no
+        // trade at all under that config.
+        //
+        // The constants are deliberately left as the hypothesis specifies
+        // them (LAMBDA 2.0, ROUND_TRIP_COST_PCT 0.0025, EXPECTED_MOVE_PER_BAR
+        // 0.00065) rather than retuned to make this test pass — see the
+        // hypothesis file's instruction to report the finding instead.
+        assert!(!TradingEngine::cost_filter_allows(0.85, 0.1));
+        assert!(!TradingEngine::cost_filter_allows(0.15, -0.1));
+        // The break-even delta for full saturation, for the record.
+        assert!(TradingEngine::cost_filter_allows(0.85, 0.0909));
+        assert!(!TradingEngine::cost_filter_allows(0.85, 0.0911));
+    }
+
+    #[test]
+    fn cost_filter_never_enables_a_trade_allocation_threshold_rejects() {
+        // Structural guarantee: the filter is only ever consulted with AND, so
+        // it can only subtract trades. Verified here at the decision level —
+        // for any (normalized, delta) pair, allowed-by-both implies
+        // allowed-by-threshold.
+        let threshold = 0.1_f64;
+        for step in 0..200 {
+            let delta = step as f64 * 0.002 - 0.2;
+            for &normalized in &[0.0, 0.15, 0.5, 0.85, 1.0] {
+                let both = delta.abs() >= threshold
+                    && TradingEngine::cost_filter_allows(normalized, delta);
+                if both {
+                    assert!(delta.abs() >= threshold);
+                }
+            }
+        }
     }
 
     #[tokio::test]

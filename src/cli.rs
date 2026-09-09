@@ -12,6 +12,12 @@
 //!                                to warm the indicators; excluded from the report
 //!     → prints a BacktestReport as JSON to stdout
 //!
+//!   shirube backfill-executions --db <path>
+//!       [--product BTC_JPY] [--days 31] [--resolution-secs 60]
+//!     → pages bitFlyer's public execution history backwards, writes one
+//!       OHLCV bar per bucket into `tickers`, prints BackfillStats as JSON.
+//!       Capped at 31 days by bitFlyer's retention window.
+//!
 //!   shirube compare-backtest --baseline <report.json> --candidate <report.json>
 //!     → prints the Pros/Cons verdict to stderr and a BacktestComparison
 //!       JSON (with a `promoted` boolean) to stdout
@@ -24,10 +30,12 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
+use crate::backtest::backfill::backfill_executions;
 use crate::backtest::report::{compare, format_comparison};
 use crate::backtest::simulator::Simulator;
 use crate::backtest::{BacktestConfig, BacktestReport};
 use crate::config::TradingConfig;
+use crate::exchange::bitflyer::rest::BitFlyerRestClient;
 use crate::storage::db::Database;
 
 /// Inspect argv for a known subcommand and run it to completion.
@@ -47,6 +55,10 @@ pub async fn dispatch() -> anyhow::Result<bool> {
         }
         Some("print-default-config") => {
             println!("{}", serde_json::to_string_pretty(&TradingConfig::default())?);
+            Ok(true)
+        }
+        Some("backfill-executions") => {
+            run_backfill_executions(&args).await?;
             Ok(true)
         }
         Some("hypothesis-hash") => {
@@ -78,8 +90,12 @@ async fn run_backtest_variant(args: &[String]) -> anyhow::Result<()> {
     let product_code = flag_value(args, "--product").unwrap_or_else(|| "BTC_JPY".to_string());
     let from = parse_rfc3339(&required_flag(args, "--from")?)?;
     let to = parse_rfc3339(&required_flag(args, "--to")?)?;
+    // Default matches live trading (MarketDataBus runs at 60s and
+    // TradingConfig periods are expressed in 1-minute bars); running the
+    // backtest at a coarser resolution would silently reinterpret e.g.
+    // sma_period=200 as 200 hours instead of 200 minutes.
     let resolution_secs: u32 = flag_value(args, "--resolution-secs")
-        .unwrap_or_else(|| "3600".to_string())
+        .unwrap_or_else(|| "60".to_string())
         .parse()?;
     let initial_jpy = Decimal::from_str(
         &flag_value(args, "--initial-jpy").unwrap_or_else(|| "1000000".to_string()),
@@ -228,6 +244,52 @@ fn run_hypothesis_hash(args: &[String]) -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("failed to parse {path} as JSON: {e}"))?;
         println!("{}  {}", hypothesis_content_hash(&doc), path);
     }
+    Ok(())
+}
+
+/// `shirube backfill-executions` — seed a backtest DB with real bitFlyer
+/// OHLCV bars derived from public execution history.
+///
+/// Replaces the CoinGecko hourly bootstrap the pipeline used previously,
+/// which produced degenerate bars (open == high == low == close, constant
+/// volume, zero spread). See `backtest::backfill` for the full rationale.
+///
+/// `--days` defaults to 31 — bitFlyer's entire retention window — which is
+/// one day more than the pipeline's 30-day backtest span so indicators have
+/// warmup candles ahead of the evaluated range.
+async fn run_backfill_executions(args: &[String]) -> anyhow::Result<()> {
+    let db_path = flag_value(args, "--db").unwrap_or_else(|| "shirube.db".to_string());
+    let product_code = flag_value(args, "--product").unwrap_or_else(|| "BTC_JPY".to_string());
+    let days: i64 = flag_value(args, "--days")
+        .unwrap_or_else(|| "31".to_string())
+        .parse()?;
+    let resolution_secs: u32 = flag_value(args, "--resolution-secs")
+        .unwrap_or_else(|| "60".to_string())
+        .parse()?;
+
+    // `dispatch` runs before main()'s tracing setup so subcommands stay quiet
+    // and fast. This one is the exception: it runs for 10+ minutes and can sit
+    // in rate-limit backoff, which is indistinguishable from a hang without
+    // progress output. Install a stderr subscriber locally so stdout stays
+    // clean JSON for the pipeline to parse. Ignore the error when a subscriber
+    // is somehow already set — progress logging is not worth failing over.
+    let _ = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .try_init();
+
+    let db = Database::open(&db_path).await?;
+    // Public endpoint — no credentials needed. `backtest::backfill` paces
+    // itself well below the client's 200 req/min bucket, because that bucket
+    // starts full and would otherwise burst past bitFlyer's public IP limit.
+    let client = BitFlyerRestClient::new(String::new(), String::new());
+
+    let stats =
+        backfill_executions(&client, &db, &product_code, resolution_secs, days).await?;
+    println!("{}", serde_json::to_string_pretty(&stats)?);
     Ok(())
 }
 

@@ -30,11 +30,12 @@ a vague instruction.
 | Parameter | Value |
 |---|---|
 | Cadence | daily, 04:00 JST (19:00 UTC previous day) |
+| Price data | bitFlyer public execution history via `shirube backfill-executions` (31 days pulled, 30 evaluated) |
 | Holdout window | last 14 days |
-| Total lookback | 90 days (76 days train + 14 days holdout) |
+| Total lookback | **30 days** (16 days train + 14 days holdout) — bounded by bitFlyer's 31-day execution retention, see "Data source" below |
 | Promotion rule | Sharpe ratio improves >= 10% relative (or >= 0.1 absolute if baseline Sharpe <= 0) **AND** max drawdown does not worsen **AND** candidate trade count >= 50% of baseline's |
 | PR granularity | one PR per promoted variant |
-| Backtest resolution | 3600s (1h) candles, adjust via `--resolution-secs` if a finer/coarser view is needed |
+| Backtest resolution | **60s (1m) candles** — matches live trading; see "Resolution must match live" below |
 | New hypotheses generated per run | at most 3 (see "Hypothesis generation" below) |
 | Trade frequency | **non-binding guideline**: roughly 4-10 trades/day (see below) |
 
@@ -42,14 +43,86 @@ The promotion rule is implemented in `backtest::report::compare` (see
 `src/backtest/report.rs`) — it is not re-derived by the agent, only
 invoked via `shirube compare-backtest`.
 
+### Data source: bitFlyer executions, not CoinGecko
+
+Until 2026-09-09 this pipeline seeded its backtest DB from CoinGecko's
+hourly `market_chart` endpoint. That was replaced because the series was
+structurally unable to test most of what the loop proposes:
+
+- Every row had `open == high == low == close` (2161/2161 rows measured),
+  so bars carried **no intra-bar range at all**.
+- `volume` was the constant `1` for every row, and `best_bid == best_ask`,
+  so there was **no turnover and no spread**.
+- The price was a cross-exchange volume-weighted **aggregate** (and
+  `vs_currency=jpy` is a USD price converted by an FX rate), not
+  bitFlyer's own market. Cross-exchange averaging smooths away
+  exchange-specific noise, understating realized volatility and thereby
+  inflating Sharpe.
+
+The concrete damage: `add-volume-weighted-ma-indicator` was recorded in
+`experiments/tried.json` as rejected with `sharpe_improvement_pct: 0.0`.
+That is not a verdict on the idea — on constant volume a VWMA is
+*identically* an SMA, so 0.0 was arithmetic, not evidence. Any hypothesis
+touching range, volume, or spread was in the same position.
+
+The replacement is `shirube backfill-executions`, which pages bitFlyer's
+public execution tape (`GET /v1/getexecutions`) and buckets the prints
+into real OHLCV bars for the exact market the bot trades. See
+`src/backtest/backfill.rs`.
+
+**The 31-day retention wall.** bitFlyer serves only the most recent 31
+days of public executions; anything older returns HTTP 400 with status
+-156. This is what caps the lookback at 30 days (31 pulled, one day of
+slack ahead of `--from` for indicator warmup) — the window is *rolling*,
+so history not captured today is gone tomorrow. If a real `shirube.db`
+export from the running instance ever becomes available, prefer it: the
+live DB accumulates past the 31-day wall and is the only path to a
+longer lookback.
+
+Backfilling 31 days takes roughly 10-12 minutes: ~900 requests paced at
+~80 req/min. The pacing is deliberate — `RateLimiter::new(200)` starts
+with a full bucket and will burst 200 requests, which trips bitFlyer's
+public IP limit (~500 requests / 5 minutes) and returns status -1.
+`backtest::backfill` paces itself and retries -1 under exponential
+backoff.
+
+### Resolution must match live
+
+`TradingConfig`'s indicator periods are counts of **1-minute bars**
+(`BASE_RESOLUTION = 60` in `src/api/routes/indicators.rs`). Running the
+backtest at 3600s, as this pipeline did until 2026-09-09, silently
+reinterpreted every period as hours: `sma_period: 200` meant a 3.3-hour
+SMA live but an **8.3-day** SMA in the backtest. The loop was therefore
+optimizing a materially different strategy from the one it shipped, and
+no amount of holdout discipline could have caught that — both sides of
+every comparison shared the same distortion.
+
+`--resolution-secs` now defaults to 60 in `shirube backtest-variant`.
+Do not raise it for the daily cycle. An ad-hoc coarser run is fine for
+eyeballing a long-horizon effect, but a promotion decision made at any
+resolution other than 60s does not transfer to live trading.
+
 ### Trade frequency is a guideline, not a criterion
 
 A rough target of **4-10 trades per day** is a useful sense of the
 activity level this strategy is meant to operate at — enough turnover to
 react to intraday moves, not so much that fees and slippage dominate.
-Over a 90-day backtest that corresponds to about 360-900 trades; the
-baseline as of 2026-09-09 sits at 173 trades over 90 days (~1.9/day),
-i.e. below the range.
+Over a 30-day backtest that corresponds to about 120-300 trades. The
+baseline measured on real bitFlyer 1-minute bars (2026-09-09) sits at
+**2692 trades over 30 days (~90/day)** — an order of magnitude *above*
+the range, and the opposite of the problem the old CoinGecko/1h baseline
+appeared to have (173 trades over 90 days, ~1.9/day). That earlier figure
+is not comparable and should not be cited: at 1h resolution the strategy
+could only act 24 times a day, so its low turnover was an artifact of the
+data, not of the allocation logic.
+
+Turnover this high is the most obvious hypothesis source available right
+now — at ~90 trades/day, fees and slippage plausibly account for the
+baseline's negative return (`total_return_pct: -0.25`, `sharpe_ratio:
+0.015`, `win_rate: 0.74` — many small wins outweighed by fewer large
+losses, which is what a cost-dominated strategy looks like). A
+`allocation_threshold` or rebalance-spacing hypothesis is the natural
+first thing to test. As always the backtest decides, not the guideline.
 
 This number carries **no force whatsoever**:
 
@@ -159,7 +232,7 @@ shirube backtest-variant \
   --db shirube.db \
   --config path/to/trading_config.json \
   --from 2026-08-24T00:00:00Z --to 2026-09-07T00:00:00Z \
-  [--product BTC_JPY] [--resolution-secs 3600] \
+  [--product BTC_JPY] [--resolution-secs 60] \
   [--initial-jpy 1000000] [--slippage-pct 0.001] [--fee-pct 0.0015]
 
 # Compare two BacktestReport JSON files, print a Pros/Cons verdict to
@@ -532,45 +605,40 @@ git fetch origin && git checkout dev && git pull
 # 2. Build once so `shirube` subcommands are available.
 cargo build --release
 
-# 3. Initialize a fresh DB's schema (any subcommand that opens the DB
-#    works; this one is a fast no-op against an empty range).
-rm -f ./run.db
-./target/release/shirube backtest-variant --db ./run.db \
-  --config experiments/baseline-config.json \
-  --from $(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ) --to $(date -u +%Y-%m-%dT%H:%M:%SZ) \
-  || true   # expected to fail with "no candles found" — that's fine, schema is now created
-
-# 4. Fetch 90 days of real hourly BTC/JPY prices from CoinGecko's public,
-#    keyless API and seed them into ./run.db's tickers table. 90 days is
-#    also the free-tier ceiling for hourly granularity (CoinGecko serves
-#    daily-only data beyond that on the keyless API).
-curl -s "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=jpy&days=90&interval=hourly" \
-  -o /tmp/btc_jpy_90d.json
-
-python3 - <<'PYEOF'
-import sqlite3, json, datetime
-d = json.load(open('/tmp/btc_jpy_90d.json'))
-conn = sqlite3.connect('./run.db')
-rows = []
-for ts_ms, price in d['prices']:
-    ts = datetime.datetime.fromtimestamp(ts_ms/1000, datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-    p = str(price)
-    rows.append(('BTC_JPY', ts, p, p, '0.1', '0.1', p, p, p, p, '1', '1'))
-conn.executemany('''INSERT OR IGNORE INTO tickers
-    (product_code, timestamp, best_bid, best_ask, best_bid_size, best_ask_size,
-     ltp_open, ltp, ltp_high, ltp_low, volume, volume_by_product)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''', rows)
-conn.commit()
-print(f"seeded {len(rows)} ticker rows")
-PYEOF
+# 4. Backfill 31 days of real bitFlyer BTC/JPY 1-minute OHLCV bars from the
+#    public execution tape. This creates the schema itself, so no separate
+#    schema-init step is needed. ~900 requests paced at ~80 req/min, so
+#    budget 10-12 minutes. 31 days is bitFlyer's entire retention window;
+#    the extra day beyond the 30-day evaluation range is indicator warmup.
+./target/release/shirube backfill-executions \
+  --db ./run.db --product BTC_JPY --days 31 --resolution-secs 60
 ```
 
+The command prints a `BackfillStats` JSON. Sanity-check it before running
+any backtest this cycle:
+
+- `bars_written` should be on the order of 30k-35k (a 1-minute bar exists
+  only for minutes that actually traded; the 2026-09-09 run wrote 33,184
+  bars from 394,535 executions in 790 requests, i.e. 74% of the 44,640
+  minutes in 31 days).
+- `oldest_bar` should be close to 31 days ago. If `hit_history_limit` is
+  `true` that is normal and expected — it means the walk reached the
+  retention wall rather than stopping early.
+- If `bars_written` is far below that, or `executions_fetched` is small,
+  something throttled the run; re-run rather than backtesting on a
+  truncated window.
+
 Use `./run.db` as the `--db` for every `backtest-variant` call this
-cycle (baseline and every variant). This is CoinGecko's aggregate market
-price, not bitFlyer's own order book — an approximation accepted for
-this pipeline's relative (variant-vs-baseline) comparisons, not meant to
-match bitFlyer's exact historical prices. If a real `shirube.db` export
-from the running instance becomes available later, prefer that instead
-(see the note in "CLI building blocks" above about keeping
-`experiments/baseline-config.json` in sync with the live DB-persisted
-config).
+cycle (baseline and every variant), and pass `--resolution-secs 60`
+and `--warmup-candles 300` throughout — see "Resolution must match live"
+above. The warmup covers the binding indicator period in
+`experiments/baseline-config.json` (`sma_period: 200` 1-minute bars) with
+margin; those candles are fetched before `--from` and excluded from the
+report, which is what the extra backfilled day is for.
+
+These are bitFlyer's own trade prints for BTC_JPY, so the bars are the
+real market the bot trades rather than an approximation. The remaining
+caveat is the 31-day retention wall (see "Data source" above): if a real
+`shirube.db` export from the running instance becomes available, prefer
+it, since the live DB accumulates history past that wall and would allow
+a longer lookback than 30 days.

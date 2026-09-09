@@ -4,19 +4,31 @@ use tracing::debug;
 
 use super::auth::build_auth_headers;
 use super::models::{
-    ApiErrorBody, CancelAllOrdersRequest, CancelOrderRequest, RawBalance, RawMyExecution,
-    RawOrder, RawPosition, RawTicker, RawTradingCommission, SendOrderRequest, SendOrderResponse,
+    ApiErrorBody, CancelAllOrdersRequest, CancelOrderRequest, RawBalance, RawExecution,
+    RawMyExecution, RawOrder, RawPosition, RawTicker, RawTradingCommission, SendOrderRequest,
+    SendOrderResponse,
 };
 use crate::error::{Error, Result};
 use crate::exchange::rate_limiter::RateLimiter;
 use crate::exchange::ExchangeClient;
 use crate::types::{
     balance::{Balance, Position},
-    market::{MyExecution, Ticker},
+    market::{MyExecution, Ticker, Trade},
     order::{Order, OrderRequest, OrderSide, OrderType},
 };
 
 const DEFAULT_BASE_URL: &str = "https://api.bitflyer.com";
+
+/// bitFlyer's error status for `/v1/getexecutions` requests that reach past
+/// its retention window ("Execution history is limited to the most recent 31
+/// days."). A caller paging backwards through history should treat this as
+/// end-of-data rather than a failure — see `backtest::backfill`.
+pub const ERR_EXECUTION_HISTORY_LIMIT: i32 = -156;
+
+/// Maximum rows `/v1/getexecutions` returns per call. Larger `count` values
+/// are silently clamped to this by the server (verified 2026-09-09: `count=1000`
+/// returns 500 rows).
+pub const MAX_EXECUTIONS_PER_REQUEST: u32 = 500;
 
 /// HTTP client for the bitFlyer REST API.
 ///
@@ -206,6 +218,39 @@ impl BitFlyerRestClient {
             code: status_code,
             message: text,
         })
+    }
+
+    /// Fetch the **public** execution (trade) tape for `product_code`,
+    /// newest first (`GET /v1/getexecutions`).
+    ///
+    /// Distinct from `ExchangeClient::get_executions`, which returns *this
+    /// account's* fills from the authenticated `/v1/me/getexecutions`. The
+    /// names must stay different: an inherent method with the trait method's
+    /// name would shadow it at every call site on a concrete client.
+    ///
+    /// `before` pages backwards: only executions with an `id` strictly
+    /// smaller than `before` are returned, so a caller walks history by
+    /// feeding back the smallest id of the previous page. `count` is
+    /// clamped by the server to `MAX_EXECUTIONS_PER_REQUEST` (500).
+    ///
+    /// NOTE: bitFlyer retains only the most recent **31 days** of public
+    /// execution history. A request reaching past that returns HTTP 400
+    /// with status `ERR_EXECUTION_HISTORY_LIMIT` (-156), surfaced here as
+    /// `Error::ApiError { code: -156, .. }`. Backwards-paging callers must
+    /// treat that specific code as end-of-history, not as a failure.
+    pub async fn get_public_executions(
+        &self,
+        product_code: &str,
+        count: u32,
+        before: Option<i64>,
+    ) -> Result<Vec<Trade>> {
+        let count = count.min(MAX_EXECUTIONS_PER_REQUEST);
+        let mut path = format!("/v1/getexecutions?product_code={product_code}&count={count}");
+        if let Some(before) = before {
+            path.push_str(&format!("&before={before}"));
+        }
+        let raw: Vec<RawExecution> = self.get_public(&path).await?;
+        Ok(raw.into_iter().map(Trade::from).collect())
     }
 }
 

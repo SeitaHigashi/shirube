@@ -1,0 +1,26 @@
+{
+  "name": "wide-zone-band",
+  "kind": "parameter",
+  "rationale": "The 2026-09-08 Run 4 report settled the mechanics of the zone band and left exactly one direction untested. narrow-zone-band (0.35 / 0.65) did what it predicted mechanically -- turnover more than doubled (25 -> 55 trades, 1.79 -> 3.93 trades/day) and win rate rose 16.7% -> 25% -- yet return, Sharpe and max drawdown all got worse, and the report's own conclusion was that 'the zone band is confirmed as the binding constraint on turnover, and turnover is confirmed not to be the deficit: more, smaller round-trips on a signal with no edge in this window just paid more fees and slippage.' The symmetric move has never been tried. Widening the band to 0.10 / 0.90 lowers the interpolation slope from 1/0.6 to 1/0.8 (a given signal move produces a ~25% smaller allocation move) and, because Simulator::run passes an empty news slice so the combined signal spans only [0.15, 0.85] at ta_weight=0.7, it also puts zone A (all-JPY) and zone C (all-BTC) fully out of reach -- every rebalance becomes an interior, partial move rather than a saturated all-in/all-out flip. If fee and slippage drag on a low-edge signal is what the last four runs have actually been measuring, the fewer and gentler rebalances this produces should show up as a Sharpe improvement without the drawdown regression narrowing produced. It is also a cheap, isolated probe: nothing but the two zone boundaries changes from the current dev baseline.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 60
+  }
+}

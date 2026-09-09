@@ -229,7 +229,25 @@ impl ExchangeClient for MockExchangeClient {
     }
 
     async fn send_order(&self, req: &OrderRequest) -> Result<String> {
-        let exec_price = self.ticker.read_or_recover().ltp;
+        // Fill each side against the side of the book it would actually cross:
+        // a buy lifts the ask, a sell hits the bid. Filling both sides at `ltp`
+        // (as this did until 2026-09-09) makes a buy-then-sell round trip at an
+        // unchanged price cost exactly zero in spread terms, so no caller —
+        // paper trading or backtest — could model the cost of turnover at all.
+        // A degenerate book (that side unset) falls back to `ltp`, which keeps
+        // every existing caller that only calls `set_price` behaving as before.
+        let exec_price = {
+            let ticker = self.ticker.read_or_recover();
+            let side_price = match req.side {
+                OrderSide::Buy => ticker.best_ask,
+                OrderSide::Sell => ticker.best_bid,
+            };
+            if side_price == Decimal::ZERO {
+                ticker.ltp
+            } else {
+                side_price
+            }
+        };
         if exec_price == Decimal::ZERO {
             return Err(Error::Other(anyhow::anyhow!("current price not set")));
         }

@@ -145,6 +145,13 @@ impl BacktestRunRepository {
                     max_drawdown_pct,
                     win_rate,
                     total_trades,
+                    // NOTE: the backtest_runs table predates the risk-event
+                    // counters and does not store them, so a report read back
+                    // from the DB reports zero rather than the run's real
+                    // counts. The live report returned by Simulator::run
+                    // carries the true values.
+                    circuit_breaker_trips: 0,
+                    orders_rejected: 0,
                 },
             });
         }
@@ -180,6 +187,8 @@ mod tests {
             max_drawdown_pct: 3.5,
             win_rate: 0.55,
             total_trades: 42,
+            circuit_breaker_trips: 0,
+            orders_rejected: 0,
         }
     }
 

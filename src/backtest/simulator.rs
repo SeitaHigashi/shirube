@@ -14,7 +14,7 @@ use crate::storage::db::Database;
 use crate::trading::engine::TradingEngine;
 use crate::types::market::{Candle, Ticker};
 
-use super::{BacktestConfig, BacktestReport};
+use super::{BacktestConfig, BacktestReport, RiskEventCounts};
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Simulator
@@ -80,6 +80,13 @@ impl Simulator {
         // None（ウォームアップ中）を返した間は直前の目標配分を維持する。
         let mut sticky_target: Option<f64> = None;
         let mut equity_curve: Vec<f64> = Vec::with_capacity(candles.len() - warmup);
+        // Risk-gate activity, surfaced on the report so a run makes it
+        // visible whether a gate ever engaged (see RiskEventCounts).
+        //
+        // NOTE: counted only over evaluated candles — the `skip(warmup)` above
+        // means a gate cannot trip on a warmup candle, which is correct: those
+        // candles are never traded on and are outside the reported window.
+        let mut risk_events = RiskEventCounts::default();
 
         for (candle, point) in candles.iter().zip(points.iter()).skip(warmup) {
             let price_with_slip = apply_slippage(candle.close, self.config.slippage_pct);
@@ -115,7 +122,13 @@ impl Simulator {
             // for why wall-clock time would be wrong here (a whole backtest
             // runs within a single real-time second).
             risk_manager.observe_time(candle.open_time, total);
-            risk_manager.check_drawdown(total);
+            // A trip is only reported on the transition into the broken
+            // state (RiskManager returns None while already broken), so this
+            // counts at most once per simulated day, matching the daily
+            // reset in observe_time.
+            if risk_manager.check_drawdown(total).is_some() {
+                risk_events.circuit_breaker_trips += 1;
+            }
 
             if let Some(target_pct) = sticky_target {
                 if !total.is_zero() && !price_with_slip.is_zero() {
@@ -136,8 +149,16 @@ impl Simulator {
                                 RiskDecision::Allow(r) => {
                                     let _ = exchange.send_order(&r).await;
                                 }
-                                RiskDecision::Reject(_) => {}
-                                RiskDecision::CircuitBreaker { .. } => {}
+                                // Both refusal arms mean the order never
+                                // reached the exchange, so it is absent from
+                                // total_trades — count it instead of
+                                // discarding it silently.
+                                RiskDecision::Reject(_) => {
+                                    risk_events.orders_rejected += 1;
+                                }
+                                RiskDecision::CircuitBreaker { .. } => {
+                                    risk_events.orders_rejected += 1;
+                                }
                             }
                         }
                     }
@@ -155,6 +176,7 @@ impl Simulator {
             &equity_curve,
             self.config.initial_jpy.to_f64().unwrap_or(1.0),
             self.config.resolution_secs,
+            risk_events,
         );
 
         self.db.backtest_runs().insert(&self.config, &report).await?;
@@ -429,6 +451,84 @@ mod tests {
         // Known-good values for this fixture under the pre-change code path.
         assert!(report.total_trades > 0, "zero-warmup run must still trade");
         assert!(report.total_return_pct.is_finite());
+    }
+
+    /// The report must distinguish a circuit breaker that fired from one
+    /// that never engaged. Regression test for the observability gap found
+    /// on 2026-09-08: `total_trades` is not a usable proxy, because blocking
+    /// a rebalance on a down day defers the exposure change to a later
+    /// candle rather than removing a trade from the run — so the same
+    /// candle series is run twice here, once with a breaker that must fire
+    /// and once with one that must not.
+    async fn run_with_drawdown_limit(max_daily_drawdown: f64) -> BacktestReport {
+        let db = crate::storage::db::Database::open_in_memory().await.unwrap();
+        let config = BacktestConfig {
+            product_code: "BTC_JPY".into(),
+            from: Utc::now(),
+            to: Utc::now(),
+            resolution_secs: 60,
+            slippage_pct: 0.0,
+            fee_pct: Some(0.0),
+            initial_jpy: dec!(1_000_000),
+            warmup_candles: 0,
+        };
+
+        let mut trading_config = TradingConfig::default();
+        trading_config.sma_period = 2;
+        trading_config.ema_period = 2;
+        trading_config.rsi_period = 2;
+        trading_config.macd_fast = 2;
+        trading_config.macd_slow = 3;
+        trading_config.macd_signal = 2;
+        trading_config.bollinger_period = 2;
+        trading_config.allocation_threshold = 0.01;
+        trading_config.circuit_breaker_enabled = true;
+        trading_config.max_daily_drawdown = max_daily_drawdown;
+
+        use chrono::TimeZone;
+        let day = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        // Warmup + ascent (establishes a BTC position), then a same-day
+        // crash deep enough to exceed any drawdown limit under 50%.
+        let prices = [
+            dec!(9_000_000), dec!(9_100_000), dec!(9_200_000), dec!(9_300_000),
+            dec!(9_400_000), dec!(9_500_000), dec!(9_600_000), dec!(9_700_000),
+            dec!(4_500_000),
+        ];
+        let candles: Vec<Candle> = prices.iter().map(|&p| make_candle_at(p, day)).collect();
+
+        Simulator::new(config, db).run(candles, trading_config).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn report_counts_circuit_breaker_trips() {
+        let fired = run_with_drawdown_limit(0.05).await;
+        assert!(
+            fired.circuit_breaker_trips >= 1,
+            "a >50% same-day crash must trip a 5% daily drawdown limit; got {} trips",
+            fired.circuit_breaker_trips
+        );
+
+        // Same candles, a limit no single day can reach: the counter must
+        // stay at zero rather than tracking anything incidental.
+        let inert = run_with_drawdown_limit(0.99).await;
+        assert_eq!(
+            inert.circuit_breaker_trips, 0,
+            "a 99% daily drawdown limit cannot be reached on this series"
+        );
+    }
+
+    #[tokio::test]
+    async fn report_counts_rejected_orders() {
+        // Every order submitted while the breaker is tripped is refused by
+        // RiskManager::evaluate and never reaches the exchange, so it must
+        // be visible in orders_rejected rather than silently dropped.
+        let fired = run_with_drawdown_limit(0.05).await;
+        assert!(
+            fired.circuit_breaker_trips >= 1 && fired.orders_rejected >= 1,
+            "expected at least one trip and one refused order; got {} trips / {} rejected",
+            fired.circuit_breaker_trips,
+            fired.orders_rejected
+        );
     }
 
     #[test]

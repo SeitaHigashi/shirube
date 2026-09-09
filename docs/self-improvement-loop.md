@@ -169,6 +169,11 @@ shirube compare-backtest --baseline baseline.json --candidate candidate.json
 # Print TradingConfig::default() as JSON (used to seed
 # experiments/baseline-config.json).
 shirube print-default-config
+
+# Print the canonical content_hash of one or more hypothesis files, in
+# "<sha256-hex>  <path>" form — the dedup key for experiments/tried.json
+# (see "Tried-hypothesis registry" below).
+shirube hypothesis-hash experiments/hypotheses/*.json
 ```
 
 `experiments/baseline-config.json` holds the config the currently-running
@@ -200,6 +205,26 @@ file's `trading_config` object, `kind`, and `code_change_summary` (if
 present) with sha256. This means renaming a hypothesis file doesn't let
 it bypass the registry, but genuinely changing its `trading_config`
 values (a real new variant) does get a fresh hash and is eligible again.
+
+**Do not compute this by hand — use the CLI:**
+
+```bash
+shirube hypothesis-hash experiments/hypotheses/*.json   # prints "<hash>  <path>" per file
+```
+
+The exact serialization is pinned in `cli::hypothesis_content_hash`
+(`src/cli.rs`) with unit tests: sha256 of the compact JSON encoding of
+`{"code_change_summary": …, "kind": …, "trading_config": …}` with every
+object key sorted lexicographically at every depth and no whitespace —
+i.e. Python's `json.dumps(obj, sort_keys=True, separators=(',', ':'))`.
+A field absent from the file is hashed as JSON `null`, so a `kind:
+"parameter"` hypothesis hashes the same whether `code_change_summary` is
+omitted or written as `null`.
+
+This was pinned on 2026-09-08 after four consecutive runs re-derived the
+serialization by hand and got hashes that didn't reproduce on the next
+run, forcing the registry to be matched by hypothesis *name* — exactly
+the bypass `content_hash` exists to prevent.
 
 ## Daily procedure
 

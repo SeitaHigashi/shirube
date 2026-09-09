@@ -15,6 +15,10 @@
 //!   shirube compare-backtest --baseline <report.json> --candidate <report.json>
 //!     → prints the Pros/Cons verdict to stderr and a BacktestComparison
 //!       JSON (with a `promoted` boolean) to stdout
+//!
+//!   shirube hypothesis-hash <hypothesis.json> [<hypothesis.json> ...]
+//!     → prints `<sha256-hex>  <path>` per file: the canonical
+//!       `content_hash` used as the dedup key in `experiments/tried.json`
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
@@ -43,6 +47,10 @@ pub async fn dispatch() -> anyhow::Result<bool> {
         }
         Some("print-default-config") => {
             println!("{}", serde_json::to_string_pretty(&TradingConfig::default())?);
+            Ok(true)
+        }
+        Some("hypothesis-hash") => {
+            run_hypothesis_hash(&args)?;
             Ok(true)
         }
         _ => Ok(false),
@@ -152,4 +160,154 @@ fn run_compare_backtest(args: &[String]) -> anyhow::Result<()> {
     eprintln!("{}", format_comparison(&cmp));
     println!("{}", serde_json::to_string_pretty(&cmp)?);
     Ok(())
+}
+
+/// Compute the canonical `content_hash` of one hypothesis document — the
+/// dedup key stored in `experiments/tried.json` (see the "Tried-hypothesis
+/// registry" section of `docs/self-improvement-loop.md`).
+///
+/// The hash covers exactly three fields of the hypothesis — `trading_config`,
+/// `kind` and `code_change_summary` — so that renaming a hypothesis file or
+/// rewriting its `rationale` does not let an already-tested idea back into
+/// the candidate list, while genuinely changing what is being tested does
+/// produce a fresh hash.
+///
+/// # Why this lives in the binary
+///
+/// The serialization was previously re-derived by hand on every pipeline
+/// run, and four consecutive runs (2026-09-07 through 2026-09-08) recorded
+/// the same ambiguity: hashes written by one run did not reproduce on the
+/// next, so the registry had to be matched by hypothesis *name* instead —
+/// exactly the bypass `content_hash` exists to prevent. Pinning it here
+/// means the registry and the agent cannot disagree.
+///
+/// # Canonical form
+///
+/// `sha256` of the compact JSON encoding of the object
+/// `{"code_change_summary": ..., "kind": ..., "trading_config": ...}` with
+/// every object key sorted lexicographically (at every nesting depth) and no
+/// whitespace between tokens — i.e. Python's
+/// `json.dumps(obj, sort_keys=True, separators=(',', ':'))`. A field absent
+/// from the hypothesis file is hashed as JSON `null`, so a `kind:
+/// "parameter"` hypothesis (which has no `code_change_summary`) hashes the
+/// same way whether the field is omitted or explicitly null.
+///
+/// `serde_json::Value`'s object representation is a `BTreeMap`, so parsing
+/// the file already sorts keys at every depth and `to_string` already emits
+/// the compact form; the sorting is a property of the type, not something
+/// this function re-applies.
+pub(crate) fn hypothesis_content_hash(doc: &serde_json::Value) -> String {
+    use sha2::{Digest, Sha256};
+
+    let field = |name: &str| doc.get(name).cloned().unwrap_or(serde_json::Value::Null);
+    let canonical = serde_json::json!({
+        "trading_config": field("trading_config"),
+        "kind": field("kind"),
+        "code_change_summary": field("code_change_summary"),
+    });
+
+    let encoded = serde_json::to_string(&canonical)
+        .expect("a serde_json::Value built from Values always serializes");
+    format!("{:x}", Sha256::digest(encoded.as_bytes()))
+}
+
+/// `shirube hypothesis-hash <file.json> [...]` — print `<hash>  <path>` per
+/// file, in the order given, so the pipeline can filter already-tried
+/// hypotheses without reimplementing the hash.
+fn run_hypothesis_hash(args: &[String]) -> anyhow::Result<()> {
+    // Everything after the subcommand is a path; there are no flags.
+    let paths = &args[2..];
+    if paths.is_empty() {
+        anyhow::bail!("usage: shirube hypothesis-hash <hypothesis.json> [<hypothesis.json> ...]");
+    }
+
+    for path in paths {
+        let raw = std::fs::read_to_string(path)
+            .map_err(|e| anyhow::anyhow!("failed to read {path}: {e}"))?;
+        let doc: serde_json::Value = serde_json::from_str(&raw)
+            .map_err(|e| anyhow::anyhow!("failed to parse {path} as JSON: {e}"))?;
+        println!("{}  {}", hypothesis_content_hash(&doc), path);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The canonical hash of a minimal parameter hypothesis. The expected
+    /// value was produced independently with Python
+    /// (`hashlib.sha256(json.dumps({"trading_config": ..., "kind": ...,
+    /// "code_change_summary": None}, sort_keys=True,
+    /// separators=(',', ':')).encode()).hexdigest()`), so this test is what
+    /// keeps the Rust implementation and the registry's historical
+    /// serialization in agreement.
+    #[test]
+    fn hypothesis_content_hash_matches_canonical_serialization() {
+        let doc: serde_json::Value = serde_json::from_str(
+            r#"{"name":"x","kind":"parameter","rationale":"r","trading_config":{"b":2,"a":1.5}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            hypothesis_content_hash(&doc),
+            "2ac13fd2d6b4550edce09f24f93d1af70266abbdc4698d661c07e32ce5968785"
+        );
+    }
+
+    /// Key order and whitespace in the source file must not affect the hash:
+    /// the same hypothesis written two ways is the same hypothesis.
+    #[test]
+    fn hypothesis_content_hash_ignores_key_order_and_whitespace() {
+        let a: serde_json::Value =
+            serde_json::from_str(r#"{"kind":"parameter","trading_config":{"a":1,"b":2}}"#).unwrap();
+        let b: serde_json::Value = serde_json::from_str(
+            "{\n  \"trading_config\": {\n    \"b\": 2,\n    \"a\": 1\n  },\n  \"kind\": \"parameter\"\n}",
+        )
+        .unwrap();
+        assert_eq!(hypothesis_content_hash(&a), hypothesis_content_hash(&b));
+    }
+
+    /// Fields the pipeline does not hash (`name`, `rationale`,
+    /// `paper_reference`) must not change the hash — renaming a hypothesis
+    /// file must never let an already-tried idea back into the candidate
+    /// list.
+    #[test]
+    fn hypothesis_content_hash_ignores_unhashed_fields() {
+        let a: serde_json::Value =
+            serde_json::from_str(r#"{"name":"one","kind":"parameter","trading_config":{"a":1}}"#)
+                .unwrap();
+        let b: serde_json::Value = serde_json::from_str(
+            r#"{"name":"two","rationale":"different","paper_reference":{"title":"t"},"kind":"parameter","trading_config":{"a":1}}"#,
+        )
+        .unwrap();
+        assert_eq!(hypothesis_content_hash(&a), hypothesis_content_hash(&b));
+    }
+
+    /// An omitted `code_change_summary` hashes identically to an explicit
+    /// `null`, so a parameter hypothesis cannot get two different hashes
+    /// depending on whether the field was written out.
+    #[test]
+    fn hypothesis_content_hash_treats_missing_field_as_null() {
+        let omitted: serde_json::Value =
+            serde_json::from_str(r#"{"kind":"parameter","trading_config":{"a":1}}"#).unwrap();
+        let explicit: serde_json::Value = serde_json::from_str(
+            r#"{"kind":"parameter","trading_config":{"a":1},"code_change_summary":null}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            hypothesis_content_hash(&omitted),
+            hypothesis_content_hash(&explicit)
+        );
+    }
+
+    /// Changing what is actually being tested must produce a fresh hash, so
+    /// a genuinely new variant is eligible again.
+    #[test]
+    fn hypothesis_content_hash_changes_with_trading_config() {
+        let a: serde_json::Value =
+            serde_json::from_str(r#"{"kind":"parameter","trading_config":{"a":1}}"#).unwrap();
+        let b: serde_json::Value =
+            serde_json::from_str(r#"{"kind":"parameter","trading_config":{"a":2}}"#).unwrap();
+        assert_ne!(hypothesis_content_hash(&a), hypothesis_content_hash(&b));
+    }
 }

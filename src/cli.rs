@@ -8,6 +8,8 @@
 //!       --from <RFC3339> --to <RFC3339>
 //!       [--product BTC_JPY] [--resolution-secs 3600]
 //!       [--initial-jpy 1000000] [--slippage-pct 0.001] [--fee-pct 0.0015]
+//!       [--warmup-candles 0]   ← extra candles fetched *before* --from purely
+//!                                to warm the indicators; excluded from the report
 //!     → prints a BacktestReport as JSON to stdout
 //!
 //!   shirube compare-backtest --baseline <report.json> --candidate <report.json>
@@ -89,13 +91,35 @@ async fn run_backtest_variant(args: &[String]) -> anyhow::Result<()> {
         .validate()
         .map_err(|e| anyhow::anyhow!("invalid trading config in {config_path}: {e}"))?;
 
+    // Optional indicator warmup lookback, in candles. Candles before `from` are
+    // fetched purely to prime the indicators and are excluded from trading and
+    // from the report, so a long-period indicator (e.g. SMA(200)) is already
+    // warm at the first evaluated candle instead of being `None` for the
+    // leading 59% of the window. Defaults to 0 = previous behavior.
+    let warmup_candles: usize = flag_value(args, "--warmup-candles")
+        .unwrap_or_else(|| "0".to_string())
+        .parse()?;
+
     let db = Database::open(&db_path).await?;
+    // Widen the fetch window backwards by the requested warmup, then count how
+    // many returned candles actually precede `from`. Counting (rather than
+    // trusting the request) keeps the split correct when the extra history is
+    // sparse or entirely absent.
+    let fetch_from = from - chrono::Duration::seconds(warmup_candles as i64 * resolution_secs as i64);
     let candles = db
         .tickers()
-        .get_aggregated(&product_code, resolution_secs, from, to, None)
+        .get_aggregated(&product_code, resolution_secs, fetch_from, to, None)
         .await?;
-    if candles.is_empty() {
+    let actual_warmup = candles.iter().filter(|c| c.open_time < from).count();
+    if candles.len() == actual_warmup {
         anyhow::bail!("no candles found for {product_code} in [{from}, {to}] (resolution_secs={resolution_secs})");
+    }
+    if warmup_candles > 0 {
+        eprintln!(
+            "warmup: requested {warmup_candles} candles before {from}, got {actual_warmup}; \
+             evaluating {} candles in-window",
+            candles.len() - actual_warmup
+        );
     }
 
     let bt_config = BacktestConfig {
@@ -106,6 +130,7 @@ async fn run_backtest_variant(args: &[String]) -> anyhow::Result<()> {
         slippage_pct,
         fee_pct,
         initial_jpy,
+        warmup_candles: actual_warmup,
     };
     let simulator = Simulator::new(bt_config, db);
     let report = simulator.run(candles, trading_config).await?;

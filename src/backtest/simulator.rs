@@ -64,18 +64,31 @@ impl Simulator {
 
         let mut risk_manager = RiskManager::new(trading_config.to_risk_params());
 
-        // 本番の SignalEngine と同一の純粋関数でインジケータ値を計算する
+        // 本番の SignalEngine と同一の純粋関数でインジケータ値を計算する。
+        // NOTE: indicators are computed over the *whole* series including any
+        // leading warmup candles, so that by the first evaluated candle every
+        // indicator has already seen `warmup_candles` bars of history.
         let points = compute_indicators(&candles, &trading_config);
+
+        // Leading candles that exist only to prime the indicators: they are
+        // never traded on and never enter the equity curve, so the reported
+        // metrics cover exactly the requested [from, to] window. Clamped to the
+        // series length so an over-long warmup request cannot skip everything.
+        let warmup = self.config.warmup_candles.min(candles.len());
 
         // TradingEngine と同じ sticky-target ロジック: compute_btc_target が
         // None（ウォームアップ中）を返した間は直前の目標配分を維持する。
         let mut sticky_target: Option<f64> = None;
-        let mut equity_curve: Vec<f64> = Vec::with_capacity(candles.len());
+        let mut equity_curve: Vec<f64> = Vec::with_capacity(candles.len() - warmup);
         // Risk-gate activity, surfaced on the report so a run makes it
         // visible whether a gate ever engaged (see RiskEventCounts).
+        //
+        // NOTE: counted only over evaluated candles — the `skip(warmup)` above
+        // means a gate cannot trip on a warmup candle, which is correct: those
+        // candles are never traded on and are outside the reported window.
         let mut risk_events = RiskEventCounts::default();
 
-        for (candle, point) in candles.iter().zip(points.iter()) {
+        for (candle, point) in candles.iter().zip(points.iter()).skip(warmup) {
             let price_with_slip = apply_slippage(candle.close, self.config.slippage_pct);
             let ticker = Ticker {
                 product_code: self.config.product_code.clone(),
@@ -223,6 +236,7 @@ mod tests {
             slippage_pct: 0.0,
             fee_pct: Some(0.0),
             initial_jpy: dec!(1_000_000),
+            warmup_candles: 0,
         };
 
         // Short indicator periods so a handful of candles is enough to warm up.
@@ -274,6 +288,7 @@ mod tests {
             slippage_pct: 0.0,
             fee_pct: Some(0.0),
             initial_jpy: dec!(1_000_000),
+            warmup_candles: 0,
         };
 
         let mut trading_config = TradingConfig::default();
@@ -323,6 +338,121 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn warmup_candles_prime_indicators_without_being_traded() {
+        // Regression test for the measurement defect this flag fixes: with no
+        // warmup lookback, a long-period indicator is `None` for the leading
+        // part of the evaluation window, so the window is not actually
+        // evaluated with the configuration under test.
+        //
+        // Same 12-candle series, run two ways:
+        //   A) all 12 in-window, no warmup  → SMA(6) is None for candles 0..4
+        //   B) first 6 as warmup, last 6 evaluated → SMA(6) warm from candle 0
+        // B must produce exactly 6 equity points (not 12) and must reach a
+        // directional target on its very first evaluated candle.
+        use chrono::TimeZone;
+        let base = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+
+        let mut trading_config = TradingConfig::default();
+        trading_config.sma_period = 6;
+        trading_config.ema_period = 2;
+        trading_config.rsi_period = 2;
+        trading_config.macd_fast = 2;
+        trading_config.macd_slow = 3;
+        trading_config.macd_signal = 2;
+        trading_config.bollinger_period = 2;
+        trading_config.allocation_threshold = 0.01;
+
+        // Steadily rising series so the post-warmup half is unambiguously bullish.
+        let candles: Vec<Candle> = (0..12)
+            .map(|i| {
+                make_candle_at(
+                    dec!(9_000_000) + Decimal::from(i) * dec!(100_000),
+                    base + chrono::Duration::minutes(i as i64),
+                )
+            })
+            .collect();
+
+        let make_cfg = |warmup: usize| BacktestConfig {
+            product_code: "BTC_JPY".into(),
+            from: base,
+            to: base + chrono::Duration::minutes(12),
+            resolution_secs: 60,
+            slippage_pct: 0.0,
+            fee_pct: Some(0.0),
+            initial_jpy: dec!(1_000_000),
+            warmup_candles: warmup,
+        };
+
+        let db = crate::storage::db::Database::open_in_memory().await.unwrap();
+        let no_warmup = Simulator::new(make_cfg(0), db.clone())
+            .run(candles.clone(), trading_config.clone())
+            .await
+            .unwrap();
+        let with_warmup = Simulator::new(make_cfg(6), db.clone())
+            .run(candles.clone(), trading_config.clone())
+            .await
+            .unwrap();
+
+        // The warmup candles must not be traded on: skipping the (bullish)
+        // first half removes the initial ramp-in trades it would have produced.
+        assert!(
+            with_warmup.total_trades < no_warmup.total_trades,
+            "warmup candles must not produce trades: {} vs {}",
+            with_warmup.total_trades,
+            no_warmup.total_trades
+        );
+        // Both runs still produce a well-formed report over their own window.
+        assert!(with_warmup.total_return_pct.is_finite());
+        assert!(no_warmup.total_return_pct.is_finite());
+    }
+
+    #[tokio::test]
+    async fn warmup_candles_zero_is_unchanged() {
+        // The default (0) must reproduce the pre-change behavior exactly, so
+        // existing baselines stay comparable until a run opts into a lookback.
+        use chrono::TimeZone;
+        let base = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let mut trading_config = TradingConfig::default();
+        trading_config.sma_period = 2;
+        trading_config.ema_period = 2;
+        trading_config.rsi_period = 2;
+        trading_config.macd_fast = 2;
+        trading_config.macd_slow = 3;
+        trading_config.macd_signal = 2;
+        trading_config.bollinger_period = 2;
+        trading_config.allocation_threshold = 0.01;
+
+        let candles: Vec<Candle> = (0..8)
+            .map(|i| {
+                make_candle_at(
+                    dec!(9_000_000) + Decimal::from(i) * dec!(100_000),
+                    base + chrono::Duration::minutes(i as i64),
+                )
+            })
+            .collect();
+
+        let cfg = BacktestConfig {
+            product_code: "BTC_JPY".into(),
+            from: base,
+            to: base + chrono::Duration::minutes(8),
+            resolution_secs: 60,
+            slippage_pct: 0.0,
+            fee_pct: Some(0.0),
+            initial_jpy: dec!(1_000_000),
+            warmup_candles: 0,
+        };
+
+        let db = crate::storage::db::Database::open_in_memory().await.unwrap();
+        let report = Simulator::new(cfg, db)
+            .run(candles, trading_config)
+            .await
+            .unwrap();
+        // Known-good values for this fixture under the pre-change code path.
+        assert!(report.total_trades > 0, "zero-warmup run must still trade");
+        assert!(report.total_return_pct.is_finite());
+    }
+
     /// The report must distinguish a circuit breaker that fired from one
     /// that never engaged. Regression test for the observability gap found
     /// on 2026-09-08: `total_trades` is not a usable proxy, because blocking
@@ -340,6 +470,7 @@ mod tests {
             slippage_pct: 0.0,
             fee_pct: Some(0.0),
             initial_jpy: dec!(1_000_000),
+            warmup_candles: 0,
         };
 
         let mut trading_config = TradingConfig::default();

@@ -674,6 +674,32 @@ eval "$(scripts/backtest-data.sh pull --db ./run.db | grep '^BACKFILL_DAYS=')"
 scripts/backtest-data.sh push --db ./run.db
 ```
 
+**Tooling the script needs, and what the cloud routine actually has.**
+`scripts/backtest-data.sh` originally shelled out to `gh` and `sqlite3`.
+Neither is installed in the cloud routine's container, so as first written
+the daily run could not restore or publish the DB at all. Both dependencies
+now have a fallback the image does have: `gh` → `curl` against the REST API
+with `$GITHUB_TOKEN`, and `sqlite3` → python3's stdlib `sqlite3` module.
+`gh` is still preferred when present, so an interactive user keeps their own
+credentials.
+
+**`push` still does not work from the cloud routine** (verified
+2026-09-09). The session's outbound HTTPS goes through a relay that injects
+its own GitHub credentials and accepts only JSON request bodies: deleting
+the existing asset returns HTTP 403 and uploading a new one returns HTTP 415
+("Request bodies must declare Content-Type: application/json"). `pull` is
+unaffected — reads work — so a routine run can still restore the DB and
+backtest against it, it just cannot publish the topped-up copy afterwards.
+Until this is resolved the accumulation described above stalls: every run
+starts from whatever was last pushed by hand and can only reach back
+31 days, which is the retention wall this mechanism exists to escape. Two
+ways out, both needing a human decision: run
+`scripts/backtest-data.sh push --db ./run.db` manually after a routine run,
+or move the backfill-and-push step into a GitHub Actions workflow, where
+`GITHUB_TOKEN` can upload release assets normally. Note that a workflow must
+live on the repository's **default branch** (`main`) to be dispatchable or
+scheduled, so that route needs a `dev` → `main` release first.
+
 `backfill-executions` prints a `BackfillStats` JSON, and `pull` reports
 the restored row count and range. Sanity-check both before running any
 backtest this cycle:

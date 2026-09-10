@@ -158,5 +158,29 @@
     "verdict": "rejected",
     "sharpe_improvement_pct": 1.954207468767919,
     "report_path": "experiments/reports/2026-09-09.md"
+  },
+  {
+    "name": "code-default-allocation-threshold",
+    "content_hash": "6c19ca281a4727f645a06da0a9b47cf904d73657c2b2dbcedcd3623575c11f46",
+    "tried_at": "2026-09-10T19:15:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 0.7730859849932461,
+    "report_path": "experiments/reports/2026-09-10.md"
+  },
+  {
+    "name": "reversion-horizon-15m",
+    "content_hash": "b95d16536890426797414b1eb3d330315a9c2cfaf07342d273eb4d6439fc7e17",
+    "tried_at": "2026-09-10T19:15:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -7.874660226799847,
+    "report_path": "experiments/reports/2026-09-10.md"
+  },
+  {
+    "name": "rolling-vol-scaled-exposure",
+    "content_hash": "149338ee1ac992818ca357cf0e9132bd4fa9f38265ef469ff42f71ce0bb9211f",
+    "tried_at": "2026-09-10T19:15:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -1.8982314641435067,
+    "report_path": "experiments/reports/2026-09-10.md"
   }
 ]

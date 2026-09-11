@@ -37,6 +37,7 @@ a vague instruction.
 | PR granularity | one PR per promoted variant |
 | Backtest resolution | **60s (1m) candles** — matches live trading; see "Resolution must match live" below |
 | Evaluation capital | every backtest is run at **50,000 / 500,000 / 5,000,000 JPY**; promotion is decided at **50,000 JPY** alone, the other two are reported diagnostics with no veto — see "Evaluation capital" below |
+| Benchmark | every run reports 100% buy-and-hold and a matched-exposure static mix; **reported and warned on, never a promotion gate** — see "Benchmarks" below |
 | New hypotheses generated per run | at most 3 (see "Hypothesis generation" below) |
 | Trade frequency | **non-binding guideline**: roughly 4-10 trades/day (see below) |
 
@@ -146,6 +147,66 @@ every comparison shared the same distortion.
 Do not raise it for the daily cycle. An ad-hoc coarser run is fine for
 eyeballing a long-horizon effect, but a promotion decision made at any
 resolution other than 60s does not transfer to live trading.
+
+### Benchmarks: is the bot worth running at all?
+
+The promotion rule compares a candidate against the current baseline. That
+is the right gradient for making the loop converge, but it says nothing
+about whether the whole strategy beats doing nothing — a loop optimizing
+variant against variant can climb a hill that is below sea level. Every
+backtest therefore also computes two benchmarks over the identical
+evaluated window, at the same capital, paying the same slippage and a
+single entry commission:
+
+- **100% buy-and-hold** — one buy at the first evaluated candle, then hold.
+- **Static mix** — the same, but sized at the run's own
+  `avg_btc_exposure`, holding the rest as JPY.
+
+**The static mix is the fair comparison.** This strategy is an allocation
+model that averages roughly 55% BTC exposure, so measuring it against 100%
+buy-and-hold compares two different risk levels and mostly measures
+exposure, not skill. Matching the exposure isolates whether the *timing*
+earned anything. `excess_return_vs_static_mix_pct` and
+`sharpe_minus_static_mix` are the headline numbers: positive means the
+trading paid for itself.
+
+What this measured on 2026-09-11 (2026-08-10 .. 2026-09-09, real 1-minute
+bars — see `experiments/reports/2026-09-11-capital-and-fee-study.md`):
+
+| | Return | Sharpe | Max DD | Trades |
+|---|---|---|---|---|
+| 100% buy-and-hold | +19.63% | 6.73 | 7.67% | 1 |
+| Static 55% BTC | +10.78% | 6.46 | 4.65% | 1 |
+| Strategy, zero fee | +10.87% | **7.36** | 3.28% | 1635 |
+| Strategy @5,000,000 JPY | +7.00% | 4.94 | 4.01% | 1635 |
+| Strategy @500,000 JPY | +0.92% | 0.86 | 5.69% | 1635 |
+
+Read that carefully, because it is the single most important fact this
+pipeline has established. **The signal has a real edge** — at zero fees
+its Sharpe of 7.36 beats both benchmarks and its drawdown is the lowest of
+any row. **The fees then destroy it entirely**: at every capital level the
+fee-paying strategy loses to a static mix that requires exactly one trade,
+on return *and* on Sharpe. The implication for hypothesis generation is
+direct — cost reduction is worth more than signal work right now.
+
+**Why this is not a promotion gate.** The measurement above covers one
+30-day bull window. Static long exposure is structurally strong in a
+rising market, so "must beat the benchmark" would promote nothing in a
+bull window and almost anything in a bear one — the gate would measure the
+regime rather than the strategy. Promotion therefore stays exactly as
+defined in "Fixed parameters": candidate versus baseline, on Sharpe,
+drawdown and trade count.
+
+**The warning rule.** When the *baseline's* `sharpe_minus_static_mix` is
+negative, the day's report must open with a `> **WARNING**` block stating
+the deficit, before the baseline section. If it is negative for **three
+consecutive runs**, the report must additionally state that the running
+instance is currently worse than a one-trade static allocation, and at
+least one of that run's generated hypotheses must target trading cost
+(turnover, fee tier, or the minimum-notional path) rather than signal
+quality. This is the one place where a reported diagnostic is allowed to
+constrain what gets proposed — it constrains *hypothesis generation*,
+never the promotion verdict.
 
 ### Evaluation capital: three levels, one decides
 
@@ -561,6 +622,21 @@ Write `experiments/reports/<YYYY-MM-DD>.md` (UTC date) with:
 ```markdown
 # Self-improvement report — <date>
 
+## Benchmark
+<Lead with this section. If the baseline's `sharpe_minus_static_mix` is
+negative, open the whole report with a `> **WARNING**` block per the
+warning rule in "Benchmarks" above, before this table.>
+
+| | Return % | Sharpe | Max DD % | Trades |
+|---|---|---|---|---|
+| Strategy (50,000 JPY, primary) | ... | ... | ... | ... |
+| Static mix @ avg exposure <x.xx> | ... | ... | ... | 1 |
+| 100% buy-and-hold | ... | ... | ... | 1 |
+
+Excess vs static mix: <excess_return_vs_static_mix_pct> pp return,
+<sharpe_minus_static_mix> Sharpe. <One sentence: did the trading earn its
+costs this run, and is this the Nth consecutive run in which it did not?>
+
 ## Baseline
 <the 50,000 JPY BacktestReport JSON in full — this is the primary,
 promotion-deciding run — plus 1-2 sentences of context: any notable
@@ -704,7 +780,13 @@ hypothesis from Step 1. Read (in order of priority):
    entry).
 3. The current indicator/config code (`src/config.rs`, `src/signal/`) to
    know what fields and indicators actually exist.
-4. The baseline's **cost metrics** — `fee_drag_pct` against
+4. The baseline's **benchmark deficit** — `sharpe_minus_static_mix` and
+   `excess_return_vs_static_mix_pct`. A negative value means the strategy
+   is currently worth less than a one-trade static allocation, which makes
+   it the highest-priority lead available, ahead of any signal idea. After
+   three consecutive negative runs at least one new hypothesis must target
+   trading cost; see the warning rule under "Benchmarks".
+5. The baseline's **cost metrics** — `fee_drag_pct` against
    `total_return_pct`, and `effective_fee_pct` against the break-even
    commission recorded in the most recent capital study. This strategy
    turns over roughly 200x its equity per 30 days, so its P&L is close to

@@ -160,12 +160,11 @@ Two consequences, neither currently visible in a report:
   constant-volume VWMA recorded in `tried.json`, where a 0.0 delta was
   arithmetic rather than evidence.
 
-The `0.30` row is not a discovery: 14 trades over 30 days is a hold, and
-buy-and-hold returned +19.63% over the same window. No configuration in
-any table here beats simply holding BTC. The strategy's zero-fee ceiling
-of +10.87% is about half the market move, which is what a
-partial-allocation model should produce; fees then take 34-90% of that
-half depending on capital.
+The `0.30` row is not a discovery: 14 trades over 30 days is a hold. The
+strategy's zero-fee ceiling of +10.87% is about half the market move,
+which is what a partial-allocation model should produce; fees then take
+34-90% of that half depending on capital. Result 4 puts that against the
+proper benchmarks.
 
 ### The turnover/tier trade-off is sublinear
 
@@ -175,6 +174,50 @@ threshold from 0.05 to 0.25 cuts volume by **4.4x** (176.9M → 39.8M) but
 total fees by only **2.3x** (62,277 → 26,885 JPY), because the effective
 rate nearly doubles (0.0352% → 0.0676%). Any "trade less to save fees"
 hypothesis must be scored on fees paid, not on trade count.
+
+## Result 4 — the edge is real, and the fees eat all of it
+
+Benchmarks computed over the identical window, same slippage (0.1%) and a
+single entry commission at the 0.15% entry tier. The static mix is sized
+at the strategy's own average BTC exposure (~55%), which is the fair
+comparison: measuring a partial-exposure allocation model against 100%
+buy-and-hold mostly measures exposure rather than skill.
+
+| | Return | Sharpe | Max DD | Trades |
+|---|---|---|---|---|
+| 100% buy-and-hold | +19.63% | 6.73 | 7.67% | 1 |
+| Static 30% BTC | +5.88% | 6.29 | 2.69% | 1 |
+| Static 50% BTC | +9.80% | 6.43 | 4.28% | 1 |
+| **Static 55% BTC** | **+10.78%** | **6.46** | **4.65%** | **1** |
+| Static 70% BTC | +13.73% | 6.55 | 5.73% | 1 |
+| Strategy, zero fee | +10.87% | **7.36** | **3.28%** | 1635 |
+| Strategy @5,000,000 | +7.00% | 4.94 | 4.01% | 1635 |
+| Strategy @1,000,000 | +3.64% | 2.72 | 4.73% | 1635 |
+| Strategy @500,000 | +0.92% | 0.86 | 5.69% | 1635 |
+| Strategy @50,000 | +2.35% | 1.94 | 5.74% | 286 |
+
+Two findings, and they point in opposite directions:
+
+- **The timing logic has a genuine edge.** At zero fees the strategy's
+  Sharpe of 7.36 beats 100% buy-and-hold (6.73) and every static mix, and
+  its 3.28% max drawdown is the lowest figure in the table. This is not a
+  strategy that merely tracks its exposure.
+- **The fees consume the entire edge.** Once real commissions apply, every
+  capital level loses to the static 55% mix on **both** return and Sharpe
+  — to a benchmark that requires exactly one trade. The best case,
+  5,000,000 JPY, returns +7.00% at Sharpe 4.94 against the benchmark's
+  +10.78% at 6.46, while carrying the execution risk of 1635 orders.
+
+So the earlier framing in Result 3 ("no configuration beats holding") was
+right but incomplete: the shortfall is not a risk-taking story that Sharpe
+would forgive, and it is not a signal-quality problem either. It is
+entirely a cost problem. **Cost reduction is worth more than signal work
+until this gap closes.**
+
+Caveat: one 30-day bull window. Static long exposure is structurally
+strong in a rising market, which is why the loop reports this comparison
+and warns on it but does not gate promotion on it — a benchmark gate would
+measure the regime rather than the strategy.
 
 ## Implications for the loop
 
@@ -186,6 +229,13 @@ hypothesis must be scored on fees paid, not on trade count.
 3. Fee-adaptive logic is now a measured direction, not speculation:
    Result 2 shows the commission rate, not signal quality, decides
    whether this strategy makes money.
+4. **Every run now reports the buy-and-hold and matched-exposure static
+   benchmarks**, and warns when the baseline loses to them (owner's
+   decision, 2026-09-11). They are reported and warned on, never a
+   promotion gate — see "Benchmarks" in `docs/self-improvement-loop.md`
+   for why a benchmark gate would measure the regime rather than the
+   strategy. After three consecutive losing runs, at least one generated
+   hypothesis must target trading cost.
 
 ## Hypotheses generated
 

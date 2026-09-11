@@ -20,7 +20,12 @@ pub fn format_report(report: &BacktestReport) -> String {
          Total Fees   : {:.2} JPY\n\
          Traded Volume: {:.2} JPY\n\
          Effective Fee: {:.4}%\n\
-         Fee Drag     : {:.2}%",
+         Fee Drag     : {:.2}%\n\
+         --- Benchmarks (reported diagnostic — NOT a promotion gate) ---\n\
+         Avg BTC Exp. : {:.1}%\n\
+         Hold Return  : {:.2}% (Sharpe {:.3}, MaxDD {:.2}%)\n\
+         Static Mix   : {:.2}% (Sharpe {:.3}, MaxDD {:.2}%)\n\
+         Excess vs Mix: {:.2}pp (Sharpe {:+.3})",
         report.total_return_pct,
         report.sharpe_ratio,
         report.max_drawdown_pct,
@@ -32,6 +37,15 @@ pub fn format_report(report: &BacktestReport) -> String {
         report.traded_volume_jpy,
         report.effective_fee_pct * 100.0,
         report.fee_drag_pct,
+        report.avg_btc_exposure * 100.0,
+        report.hold_return_pct,
+        report.hold_sharpe_ratio,
+        report.hold_max_drawdown_pct,
+        report.static_mix_return_pct,
+        report.static_mix_sharpe_ratio,
+        report.static_mix_max_drawdown_pct,
+        report.excess_return_vs_static_mix_pct,
+        report.sharpe_minus_static_mix,
     )
 }
 
@@ -43,6 +57,13 @@ pub fn format_report(report: &BacktestReport) -> String {
 /// run used a fixed fee override (`MockExchangeClient::with_fee`) instead
 /// of the tier table, so `final_fee_tier_pct` reports that fixed rate
 /// rather than a tier lookup that was never actually applied.
+///
+/// `avg_btc_exposure` and `evaluated_closes` feed the buy-and-hold /
+/// static-mix benchmarks (see `benchmark_equity_curve`); `evaluated_closes`
+/// must be exactly the raw `candle.close` values of the *evaluated* candles
+/// (warmup excluded, same length/order as `equity_curve`) or the benchmark
+/// silently includes candles the strategy itself never traded on.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compute_report(
     trades: &[FilledTrade],
     equity_curve: &[f64],
@@ -50,6 +71,9 @@ pub(crate) fn compute_report(
     resolution_secs: u32,
     risk_events: RiskEventCounts,
     fixed_fee_pct: Option<f64>,
+    avg_btc_exposure: f64,
+    evaluated_closes: &[f64],
+    slippage_pct: f64,
 ) -> BacktestReport {
     let total_trades = trades.len() as u32;
 
@@ -93,6 +117,35 @@ pub(crate) fn compute_report(
         total_fees_jpy / initial_jpy * 100.0
     };
 
+    // NOTE: benchmark entry commission uses `fixed_fee_pct` when the run
+    // fixed its fee rate, otherwise the entry tier (0.0015) rather than
+    // `final_fee_tier_pct` (the tier reached only after the run's *own*
+    // cumulative volume). bitFlyer's tiers key on the prior 30-day volume,
+    // so a fresh account's very first trade is always charged the top
+    // (10万円未満) tier — this is deliberately conservative *against* the
+    // benchmark (it is charged the worst plausible rate for a single
+    // isolated trade), so it never flatters the benchmark relative to the
+    // strategy.
+    const ENTRY_TIER_FEE_PCT: f64 = 0.0015;
+    let benchmark_entry_fee_pct = fixed_fee_pct.unwrap_or(ENTRY_TIER_FEE_PCT);
+
+    let hold_curve =
+        benchmark_equity_curve(evaluated_closes, initial_jpy, 1.0, slippage_pct, benchmark_entry_fee_pct);
+    let hold_return_pct = benchmark_return_pct(&hold_curve, initial_jpy);
+    let hold_sharpe_ratio = calculate_sharpe(&hold_curve, resolution_secs);
+    let hold_max_drawdown_pct = calculate_max_drawdown(&hold_curve);
+
+    let static_mix_curve = benchmark_equity_curve(
+        evaluated_closes,
+        initial_jpy,
+        avg_btc_exposure,
+        slippage_pct,
+        benchmark_entry_fee_pct,
+    );
+    let static_mix_return_pct = benchmark_return_pct(&static_mix_curve, initial_jpy);
+    let static_mix_sharpe_ratio = calculate_sharpe(&static_mix_curve, resolution_secs);
+    let static_mix_max_drawdown_pct = calculate_max_drawdown(&static_mix_curve);
+
     BacktestReport {
         total_return_pct,
         sharpe_ratio,
@@ -106,7 +159,62 @@ pub(crate) fn compute_report(
         effective_fee_pct,
         final_fee_tier_pct,
         fee_drag_pct,
+        avg_btc_exposure,
+        hold_return_pct,
+        hold_sharpe_ratio,
+        hold_max_drawdown_pct,
+        static_mix_return_pct,
+        static_mix_sharpe_ratio,
+        static_mix_max_drawdown_pct,
+        excess_return_vs_static_mix_pct: total_return_pct - static_mix_return_pct,
+        sharpe_minus_static_mix: sharpe_ratio - static_mix_sharpe_ratio,
     }
+}
+
+/// Build a benchmark equity curve for a single entry-and-hold position:
+/// buy `exposure_fraction` of `initial_jpy` (inclusive of a single entry
+/// commission `entry_fee_pct`) worth of BTC at `closes[0]` plus
+/// `slippage_pct` slippage, hold the rest of the balance as JPY, then mark
+/// to market at every subsequent close in `closes` — using the raw close
+/// (no slippage on marks), matching how `Simulator::run` marks its own
+/// equity curve.
+///
+/// `notional + fee == exposure_fraction * initial_jpy` by construction, so
+/// the JPY held back is exactly `initial_jpy * (1 - exposure_fraction)`:
+///
+///   entry_price = closes[0] * (1 + slippage_pct)
+///   notional     = exposure_fraction * initial_jpy / (1 + entry_fee_pct)
+///   btc_qty      = notional / entry_price
+///   jpy_held     = initial_jpy * (1 - exposure_fraction)
+///   equity[t]    = jpy_held + btc_qty * closes[t]
+///
+/// Returns an empty curve when `closes` is empty.
+pub(crate) fn benchmark_equity_curve(
+    closes: &[f64],
+    initial_jpy: f64,
+    exposure_fraction: f64,
+    slippage_pct: f64,
+    entry_fee_pct: f64,
+) -> Vec<f64> {
+    if closes.is_empty() {
+        return Vec::new();
+    }
+    let entry_price = closes[0] * (1.0 + slippage_pct);
+    let notional = exposure_fraction * initial_jpy / (1.0 + entry_fee_pct);
+    let btc_qty = if entry_price > 0.0 { notional / entry_price } else { 0.0 };
+    let jpy_held = initial_jpy * (1.0 - exposure_fraction);
+    closes.iter().map(|&c| jpy_held + btc_qty * c).collect()
+}
+
+/// Total return (%) of a benchmark curve relative to `initial_jpy`. Returns
+/// 0.0 for an empty curve or a zero `initial_jpy` rather than dividing by
+/// zero.
+fn benchmark_return_pct(curve: &[f64], initial_jpy: f64) -> f64 {
+    if initial_jpy == 0.0 {
+        return 0.0;
+    }
+    let final_equity = curve.last().copied().unwrap_or(initial_jpy);
+    (final_equity - initial_jpy) / initial_jpy * 100.0
 }
 
 /// Calculate the maximum peak-to-trough drawdown as a percentage.
@@ -118,7 +226,10 @@ pub(crate) fn compute_report(
 ///
 /// The maximum such value across the entire series is returned.
 /// Returns 0.0 for an empty series.
-fn calculate_max_drawdown(equity: &[f64]) -> f64 {
+///
+/// `pub(crate)` so the buy-and-hold/static-mix benchmark curves built in
+/// `compute_report` reuse this exact function instead of a second copy.
+pub(crate) fn calculate_max_drawdown(equity: &[f64]) -> f64 {
     if equity.is_empty() {
         return 0.0;
     }
@@ -157,7 +268,12 @@ const SECONDS_PER_YEAR: f64 = 365.0 * 24.0 * 60.0 * 60.0;
 ///
 /// Returns 0.0 for flat or insufficient equity data, and for a
 /// `resolution_secs` of 0 (no meaningful period length).
-fn calculate_sharpe(equity: &[f64], resolution_secs: u32) -> f64 {
+///
+/// `pub(crate)` so the buy-and-hold/static-mix benchmark curves built in
+/// `compute_report` reuse this exact function instead of a second copy —
+/// the annualization must use the same `resolution_secs` as the
+/// strategy's own Sharpe, or the comparison is meaningless.
+pub(crate) fn calculate_sharpe(equity: &[f64], resolution_secs: u32) -> f64 {
     if equity.len() < 2 || resolution_secs == 0 {
         return 0.0;
     }
@@ -358,6 +474,15 @@ mod tests {
             effective_fee_pct: 0.00125,
             final_fee_tier_pct: 0.0011,
             fee_drag_pct: 0.12,
+            avg_btc_exposure: 0.55,
+            hold_return_pct: 19.6,
+            hold_sharpe_ratio: 6.7,
+            hold_max_drawdown_pct: 7.7,
+            static_mix_return_pct: 10.8,
+            static_mix_sharpe_ratio: 6.5,
+            static_mix_max_drawdown_pct: 4.6,
+            excess_return_vs_static_mix_pct: 1.5,
+            sharpe_minus_static_mix: 0.86,
         };
         let s = format_report(&report);
         assert!(s.contains("12.34"));
@@ -371,6 +496,10 @@ mod tests {
         assert!(s.contains("Traded Volume: 987654.00 JPY"));
         assert!(s.contains("Effective Fee: 0.1250%"));
         assert!(s.contains("Fee Drag     : 0.12%"));
+        assert!(s.contains("Avg BTC Exp. : 55.0%"));
+        assert!(s.contains("Hold Return  : 19.60%"));
+        assert!(s.contains("Static Mix   : 10.80%"));
+        assert!(s.contains("Excess vs Mix: 1.50pp"));
     }
 
     /// The annualization factor must follow `resolution_secs`; a 1h
@@ -414,6 +543,15 @@ mod tests {
             effective_fee_pct: 0.0,
             final_fee_tier_pct: 0.0,
             fee_drag_pct: 0.0,
+            avg_btc_exposure: 0.0,
+            hold_return_pct: 0.0,
+            hold_sharpe_ratio: 0.0,
+            hold_max_drawdown_pct: 0.0,
+            static_mix_return_pct: 0.0,
+            static_mix_sharpe_ratio: 0.0,
+            static_mix_max_drawdown_pct: 0.0,
+            excess_return_vs_static_mix_pct: 0.0,
+            sharpe_minus_static_mix: 0.0,
         }
     }
 
@@ -489,6 +627,7 @@ mod tests {
             },
         ];
         let equity_curve = vec![1_000_000.0, 1_000_500.0];
+        let evaluated_closes = vec![9_000_000.0, 9_500_000.0];
 
         let report = compute_report(
             &trades,
@@ -497,6 +636,9 @@ mod tests {
             60,
             RiskEventCounts::default(),
             Some(0.0015),
+            0.5,
+            &evaluated_closes,
+            0.0,
         );
 
         // total_fees_jpy = 13.5 + 14.25
@@ -522,6 +664,9 @@ mod tests {
             60,
             RiskEventCounts::default(),
             None,
+            0.0,
+            &[9_000_000.0],
+            0.0,
         );
         assert_eq!(report.total_fees_jpy, 0.0);
         assert_eq!(report.traded_volume_jpy, 0.0);
@@ -553,6 +698,116 @@ mod tests {
         assert_eq!(report.effective_fee_pct, 0.0);
         assert_eq!(report.final_fee_tier_pct, 0.0);
         assert_eq!(report.fee_drag_pct, 0.0);
+        // The benchmark fields added in this change must default the same
+        // way for report JSON written before they existed.
+        assert_eq!(report.avg_btc_exposure, 0.0);
+        assert_eq!(report.hold_return_pct, 0.0);
+        assert_eq!(report.hold_sharpe_ratio, 0.0);
+        assert_eq!(report.hold_max_drawdown_pct, 0.0);
+        assert_eq!(report.static_mix_return_pct, 0.0);
+        assert_eq!(report.static_mix_sharpe_ratio, 0.0);
+        assert_eq!(report.static_mix_max_drawdown_pct, 0.0);
+        assert_eq!(report.excess_return_vs_static_mix_pct, 0.0);
+        assert_eq!(report.sharpe_minus_static_mix, 0.0);
+    }
+
+    /// `hold_return_pct` on a strictly monotonically rising price series
+    /// must equal the price change minus entry costs, computed by hand
+    /// (not via `benchmark_equity_curve` — that would just restate the
+    /// implementation under test).
+    #[test]
+    fn hold_return_matches_hand_computed_value_on_rising_series() {
+        let evaluated_closes = vec![9_000_000.0, 10_000_000.0];
+        let slippage_pct = 0.001;
+        let fee_pct = 0.0015;
+
+        let report = compute_report(
+            &[],
+            &[1_000_000.0, 1_000_000.0], // strategy's own equity curve is irrelevant here
+            1_000_000.0,
+            60,
+            RiskEventCounts::default(),
+            Some(fee_pct),
+            0.5, // avg_btc_exposure is irrelevant to the hold benchmark
+            &evaluated_closes,
+            slippage_pct,
+        );
+
+        // By hand: entry buys (1 / (1+fee)) JPY-worth of BTC at
+        // close[0]*(1+slippage), then marks to market at close[1].
+        // equity_final / initial = (close[1]/close[0]) / ((1+fee)*(1+slippage))
+        let expected_hold_return_pct =
+            ((10_000_000.0 / 9_000_000.0) / (1.0015 * 1.001) - 1.0) * 100.0;
+        assert!(
+            (report.hold_return_pct - expected_hold_return_pct).abs() < 1e-9,
+            "got {}, expected {}",
+            report.hold_return_pct,
+            expected_hold_return_pct
+        );
+    }
+
+    /// On a flat price series, a full-exposure benchmark curve is constant
+    /// (return is entirely the entry slippage+fee, and there is zero
+    /// variance to annualize into a Sharpe ratio).
+    #[test]
+    fn flat_price_series_benchmark_loses_only_entry_cost_with_zero_sharpe() {
+        let evaluated_closes = vec![9_000_000.0; 5];
+        let slippage_pct = 0.001;
+        let fee_pct = 0.0015;
+
+        let report = compute_report(
+            &[],
+            &[1_000_000.0; 5],
+            1_000_000.0,
+            60,
+            RiskEventCounts::default(),
+            Some(fee_pct),
+            1.0, // full exposure so static-mix == hold on this fixture
+            &evaluated_closes,
+            slippage_pct,
+        );
+
+        let expected_return_pct = (1.0 / (1.0015 * 1.001) - 1.0) * 100.0;
+        assert!(
+            (report.hold_return_pct - expected_return_pct).abs() < 1e-9,
+            "got {}",
+            report.hold_return_pct
+        );
+        assert!(
+            (report.static_mix_return_pct - expected_return_pct).abs() < 1e-9,
+            "got {}",
+            report.static_mix_return_pct
+        );
+        assert_eq!(report.hold_sharpe_ratio, 0.0);
+        assert_eq!(report.static_mix_sharpe_ratio, 0.0);
+    }
+
+    /// When `avg_btc_exposure == 1.0`, the static-mix benchmark is buying
+    /// the entire balance too — it must equal the buy-and-hold benchmark
+    /// exactly, not just approximately.
+    #[test]
+    fn static_mix_equals_hold_when_avg_exposure_is_full() {
+        let evaluated_closes = vec![9_000_000.0, 9_200_000.0, 8_900_000.0, 9_500_000.0];
+
+        let report = compute_report(
+            &[],
+            &[1_000_000.0; 4],
+            1_000_000.0,
+            60,
+            RiskEventCounts::default(),
+            Some(0.0015),
+            1.0,
+            &evaluated_closes,
+            0.001,
+        );
+
+        assert_eq!(report.static_mix_return_pct, report.hold_return_pct);
+        assert_eq!(report.static_mix_sharpe_ratio, report.hold_sharpe_ratio);
+        assert_eq!(report.static_mix_max_drawdown_pct, report.hold_max_drawdown_pct);
+        assert_eq!(
+            report.excess_return_vs_static_mix_pct,
+            report.total_return_pct - report.hold_return_pct
+        );
     }
 
     #[test]

@@ -91,6 +91,62 @@ pub struct BacktestReport {
     /// N percentage points of the return"). 0.0 when `initial_jpy` is 0.
     #[serde(default)]
     pub fee_drag_pct: f64,
+    /// Mean BTC allocation fraction (`btc_value / total`) across every
+    /// *evaluated* candle (warmup candles excluded), 0.0-1.0. This is the
+    /// strategy's own average exposure to BTC over the run, and is the
+    /// weight used to build the `static_mix_*` benchmark below so that the
+    /// benchmark matches the strategy's own average risk level.
+    ///
+    /// NOTE: `#[serde(default)]` so older report JSON (written before this
+    /// field existed) still parses.
+    #[serde(default)]
+    pub avg_btc_exposure: f64,
+    /// Buy-and-hold benchmark: total return (%) of a single market buy of
+    /// the entire `initial_jpy` balance at the first evaluated candle
+    /// (paying `slippage_pct` and a single entry commission), held and
+    /// marked to market at every subsequent evaluated candle's close.
+    /// Computed over exactly the same evaluated candle slice as the
+    /// strategy itself (warmup candles excluded from both).
+    #[serde(default)]
+    pub hold_return_pct: f64,
+    /// Annualized Sharpe ratio of the buy-and-hold benchmark curve, using
+    /// the same `calculate_sharpe` function and `resolution_secs` as the
+    /// strategy's own `sharpe_ratio` so the two are directly comparable.
+    #[serde(default)]
+    pub hold_sharpe_ratio: f64,
+    /// Maximum peak-to-trough drawdown (%) of the buy-and-hold benchmark
+    /// curve, via the same `calculate_max_drawdown` function used for
+    /// `max_drawdown_pct`.
+    #[serde(default)]
+    pub hold_max_drawdown_pct: f64,
+    /// Static-mix benchmark: like `hold_return_pct`, but only
+    /// `avg_btc_exposure` of the balance is bought at entry (paying the
+    /// same slippage/commission), with the rest held as JPY. This is the
+    /// fair comparison against the strategy: it matches the strategy's own
+    /// average exposure, isolating timing skill from exposure level. When
+    /// `avg_btc_exposure == 1.0` this is identical to the hold benchmark.
+    #[serde(default)]
+    pub static_mix_return_pct: f64,
+    /// Annualized Sharpe ratio of the static-mix benchmark curve.
+    #[serde(default)]
+    pub static_mix_sharpe_ratio: f64,
+    /// Maximum peak-to-trough drawdown (%) of the static-mix benchmark
+    /// curve.
+    #[serde(default)]
+    pub static_mix_max_drawdown_pct: f64,
+    /// `total_return_pct - static_mix_return_pct`. Positive means the
+    /// strategy's actual return beat a static position matching its own
+    /// average exposure — i.e. its timing earned more than it cost. This
+    /// is a reported diagnostic only; it does not affect the promotion
+    /// rule in `compare()`.
+    #[serde(default)]
+    pub excess_return_vs_static_mix_pct: f64,
+    /// `sharpe_ratio - static_mix_sharpe_ratio`. Positive means the
+    /// strategy earned better risk-adjusted returns than simply holding
+    /// its own average exposure statically. This is a reported diagnostic
+    /// only; it does not affect the promotion rule in `compare()`.
+    #[serde(default)]
+    pub sharpe_minus_static_mix: f64,
 }
 
 /// Risk-gate activity observed during a backtest run.

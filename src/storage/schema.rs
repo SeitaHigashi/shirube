@@ -198,6 +198,29 @@ pub async fn migrate(conn: &Connection) -> Result<()> {
             )?;
         }
 
+        if current_version < 9 {
+            // Buy-and-hold / static-mix benchmark metrics, computed over the
+            // same evaluated candle slice as the run itself, so every saved
+            // report carries a reported diagnostic of whether the strategy
+            // actually beat doing nothing (or doing the static equivalent of
+            // its own average exposure). This is measurement only — it does
+            // not change the promotion rule in `report::compare`. DEFAULT
+            // 0.0 means existing rows read back as 0.0 for these columns.
+            c.execute_batch(
+                "ALTER TABLE backtest_runs ADD COLUMN avg_btc_exposure REAL NOT NULL DEFAULT 0.0;
+                 ALTER TABLE backtest_runs ADD COLUMN hold_return_pct REAL NOT NULL DEFAULT 0.0;
+                 ALTER TABLE backtest_runs ADD COLUMN hold_sharpe_ratio REAL NOT NULL DEFAULT 0.0;
+                 ALTER TABLE backtest_runs ADD COLUMN hold_max_drawdown_pct REAL NOT NULL DEFAULT 0.0;
+                 ALTER TABLE backtest_runs ADD COLUMN static_mix_return_pct REAL NOT NULL DEFAULT 0.0;
+                 ALTER TABLE backtest_runs ADD COLUMN static_mix_sharpe_ratio REAL NOT NULL DEFAULT 0.0;
+                 ALTER TABLE backtest_runs ADD COLUMN static_mix_max_drawdown_pct REAL NOT NULL DEFAULT 0.0;
+                 ALTER TABLE backtest_runs ADD COLUMN excess_return_vs_static_mix_pct REAL NOT NULL DEFAULT 0.0;
+                 ALTER TABLE backtest_runs ADD COLUMN sharpe_minus_static_mix REAL NOT NULL DEFAULT 0.0;
+
+                 INSERT INTO schema_version(version) VALUES(9);",
+            )?;
+        }
+
         Ok(())
     })
     .await?;

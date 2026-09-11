@@ -31,7 +31,7 @@
           # 403 Forbidden on shared CI IPs (GitHub Actions). cargoHash uses
           # fetchCargoVendor (a single `cargo vendor` FOD via cargo's own HTTP
           # client) instead, which does not hit this issue.
-          cargoHash = "sha256-2DKPjzrxx8fkf+0785WnLGuOWA6Z2ySlHoNDSgJqmtk=";
+          cargoHash = "sha256-cOIoAiz/vy6Ty+H3SP5a2NRCOhUN19099FILX9t0NCk=";
 
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = [ pkgs.openssl ];
@@ -53,7 +53,7 @@
           src = ./.;
           # NOTE: see packages.default for why cargoHash (fetchCargoVendor) is
           # used instead of cargoLock.lockFile (importCargoLock).
-          cargoHash = "sha256-2DKPjzrxx8fkf+0785WnLGuOWA6Z2ySlHoNDSgJqmtk=";
+          cargoHash = "sha256-cOIoAiz/vy6Ty+H3SP5a2NRCOhUN19099FILX9t0NCk=";
 
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = [ pkgs.openssl ];

@@ -31,6 +31,20 @@ impl BacktestRunRepository {
         let max_drawdown_pct = report.max_drawdown_pct;
         let win_rate = report.win_rate;
         let total_trades = report.total_trades;
+        let total_fees_jpy = report.total_fees_jpy;
+        let traded_volume_jpy = report.traded_volume_jpy;
+        let effective_fee_pct = report.effective_fee_pct;
+        let final_fee_tier_pct = report.final_fee_tier_pct;
+        let fee_drag_pct = report.fee_drag_pct;
+        let avg_btc_exposure = report.avg_btc_exposure;
+        let hold_return_pct = report.hold_return_pct;
+        let hold_sharpe_ratio = report.hold_sharpe_ratio;
+        let hold_max_drawdown_pct = report.hold_max_drawdown_pct;
+        let static_mix_return_pct = report.static_mix_return_pct;
+        let static_mix_sharpe_ratio = report.static_mix_sharpe_ratio;
+        let static_mix_max_drawdown_pct = report.static_mix_max_drawdown_pct;
+        let excess_return_vs_static_mix_pct = report.excess_return_vs_static_mix_pct;
+        let sharpe_minus_static_mix = report.sharpe_minus_static_mix;
 
         let id = self
             .conn
@@ -40,8 +54,15 @@ impl BacktestRunRepository {
                         product_code, from_time, to_time, resolution_secs,
                         slippage_pct, fee_pct, initial_jpy,
                         total_return_pct, sharpe_ratio, max_drawdown_pct,
-                        win_rate, total_trades
-                    ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+                        win_rate, total_trades,
+                        total_fees_jpy, traded_volume_jpy, effective_fee_pct,
+                        final_fee_tier_pct, fee_drag_pct,
+                        avg_btc_exposure, hold_return_pct, hold_sharpe_ratio,
+                        hold_max_drawdown_pct, static_mix_return_pct,
+                        static_mix_sharpe_ratio, static_mix_max_drawdown_pct,
+                        excess_return_vs_static_mix_pct, sharpe_minus_static_mix
+                    ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,
+                              ?18,?19,?20,?21,?22,?23,?24,?25,?26)",
                     rusqlite::params![
                         product_code,
                         from_time,
@@ -55,6 +76,20 @@ impl BacktestRunRepository {
                         max_drawdown_pct,
                         win_rate,
                         total_trades,
+                        total_fees_jpy,
+                        traded_volume_jpy,
+                        effective_fee_pct,
+                        final_fee_tier_pct,
+                        fee_drag_pct,
+                        avg_btc_exposure,
+                        hold_return_pct,
+                        hold_sharpe_ratio,
+                        hold_max_drawdown_pct,
+                        static_mix_return_pct,
+                        static_mix_sharpe_ratio,
+                        static_mix_max_drawdown_pct,
+                        excess_return_vs_static_mix_pct,
+                        sharpe_minus_static_mix,
                     ],
                 )?;
                 Ok(c.last_insert_rowid())
@@ -75,7 +110,13 @@ impl BacktestRunRepository {
                     "SELECT id, product_code, from_time, to_time, resolution_secs,
                             slippage_pct, fee_pct, initial_jpy,
                             total_return_pct, sharpe_ratio, max_drawdown_pct,
-                            win_rate, total_trades
+                            win_rate, total_trades,
+                            total_fees_jpy, traded_volume_jpy, effective_fee_pct,
+                            final_fee_tier_pct, fee_drag_pct,
+                            avg_btc_exposure, hold_return_pct, hold_sharpe_ratio,
+                            hold_max_drawdown_pct, static_mix_return_pct,
+                            static_mix_sharpe_ratio, static_mix_max_drawdown_pct,
+                            excess_return_vs_static_mix_pct, sharpe_minus_static_mix
                      FROM backtest_runs
                      ORDER BY created_at DESC, id DESC
                      LIMIT ?1",
@@ -95,6 +136,20 @@ impl BacktestRunRepository {
                         row.get::<_, f64>(10)?,
                         row.get::<_, f64>(11)?,
                         row.get::<_, u32>(12)?,
+                        row.get::<_, f64>(13)?,
+                        row.get::<_, f64>(14)?,
+                        row.get::<_, f64>(15)?,
+                        row.get::<_, f64>(16)?,
+                        row.get::<_, f64>(17)?,
+                        row.get::<_, f64>(18)?,
+                        row.get::<_, f64>(19)?,
+                        row.get::<_, f64>(20)?,
+                        row.get::<_, f64>(21)?,
+                        row.get::<_, f64>(22)?,
+                        row.get::<_, f64>(23)?,
+                        row.get::<_, f64>(24)?,
+                        row.get::<_, f64>(25)?,
+                        row.get::<_, f64>(26)?,
                     ))
                 })?;
                 Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -116,6 +171,20 @@ impl BacktestRunRepository {
             max_drawdown_pct,
             win_rate,
             total_trades,
+            total_fees_jpy,
+            traded_volume_jpy,
+            effective_fee_pct,
+            final_fee_tier_pct,
+            fee_drag_pct,
+            avg_btc_exposure,
+            hold_return_pct,
+            hold_sharpe_ratio,
+            hold_max_drawdown_pct,
+            static_mix_return_pct,
+            static_mix_sharpe_ratio,
+            static_mix_max_drawdown_pct,
+            excess_return_vs_static_mix_pct,
+            sharpe_minus_static_mix,
         ) in records
         {
             let from = DateTime::parse_from_rfc3339(&from_time)
@@ -152,6 +221,20 @@ impl BacktestRunRepository {
                     // carries the true values.
                     circuit_breaker_trips: 0,
                     orders_rejected: 0,
+                    total_fees_jpy,
+                    traded_volume_jpy,
+                    effective_fee_pct,
+                    final_fee_tier_pct,
+                    fee_drag_pct,
+                    avg_btc_exposure,
+                    hold_return_pct,
+                    hold_sharpe_ratio,
+                    hold_max_drawdown_pct,
+                    static_mix_return_pct,
+                    static_mix_sharpe_ratio,
+                    static_mix_max_drawdown_pct,
+                    excess_return_vs_static_mix_pct,
+                    sharpe_minus_static_mix,
                 },
             });
         }
@@ -189,6 +272,20 @@ mod tests {
             total_trades: 42,
             circuit_breaker_trips: 0,
             orders_rejected: 0,
+            total_fees_jpy: 123.45,
+            traded_volume_jpy: 98_765.0,
+            effective_fee_pct: 0.00125,
+            final_fee_tier_pct: 0.0011,
+            fee_drag_pct: 0.05,
+            avg_btc_exposure: 0.55,
+            hold_return_pct: 19.6,
+            hold_sharpe_ratio: 6.7,
+            hold_max_drawdown_pct: 7.7,
+            static_mix_return_pct: 10.8,
+            static_mix_sharpe_ratio: 6.5,
+            static_mix_max_drawdown_pct: 4.6,
+            excess_return_vs_static_mix_pct: 0.07,
+            sharpe_minus_static_mix: 0.86,
         }
     }
 
@@ -203,6 +300,22 @@ mod tests {
         let list = repo.list(10).await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].report.total_return_pct, 5.0);
+        // Fee metrics must round-trip through the DB unchanged.
+        assert_eq!(list[0].report.total_fees_jpy, 123.45);
+        assert_eq!(list[0].report.traded_volume_jpy, 98_765.0);
+        assert_eq!(list[0].report.effective_fee_pct, 0.00125);
+        assert_eq!(list[0].report.final_fee_tier_pct, 0.0011);
+        assert_eq!(list[0].report.fee_drag_pct, 0.05);
+        // Benchmark metrics must round-trip through the DB unchanged too.
+        assert_eq!(list[0].report.avg_btc_exposure, 0.55);
+        assert_eq!(list[0].report.hold_return_pct, 19.6);
+        assert_eq!(list[0].report.hold_sharpe_ratio, 6.7);
+        assert_eq!(list[0].report.hold_max_drawdown_pct, 7.7);
+        assert_eq!(list[0].report.static_mix_return_pct, 10.8);
+        assert_eq!(list[0].report.static_mix_sharpe_ratio, 6.5);
+        assert_eq!(list[0].report.static_mix_max_drawdown_pct, 4.6);
+        assert_eq!(list[0].report.excess_return_vs_static_mix_pct, 0.07);
+        assert_eq!(list[0].report.sharpe_minus_static_mix, 0.86);
     }
 
     #[tokio::test]

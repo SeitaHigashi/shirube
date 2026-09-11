@@ -45,7 +45,12 @@ const FEE_TIERS: &[(u64, f64)] = &[
     (0,           0.0015), // 10万円未満
 ];
 
-fn fee_from_volume(volume_jpy: Decimal) -> f64 {
+/// Look up the bitFlyer fee tier rate for a given cumulative traded volume.
+///
+/// `pub(crate)` so `backtest::report::compute_report` can derive
+/// `final_fee_tier_pct` from a run's final traded volume without
+/// duplicating this table.
+pub(crate) fn fee_from_volume(volume_jpy: Decimal) -> f64 {
     use rust_decimal::prelude::ToPrimitive;
     let vol = volume_jpy.to_u64().unwrap_or(0);
     for &(threshold, rate) in FEE_TIERS {
@@ -173,6 +178,17 @@ impl MockExchangeClient {
 
     pub fn filled_trades(&self) -> Vec<FilledTrade> {
         self.filled_trades.read_or_recover().clone()
+    }
+
+    /// Cumulative JPY-denominated traded volume accumulated so far.
+    ///
+    /// NOTE: this is only meaningfully tracked when the client is using the
+    /// tier-based fee schedule (i.e. `override_fee` is `None`) — see
+    /// `send_order`, which skips the `volume_jpy` accumulation entirely
+    /// when a fixed fee override is active, since a fixed rate never
+    /// depends on cumulative volume.
+    pub fn cumulative_volume_jpy(&self) -> Decimal {
+        *self.volume_jpy.read_or_recover()
     }
 
     pub fn jpy_balance(&self) -> Decimal {
@@ -517,6 +533,41 @@ mod tests {
         // BTC残高0のまま売ろうとする
         let result = client.send_order(&sell_req(dec!(0.001))).await;
         assert!(result.is_err());
+    }
+
+    /// The fee rate must never increase as cumulative volume increases —
+    /// higher-volume tiers must charge a strictly lower or equal rate. This
+    /// checks relative ordering across sample points spanning several tier
+    /// boundaries rather than duplicating FEE_TIERS' rates verbatim, so a
+    /// wrong rate in both places couldn't silently pass.
+    #[test]
+    fn fee_from_volume_is_monotonically_non_increasing() {
+        let sample_volumes: &[u64] = &[
+            0,
+            50_000,
+            100_000,
+            500_000,
+            1_000_000,
+            5_000_000,
+            10_000_000,
+            50_000_000,
+            100_000_000,
+            500_000_000,
+            1_000_000_000,
+        ];
+        let mut prev_rate = f64::MAX;
+        for &vol in sample_volumes {
+            let rate = fee_from_volume(Decimal::from(vol));
+            assert!(
+                rate <= prev_rate,
+                "fee rate must not increase with volume: at {vol} JPY rate was {rate}, previous was {prev_rate}"
+            );
+            prev_rate = rate;
+        }
+        // The lowest and highest sampled volumes must land in different
+        // (non-equal) tiers — otherwise this test would trivially pass even
+        // if the table were flattened to a single rate.
+        assert!(fee_from_volume(Decimal::from(0u64)) > fee_from_volume(Decimal::from(1_000_000_000u64)));
     }
 
     #[tokio::test]

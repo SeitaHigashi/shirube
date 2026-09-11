@@ -80,6 +80,18 @@ impl Simulator {
         // None（ウォームアップ中）を返した間は直前の目標配分を維持する。
         let mut sticky_target: Option<f64> = None;
         let mut equity_curve: Vec<f64> = Vec::with_capacity(candles.len() - warmup);
+        // Raw (unslipped) close of every evaluated candle, in order — feeds
+        // the buy-and-hold / static-mix benchmarks in `compute_report`.
+        // NOTE: must stay exactly aligned with `equity_curve` (same warmup
+        // skip) or the benchmark curves silently include candles the
+        // strategy itself never traded on.
+        let mut evaluated_closes: Vec<f64> = Vec::with_capacity(candles.len() - warmup);
+        // BTC allocation fraction (btc_value / total) sampled at each
+        // evaluated candle, averaged after the loop into
+        // `BacktestReport::avg_btc_exposure` — the weight used to build the
+        // "static mix" benchmark so it matches the strategy's own average
+        // exposure.
+        let mut exposure_samples: Vec<f64> = Vec::with_capacity(candles.len() - warmup);
         // Risk-gate activity, surfaced on the report so a run makes it
         // visible whether a gate ever engaged (see RiskEventCounts).
         //
@@ -174,8 +186,23 @@ impl Simulator {
 
             let btc_val = exchange.btc_balance() * candle.close;
             let equity = exchange.jpy_balance() + btc_val;
-            equity_curve.push(equity.to_f64().unwrap_or(0.0));
+            let equity_f64 = equity.to_f64().unwrap_or(0.0);
+            equity_curve.push(equity_f64);
+            evaluated_closes.push(candle.close.to_f64().unwrap_or(0.0));
+            // Post-trade exposure at this candle; guard against a zero-equity
+            // edge case rather than dividing by zero.
+            exposure_samples.push(if equity_f64 > 0.0 {
+                btc_val.to_f64().unwrap_or(0.0) / equity_f64
+            } else {
+                0.0
+            });
         }
+
+        let avg_btc_exposure = if exposure_samples.is_empty() {
+            0.0
+        } else {
+            exposure_samples.iter().sum::<f64>() / exposure_samples.len() as f64
+        };
 
         let filled = exchange.filled_trades();
         let report = super::report::compute_report(
@@ -184,6 +211,10 @@ impl Simulator {
             self.config.initial_jpy.to_f64().unwrap_or(1.0),
             self.config.resolution_secs,
             risk_events,
+            self.config.fee_pct,
+            avg_btc_exposure,
+            &evaluated_closes,
+            self.config.slippage_pct,
         );
 
         self.db.backtest_runs().insert(&self.config, &report).await?;
@@ -298,6 +329,65 @@ mod tests {
         // Every candle produces an equity point; report is always populated
         // even when zero trades were placed (e.g. sticky target never set).
         assert!(report.total_return_pct.is_finite());
+    }
+
+    /// The report's fee aggregates must reflect the trades a real run
+    /// actually placed: `total_fees_jpy` > 0 whenever at least one trade
+    /// filled with a non-zero fee rate, and `traded_volume_jpy` must equal
+    /// the sum of price*size over those same fills.
+    #[tokio::test]
+    async fn report_fee_metrics_match_filled_trades() {
+        let db = crate::storage::db::Database::open_in_memory().await.unwrap();
+        let config = BacktestConfig {
+            product_code: "BTC_JPY".into(),
+            from: Utc::now(),
+            to: Utc::now(),
+            resolution_secs: 60,
+            slippage_pct: 0.0,
+            // Fixed 0.15% fee so at least one filled trade carries a fee.
+            fee_pct: Some(0.0015),
+            initial_jpy: dec!(1_000_000),
+            warmup_candles: 0,
+        };
+
+        let mut trading_config = TradingConfig::default();
+        trading_config.sma_period = 2;
+        trading_config.ema_period = 2;
+        trading_config.rsi_period = 2;
+        trading_config.macd_fast = 2;
+        trading_config.macd_slow = 3;
+        trading_config.macd_signal = 2;
+        trading_config.bollinger_period = 2;
+        trading_config.allocation_threshold = 0.01;
+
+        let prices = [
+            dec!(9_000_000),
+            dec!(9_100_000),
+            dec!(9_200_000),
+            dec!(9_300_000),
+            dec!(9_400_000),
+            dec!(9_500_000),
+            dec!(9_600_000),
+            dec!(9_700_000),
+        ];
+        let candles: Vec<Candle> = prices.iter().map(|&p| make_candle(p)).collect();
+
+        let simulator = Simulator::new(config, db);
+        let report = simulator.run(candles, trading_config).await.unwrap();
+
+        assert!(
+            report.total_trades > 0,
+            "fixture must produce at least one trade to exercise fee accounting"
+        );
+        assert!(
+            report.total_fees_jpy > 0.0,
+            "a 0.15% fixed fee on a filled trade must be reflected in total_fees_jpy"
+        );
+        assert!(report.traded_volume_jpy > 0.0);
+        // Effective fee rate on a fixed-fee run must equal the fixed rate,
+        // since every fill paid exactly that rate.
+        assert!((report.effective_fee_pct - 0.0015).abs() < 1e-9);
+        assert_eq!(report.final_fee_tier_pct, 0.0015);
     }
 
     #[tokio::test]
@@ -659,5 +749,182 @@ mod tests {
             .run(candles, trading_config)
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn avg_btc_exposure_reports_known_constant_allocation() {
+        // Force the sticky target to exactly 1.0 (100% BTC) for every
+        // evaluated candle by collapsing the zone's neutral band to a
+        // single point at 0.0: `compute_btc_target`'s combined signal is
+        // always clamped to [0.0, 1.0], so `raw` is always >= hold_btc_above
+        // and `apply_zone` always returns 1.0 (see `signal::apply_zone`'s
+        // span<=0 branch). This drives a known constant allocation through
+        // the real production allocation logic rather than a shortcut.
+        use chrono::TimeZone;
+        let base = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+
+        let mut trading_config = TradingConfig::default();
+        trading_config.sma_period = 2;
+        trading_config.ema_period = 2;
+        trading_config.rsi_period = 2;
+        trading_config.macd_fast = 2;
+        trading_config.macd_slow = 3;
+        trading_config.macd_signal = 2;
+        trading_config.bollinger_period = 2;
+        trading_config.allocation_threshold = 0.01;
+        trading_config.zone = crate::config::ZoneConfig {
+            range_max: 1.0,
+            hold_jpy_below: 0.0,
+            hold_btc_above: 0.0,
+        };
+
+        // 4 warmup candles (>= the longest indicator period, 3) followed by
+        // 8 evaluated candles with mild price movement; the target stays
+        // 1.0 throughout regardless of the exact price path.
+        let candles: Vec<Candle> = (0..12)
+            .map(|i| {
+                make_candle_at(
+                    dec!(9_000_000) + Decimal::from(i % 3) * dec!(10_000),
+                    base + chrono::Duration::minutes(i as i64),
+                )
+            })
+            .collect();
+
+        let cfg = BacktestConfig {
+            product_code: "BTC_JPY".into(),
+            from: base + chrono::Duration::minutes(4),
+            to: base + chrono::Duration::minutes(12),
+            resolution_secs: 60,
+            slippage_pct: 0.0,
+            fee_pct: Some(0.0),
+            initial_jpy: dec!(1_000_000),
+            warmup_candles: 4,
+        };
+
+        let db = crate::storage::db::Database::open_in_memory().await.unwrap();
+        let report = Simulator::new(cfg, db)
+            .run(candles, trading_config)
+            .await
+            .unwrap();
+
+        // Zero fee/slippage in this fixture, so once the target is reached
+        // (immediately, since indicators are warm from the start of the
+        // evaluated window) the allocation stays effectively exactly 1.0 for
+        // every evaluated candle. The epsilon only absorbs the deliberate
+        // round-down-to-8dp in `allocation_delta_to_order`, far tighter than
+        // it would need to be to catch a real accounting bug.
+        assert!(
+            (report.avg_btc_exposure - 1.0).abs() < 1e-4,
+            "expected avg_btc_exposure ~= 1.0, got {}",
+            report.avg_btc_exposure
+        );
+    }
+
+    /// Regression test for the most important benchmark defect: the
+    /// buy-and-hold / static-mix curves must be built ONLY from the
+    /// *evaluated* candle slice. If the implementation accidentally fed the
+    /// full candle series (warmup included) into the benchmark, this test
+    /// would catch it, because the two runs below use identical evaluated
+    /// closes but wildly different (and differently-sized) warmup prices.
+    #[tokio::test]
+    async fn warmup_candles_do_not_change_benchmark_figures() {
+        use chrono::TimeZone;
+        let base = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+
+        // A threshold no reachable delta (at most 1.0) can ever cross, so
+        // zero trades occur in either run regardless of how differently
+        // "warm" the indicators are at the start of the evaluated window —
+        // this removes any dependency of this test on indicator warm-up
+        // timing, which is a *separate*, already-covered concern (see
+        // `warmup_candles_prime_indicators_without_being_traded`).
+        let mut trading_config = TradingConfig::default();
+        trading_config.allocation_threshold = 2.0;
+
+        // The evaluated window: 6 candles with a clear price trend.
+        let evaluated_prices = [
+            dec!(9_000_000), dec!(9_100_000), dec!(9_200_000),
+            dec!(9_300_000), dec!(9_400_000), dec!(9_500_000),
+        ];
+
+        // Run A: no warmup, candles = the evaluated window only.
+        let candles_a: Vec<Candle> = evaluated_prices
+            .iter()
+            .enumerate()
+            .map(|(i, &p)| make_candle_at(p, base + chrono::Duration::minutes(i as i64)))
+            .collect();
+        let cfg_a = BacktestConfig {
+            product_code: "BTC_JPY".into(),
+            from: base,
+            to: base + chrono::Duration::minutes(6),
+            resolution_secs: 60,
+            slippage_pct: 0.001,
+            fee_pct: Some(0.0015),
+            initial_jpy: dec!(1_000_000),
+            warmup_candles: 0,
+        };
+
+        // Run B: 6 leading warmup candles at wildly different prices,
+        // followed by the exact same evaluated window.
+        let warmup_prices = [
+            dec!(5_000_000), dec!(5_000_000), dec!(5_000_000),
+            dec!(5_000_000), dec!(5_000_000), dec!(5_000_000),
+        ];
+        let mut candles_b: Vec<Candle> = warmup_prices
+            .iter()
+            .enumerate()
+            .map(|(i, &p)| make_candle_at(p, base - chrono::Duration::minutes(6) + chrono::Duration::minutes(i as i64)))
+            .collect();
+        candles_b.extend(
+            evaluated_prices
+                .iter()
+                .enumerate()
+                .map(|(i, &p)| make_candle_at(p, base + chrono::Duration::minutes(i as i64))),
+        );
+        let cfg_b = BacktestConfig {
+            product_code: "BTC_JPY".into(),
+            from: base,
+            to: base + chrono::Duration::minutes(6),
+            resolution_secs: 60,
+            slippage_pct: 0.001,
+            fee_pct: Some(0.0015),
+            initial_jpy: dec!(1_000_000),
+            warmup_candles: 6,
+        };
+
+        let db = crate::storage::db::Database::open_in_memory().await.unwrap();
+        let report_a = Simulator::new(cfg_a, db.clone())
+            .run(candles_a, trading_config.clone())
+            .await
+            .unwrap();
+        let report_b = Simulator::new(cfg_b, db.clone())
+            .run(candles_b, trading_config)
+            .await
+            .unwrap();
+
+        // Sanity: the threshold really did block every trade in both runs,
+        // so this test is actually isolating the benchmark computation.
+        assert_eq!(report_a.total_trades, 0);
+        assert_eq!(report_b.total_trades, 0);
+
+        assert_eq!(report_a.avg_btc_exposure, report_b.avg_btc_exposure);
+        assert_eq!(report_a.hold_return_pct, report_b.hold_return_pct);
+        assert_eq!(report_a.hold_sharpe_ratio, report_b.hold_sharpe_ratio);
+        assert_eq!(report_a.hold_max_drawdown_pct, report_b.hold_max_drawdown_pct);
+        assert_eq!(report_a.static_mix_return_pct, report_b.static_mix_return_pct);
+        assert_eq!(report_a.static_mix_sharpe_ratio, report_b.static_mix_sharpe_ratio);
+        assert_eq!(
+            report_a.static_mix_max_drawdown_pct,
+            report_b.static_mix_max_drawdown_pct
+        );
+        assert_eq!(
+            report_a.excess_return_vs_static_mix_pct,
+            report_b.excess_return_vs_static_mix_pct
+        );
+        assert_eq!(report_a.sharpe_minus_static_mix, report_b.sharpe_minus_static_mix);
+
+        // And the hold benchmark must actually reflect the rising evaluated
+        // window's price move, not the flat 5,000,000 warmup — otherwise
+        // this test would trivially "pass" with both sides at 0.
+        assert!(report_a.hold_return_pct > 5.0, "got {}", report_a.hold_return_pct);
     }
 }

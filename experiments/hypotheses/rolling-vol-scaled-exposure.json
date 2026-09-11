@@ -1,0 +1,44 @@
+{
+  "name": "rolling-vol-scaled-exposure",
+  "kind": "algorithm",
+  "rationale": "This is lead #2 of the 2026-09-09 Run 1 report, carried forward verbatim: 're-centre the volatility reference rather than abandoning it'. The rejected realized-vol-scaled-exposure variant damped the composite's deviation from neutral by k = (REFERENCE_HOURLY_VOL / realized_vol)^2 with REFERENCE_HOURLY_VOL hard-coded to 0.0042, a constant fitted on that run's pre-holdout training window. Its agent instrumented the factor and found the failure was diagnostic rather than mechanical: holdout realised volatility (mean 0.320%/h) came in materially BELOW the fitted constant, so k had mean 1.312 and sat pinned at the VOL_SCALE_MAX amplification cap for 61% of the window. The rule therefore acted as an exposure AMPLIFIER -- the exact opposite of the volatility damper it was meant to be -- and lost 0.140 Sharpe. That is a level-shift failure of a fitted constant, not evidence against inverse-variance scaling, and the hypothesis's own paper_reference.cons predicted it in advance. The fix is to make the reference scale-invariant: estimate it from the same recent data as the numerator, as the ratio of a short-window realised volatility to a long-window one, so no constant is fitted on any window and a level shift in volatility cancels out of k by construction. A second reason this variant is worth the slot: it scales position size rather than gating trades, and the rejected version raised trade count to 128% of baseline, so unlike every turnover-reducing hypothesis Run 2 tried it is not at risk of failing the promotion rule's 50% trade-count floor. Grounding from data strictly older than the holdout (19,888 bars, 2026-08-09T04:03Z -> 2026-08-27T19:14Z): 1-minute return sd is 0.0645%, and mean absolute move grows 4.11bp at 1 bar to 31.90bp at 60 bars, so there is a real and wide volatility range for the ratio to bite on.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  },
+  "code_change_summary": "Two parts. (1) Additive: add two fields to IndicatorPoint (src/signal/mod.rs), `realized_vol_short: Option<f64>` and `realized_vol_long: Option<f64>`, and populate both in compute_indicators() from the close series it already iterates, keeping a small rolling buffer of previous closes. Both are the population standard deviation of close-to-close simple returns: the short one over the trailing VOL_WINDOW_SHORT = 60 returns (60 one-minute bars = 1 hour at the pipeline's 60s resolution), the long one over the trailing VOL_WINDOW_LONG = 720 returns (12 hours). Each is None until its own window has that many returns available. Do not add a new indicator struct under src/signal/indicators/ unless that is genuinely cleaner on dev's current structure. Every other IndicatorPoint field and all existing indicator code MUST stay byte-for-byte identical, and every struct-literal construction site of IndicatorPoint elsewhere in the tree (including tests and src/backtest/) must be updated to set the new fields. (2) In TradingEngine::compute_btc_target (src/trading/engine.rs), after ta_normalized is computed and before it is blended with sentiment, damp its deviation from neutral by a scale-invariant volatility factor: let k = ((realized_vol_long / realized_vol_short).powi(2)).clamp(VOL_SCALE_MIN, VOL_SCALE_MAX) with VOL_SCALE_MIN = 0.5 and VOL_SCALE_MAX = 1.5, both as named private constants with a comment giving the formula, its inputs and its expected range; then ta_normalized = 0.5 + (ta_normalized - 0.5) * k. The inverse-variance (.powi(2)) form is deliberate: it is what Moreira & Muir scale portfolio weight by, and it is what the rejected predecessor used, so the ONLY intended difference from that variant is the reference. There must be NO fitted constant anywhere in this diff -- if you find yourself writing a hard-coded volatility level, the hypothesis has been implemented wrong. When either realized_vol field is None (warmup), or realized_vol_short is not strictly positive and finite, or the ratio is not finite, k MUST be 1.0 so the function reduces exactly to today's behaviour -- guard explicitly rather than relying on clamp, since f64::clamp propagates NaN instead of clamping it (the same hazard the 2026-09-08 damped-crossover diff had to guard). Note and accept that with --warmup-candles 300 the long window is not yet full at the start of the scored window, so k = 1.0 for roughly the first 720 in-window candles (~5% of a 14-day 1-minute window); do not attempt to shorten VOL_WINDOW_LONG to avoid this. The blend with sentiment, the [0.0,1.0] clamp on the result, and the empty-sub_signals warmup guard returning None all stay exactly as they are.",
+  "constraints": [
+    "This hypothesis modifies the body of TradingEngine::compute_btc_target. This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST NOT change TradingEngine::compute_btc_target's signature (its parameter list or return type) -- only its body.",
+    "MUST NOT change any individual sub-signal's own formula, nor the zone boundaries or apply_zone; only the post-aggregation damping of ta_normalized and the new IndicatorPoint fields are added.",
+    "MUST pass `cargo test`, including the compute_btc_target_* unit tests in src/trading/engine.rs -- update their expected values if the new formula legitimately changes them (do not weaken or delete a test just to make it pass). Points with either realized_vol field None must be unaffected by construction; verify that rather than assume it. Add unit tests covering: k = 1.0 exactly when short and long volatility are equal, damping toward neutral when short volatility exceeds long, amplification capped at VOL_SCALE_MAX when short volatility is far below long, and a None/zero/NaN volatility reducing to today's output.",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff touches compute_btc_target's body, so the reviewer gives it the scrutiny an allocation-formula change deserves.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or anything on the live order-submission path."
+  ],
+  "paper_reference": {
+    "title": "Volatility-Managed Portfolios",
+    "authors": "Alan Moreira, Tyler Muir",
+    "venue_year": "The Journal of Finance, Vol. 72, No. 4, 2017",
+    "url": "https://amoreira2.github.io/alan-moreira.github.io/VolPortfolios_published.pdf",
+    "key_claim": "Scaling a portfolio's weight in a risky factor by the inverse of its recent realised return variance -- taking less exposure when volatility was recently high -- raises risk-adjusted returns and produces large alphas against the unscaled factor, because volatility rises much faster than expected returns do.",
+    "pros": "Same mechanism as the rejected predecessor, and the predecessor's own instrumentation is what makes this version worth testing: the mechanism was never actually exercised in the intended direction, because a fitted reference put k on the amplification side of 1.0 for 61% of the window. Moreira & Muir's rule is a single-asset timing rule rather than a cross-sectional construction, so it maps onto shirube's one-instrument BTC/JPY allocation directly, and expressing the reference as a short/long volatility ratio is the standard scale-free form of it.",
+    "cons": "The paper is US equity and bond factors from 1926-2015 at monthly rebalancing -- a different asset class, era, and a horizon three orders of magnitude longer than shirube's 1-minute loop; its result is well known to be cost-sensitive and to weaken out of sample, and it has been directly contested on whether the alpha survives realistic implementation. Nothing in it addresses crypto microstructure or a 24/7 market. And the translation retains judgement calls the paper does not license: the 60/720-bar window pair and the [0.5, 1.5] clamp are shirube's choices. Removing the fitted level constant removes the specific failure that sank the predecessor; it does not make the mechanism true here. shirube's own backtest gate decides, not the paper's alphas."
+  }
+}

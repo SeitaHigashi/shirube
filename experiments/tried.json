@@ -134,5 +134,53 @@
     "verdict": "rejected",
     "sharpe_improvement_pct": -0.13991387377509934,
     "report_path": "experiments/reports/2026-09-09.md"
+  },
+  {
+    "name": "higher-allocation-threshold",
+    "content_hash": "f7edc79da1fd68811a5964bd377c294d24a634f812cedc20736cd068e6831985",
+    "tried_at": "2026-09-09T19:15:46Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 3.206527312350171,
+    "report_path": "experiments/reports/2026-09-09.md"
+  },
+  {
+    "name": "cost-aware-rebalance-filter",
+    "content_hash": "7ca069272bdc9e7d2cd00aa2bfab33e47e3b1a3c74bf780f7613689942717555",
+    "tried_at": "2026-09-09T19:15:46Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 10.56585846998212,
+    "report_path": "experiments/reports/2026-09-09.md"
+  },
+  {
+    "name": "trend-weight-half",
+    "content_hash": "0f082986e1844027d628fcf5ddd3319d704ec4fa5989fffdc3fbf7c4e6237775",
+    "tried_at": "2026-09-09T19:15:46Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 1.954207468767919,
+    "report_path": "experiments/reports/2026-09-09.md"
+  },
+  {
+    "name": "code-default-allocation-threshold",
+    "content_hash": "6c19ca281a4727f645a06da0a9b47cf904d73657c2b2dbcedcd3623575c11f46",
+    "tried_at": "2026-09-10T19:15:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 0.7730859849932461,
+    "report_path": "experiments/reports/2026-09-10.md"
+  },
+  {
+    "name": "reversion-horizon-15m",
+    "content_hash": "b95d16536890426797414b1eb3d330315a9c2cfaf07342d273eb4d6439fc7e17",
+    "tried_at": "2026-09-10T19:15:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -7.874660226799847,
+    "report_path": "experiments/reports/2026-09-10.md"
+  },
+  {
+    "name": "rolling-vol-scaled-exposure",
+    "content_hash": "149338ee1ac992818ca357cf0e9132bd4fa9f38265ef469ff42f71ce0bb9211f",
+    "tried_at": "2026-09-10T19:15:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -1.8982314641435067,
+    "report_path": "experiments/reports/2026-09-10.md"
   }
 ]

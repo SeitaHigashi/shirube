@@ -61,6 +61,92 @@ pub struct BacktestReport {
     /// never reached the exchange, so it is absent from `total_trades`.
     #[serde(default)]
     pub orders_rejected: u32,
+    /// Sum of every filled trade's fee (JPY), i.e. total trading costs paid
+    /// over the run.
+    ///
+    /// NOTE: `#[serde(default)]` so that report JSON written before this
+    /// field existed still parses — `shirube compare-backtest` reads
+    /// baseline reports saved by earlier runs.
+    #[serde(default)]
+    pub total_fees_jpy: f64,
+    /// Sum of `price * size` over every filled trade — the cumulative JPY
+    /// notional traded, i.e. the same quantity bitFlyer's fee-tier table is
+    /// keyed on (see `FEE_TIERS` in `exchange::mock`).
+    #[serde(default)]
+    pub traded_volume_jpy: f64,
+    /// `total_fees_jpy / traded_volume_jpy` — the blended fee rate actually
+    /// paid across the whole run. 0.0 when no trades were placed (or
+    /// `traded_volume_jpy` is 0), rather than dividing by zero.
+    #[serde(default)]
+    pub effective_fee_pct: f64,
+    /// The bitFlyer fee tier rate that applied by the end of the run, i.e.
+    /// looked up from the final cumulative `traded_volume_jpy`. When the run
+    /// used a fixed `--fee-pct` override instead of the tier table, this is
+    /// simply that fixed rate.
+    #[serde(default)]
+    pub final_fee_tier_pct: f64,
+    /// `total_fees_jpy / initial_jpy * 100.0` — total fees as a percentage
+    /// of starting capital, using the same denominator convention as
+    /// `total_return_pct` so the two are directly comparable (e.g. "fees ate
+    /// N percentage points of the return"). 0.0 when `initial_jpy` is 0.
+    #[serde(default)]
+    pub fee_drag_pct: f64,
+    /// Mean BTC allocation fraction (`btc_value / total`) across every
+    /// *evaluated* candle (warmup candles excluded), 0.0-1.0. This is the
+    /// strategy's own average exposure to BTC over the run, and is the
+    /// weight used to build the `static_mix_*` benchmark below so that the
+    /// benchmark matches the strategy's own average risk level.
+    ///
+    /// NOTE: `#[serde(default)]` so older report JSON (written before this
+    /// field existed) still parses.
+    #[serde(default)]
+    pub avg_btc_exposure: f64,
+    /// Buy-and-hold benchmark: total return (%) of a single market buy of
+    /// the entire `initial_jpy` balance at the first evaluated candle
+    /// (paying `slippage_pct` and a single entry commission), held and
+    /// marked to market at every subsequent evaluated candle's close.
+    /// Computed over exactly the same evaluated candle slice as the
+    /// strategy itself (warmup candles excluded from both).
+    #[serde(default)]
+    pub hold_return_pct: f64,
+    /// Annualized Sharpe ratio of the buy-and-hold benchmark curve, using
+    /// the same `calculate_sharpe` function and `resolution_secs` as the
+    /// strategy's own `sharpe_ratio` so the two are directly comparable.
+    #[serde(default)]
+    pub hold_sharpe_ratio: f64,
+    /// Maximum peak-to-trough drawdown (%) of the buy-and-hold benchmark
+    /// curve, via the same `calculate_max_drawdown` function used for
+    /// `max_drawdown_pct`.
+    #[serde(default)]
+    pub hold_max_drawdown_pct: f64,
+    /// Static-mix benchmark: like `hold_return_pct`, but only
+    /// `avg_btc_exposure` of the balance is bought at entry (paying the
+    /// same slippage/commission), with the rest held as JPY. This is the
+    /// fair comparison against the strategy: it matches the strategy's own
+    /// average exposure, isolating timing skill from exposure level. When
+    /// `avg_btc_exposure == 1.0` this is identical to the hold benchmark.
+    #[serde(default)]
+    pub static_mix_return_pct: f64,
+    /// Annualized Sharpe ratio of the static-mix benchmark curve.
+    #[serde(default)]
+    pub static_mix_sharpe_ratio: f64,
+    /// Maximum peak-to-trough drawdown (%) of the static-mix benchmark
+    /// curve.
+    #[serde(default)]
+    pub static_mix_max_drawdown_pct: f64,
+    /// `total_return_pct - static_mix_return_pct`. Positive means the
+    /// strategy's actual return beat a static position matching its own
+    /// average exposure — i.e. its timing earned more than it cost. This
+    /// is a reported diagnostic only; it does not affect the promotion
+    /// rule in `compare()`.
+    #[serde(default)]
+    pub excess_return_vs_static_mix_pct: f64,
+    /// `sharpe_ratio - static_mix_sharpe_ratio`. Positive means the
+    /// strategy earned better risk-adjusted returns than simply holding
+    /// its own average exposure statically. This is a reported diagnostic
+    /// only; it does not affect the promotion rule in `compare()`.
+    #[serde(default)]
+    pub sharpe_minus_static_mix: f64,
 }
 
 /// Risk-gate activity observed during a backtest run.

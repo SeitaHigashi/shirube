@@ -163,7 +163,7 @@ single entry commission:
   `avg_btc_exposure`, holding the rest as JPY.
 
 **The static mix is the fair comparison.** This strategy is an allocation
-model that averages roughly 55% BTC exposure, so measuring it against 100%
+model that holds ~49.8% BTC on average, so measuring it against 100%
 buy-and-hold compares two different risk levels and mostly measures
 exposure, not skill. Matching the exposure isolates whether the *timing*
 earned anything. `excess_return_vs_static_mix_pct` and
@@ -171,23 +171,36 @@ earned anything. `excess_return_vs_static_mix_pct` and
 trading paid for itself.
 
 What this measured on 2026-09-11 (2026-08-10 .. 2026-09-09, real 1-minute
-bars — see `experiments/reports/2026-09-11-capital-and-fee-study.md`):
+bars, benchmarks net of the same slippage and a single entry commission —
+see `experiments/reports/2026-09-11-capital-and-fee-study.md`):
 
 | | Return | Sharpe | Max DD | Trades |
 |---|---|---|---|---|
-| 100% buy-and-hold | +19.63% | 6.73 | 7.67% | 1 |
-| Static 55% BTC | +10.78% | 6.46 | 4.65% | 1 |
-| Strategy, zero fee | +10.87% | **7.36** | 3.28% | 1635 |
+| 100% buy-and-hold | +19.33% | 6.73 | 7.67% | 1 |
+| Static mix @ exposure 0.498 | +9.62% | 6.43 | 4.27% | 1 |
+| Strategy, zero fee | +10.87% | **7.36** | **3.28%** | 1635 |
 | Strategy @5,000,000 JPY | +7.00% | 4.94 | 4.01% | 1635 |
+| Strategy @1,000,000 JPY | +3.64% | 2.72 | 4.73% | 1635 |
 | Strategy @500,000 JPY | +0.92% | 0.86 | 5.69% | 1635 |
+| Strategy @50,000 JPY | +2.35% | 1.94 | 5.74% | 286 |
 
 Read that carefully, because it is the single most important fact this
-pipeline has established. **The signal has a real edge** — at zero fees
-its Sharpe of 7.36 beats both benchmarks and its drawdown is the lowest of
-any row. **The fees then destroy it entirely**: at every capital level the
+pipeline has established. **The signal has a real edge, and it is
+modest**: against its own exposure-matched benchmark the zero-fee strategy
+earns **+1.16pp of return and +0.94 of Sharpe**, at a lower drawdown
+(3.28% vs 4.27%). That is the entire gross alpha of the timing logic.
+
+**The fees then destroy it several times over.** `sharpe_minus_static_mix`
+runs from **-1.48** at 5,000,000 JPY to **-5.57** at 500,000 JPY: even in
+the cheapest fee tier the commission costs about 2.6x the alpha the signal
+generates, and at 500,000 JPY about 7x. At every capital level the
 fee-paying strategy loses to a static mix that requires exactly one trade,
-on return *and* on Sharpe. The implication for hypothesis generation is
-direct — cost reduction is worth more than signal work right now.
+on return *and* on Sharpe.
+
+The implication for hypothesis generation is direct and quantitative: the
+gross alpha available to be protected is ~0.94 Sharpe, while the cost
+being paid is 2.4-6.5 Sharpe. **Cost reduction is worth several times more
+than signal work** until that ratio inverts.
 
 **Why this is not a promotion gate.** The measurement above covers one
 30-day bull window. Static long exposure is structurally strong in a

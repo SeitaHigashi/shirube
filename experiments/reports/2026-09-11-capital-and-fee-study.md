@@ -177,42 +177,60 @@ hypothesis must be scored on fees paid, not on trade count.
 
 ## Result 4 — the edge is real, and the fees eat all of it
 
-Benchmarks computed over the identical window, same slippage (0.1%) and a
-single entry commission at the 0.15% entry tier. The static mix is sized
-at the strategy's own average BTC exposure (~55%), which is the fair
-comparison: measuring a partial-exposure allocation model against 100%
-buy-and-hold mostly measures exposure rather than skill.
+Benchmarks are now computed inside the backtest itself (`hold_*`,
+`static_mix_*`, `avg_btc_exposure` on `BacktestReport`), over the identical
+evaluated window, at the same capital, paying the same 0.1% slippage and a
+single entry commission at the 0.15% entry tier. The static mix is sized at
+the run's own measured average BTC exposure, which is the fair comparison:
+measuring a partial-exposure allocation model against 100% buy-and-hold
+mostly measures exposure rather than skill.
+
+**Correction to an earlier figure in this report.** The benchmark numbers
+first circulated during this study (buy-and-hold +19.63%, "static 55%"
++10.78%) came from a scratch script with two defects: it divided by the
+post-entry market value instead of the initial capital, silently dropping
+the 0.2985pp entry cost, and its 55% weight was inferred by matching
+returns rather than measured. The strategy's measured average exposure is
+**0.498**, and buy-and-hold net of entry costs is **+19.33%**. Sharpe and
+max drawdown are scale-invariant and were unaffected, which is why those
+two matched the implementation exactly. The figures below are the
+implementation's.
 
 | | Return | Sharpe | Max DD | Trades |
 |---|---|---|---|---|
-| 100% buy-and-hold | +19.63% | 6.73 | 7.67% | 1 |
-| Static 30% BTC | +5.88% | 6.29 | 2.69% | 1 |
-| Static 50% BTC | +9.80% | 6.43 | 4.28% | 1 |
-| **Static 55% BTC** | **+10.78%** | **6.46** | **4.65%** | **1** |
-| Static 70% BTC | +13.73% | 6.55 | 5.73% | 1 |
+| 100% buy-and-hold | +19.33% | 6.73 | 7.67% | 1 |
+| **Static mix @ exposure 0.498** | **+9.62%** | **6.43** | **4.27%** | **1** |
 | Strategy, zero fee | +10.87% | **7.36** | **3.28%** | 1635 |
 | Strategy @5,000,000 | +7.00% | 4.94 | 4.01% | 1635 |
 | Strategy @1,000,000 | +3.64% | 2.72 | 4.73% | 1635 |
 | Strategy @500,000 | +0.92% | 0.86 | 5.69% | 1635 |
 | Strategy @50,000 | +2.35% | 1.94 | 5.74% | 286 |
 
+`sharpe_minus_static_mix` by capital: **-1.48** @5M, **-3.71** @1M,
+**-5.57** @500k, **-4.48** @50k. (The 50,000 JPY row is measured against
+its own slightly lower exposure of 0.484, since the lot-size floor from
+Result 3 changes which rebalances happen.)
+
 Two findings, and they point in opposite directions:
 
-- **The timing logic has a genuine edge.** At zero fees the strategy's
-  Sharpe of 7.36 beats 100% buy-and-hold (6.73) and every static mix, and
-  its 3.28% max drawdown is the lowest figure in the table. This is not a
-  strategy that merely tracks its exposure.
-- **The fees consume the entire edge.** Once real commissions apply, every
-  capital level loses to the static 55% mix on **both** return and Sharpe
-  — to a benchmark that requires exactly one trade. The best case,
-  5,000,000 JPY, returns +7.00% at Sharpe 4.94 against the benchmark's
-  +10.78% at 6.46, while carrying the execution risk of 1635 orders.
+- **The timing logic has a genuine edge, and it is modest.** Against its
+  own exposure-matched benchmark the zero-fee strategy earns **+1.16pp of
+  return and +0.94 of Sharpe**, at a lower drawdown (3.28% vs 4.27%). It
+  also beats 100% buy-and-hold on Sharpe (7.36 vs 6.73) at less than half
+  the drawdown. This is not a strategy that merely tracks its exposure —
+  but +0.94 Sharpe is the entire gross alpha available to protect.
+- **The fees consume it several times over.** Even in the cheapest tier
+  reached (5,000,000 JPY) the commission costs 7.36 - 4.94 = **2.42
+  Sharpe**, about 2.6x the alpha; at 500,000 JPY it costs 6.51 Sharpe,
+  about 7x. Every capital level loses to a one-trade static mix on both
+  return and Sharpe.
 
 So the earlier framing in Result 3 ("no configuration beats holding") was
 right but incomplete: the shortfall is not a risk-taking story that Sharpe
 would forgive, and it is not a signal-quality problem either. It is
-entirely a cost problem. **Cost reduction is worth more than signal work
-until this gap closes.**
+entirely a cost problem, and the ratio is now quantified — **~0.94 Sharpe
+of alpha against 2.4-6.5 Sharpe of cost.** Cost reduction is worth several
+times more than signal work until that inverts.
 
 Caveat: one 30-day bull window. Static long exposure is structurally
 strong in a rising market, which is why the loop reports this comparison

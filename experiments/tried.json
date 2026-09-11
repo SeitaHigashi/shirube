@@ -182,5 +182,23 @@
     "verdict": "rejected",
     "sharpe_improvement_pct": -1.8982314641435067,
     "report_path": "experiments/reports/2026-09-10.md"
+  },
+  {
+    "name": "fee-tier-aware-allocation-threshold",
+    "content_hash": "e79038afa2e9bfdd9682aaf0b4b4a164e499bc33e264e08a2b5976dd4c2d8f4a",
+    "tried_at": "2026-09-11T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -6.817673140530027,
+    "report_path": "experiments/reports/2026-09-11.md"
+  },
+  {
+    "name": "min-notional-aware-rebalance",
+    "content_hash": "c6560399ebf14c54ac145aaf3d556c7bf34a5268fb0734daa516088711f178a9",
+    "tried_at": "2026-09-11T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -93.13935424342688,
+    "report_path": "experiments/reports/2026-09-11.md"
   }
 ]

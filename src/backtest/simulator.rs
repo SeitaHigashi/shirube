@@ -156,6 +156,21 @@ impl Simulator {
                             risk_manager.params().min_order_size,
                         );
 
+                        // A `None` here means the delta had already cleared
+                        // `allocation_threshold` but the resulting order was
+                        // under the exchange lot size, so the rebalance was
+                        // dropped *before* RiskManager ever saw it — invisible
+                        // in both total_trades and orders_rejected. Count it.
+                        // NOTE: counting only; the control flow below is
+                        // unchanged, so this cannot alter any trading decision.
+                        let order_req = match order_req {
+                            Some(req) => Some(req),
+                            None => {
+                                risk_events.orders_below_min += 1;
+                                None
+                            }
+                        };
+
                         if let Some(req) = order_req {
                             match risk_manager.evaluate(req) {
                                 RiskDecision::Allow(r) => {

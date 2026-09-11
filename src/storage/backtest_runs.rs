@@ -221,6 +221,7 @@ impl BacktestRunRepository {
                     // carries the true values.
                     circuit_breaker_trips: 0,
                     orders_rejected: 0,
+                    orders_below_min: 0,
                     total_fees_jpy,
                     traded_volume_jpy,
                     effective_fee_pct,
@@ -272,6 +273,7 @@ mod tests {
             total_trades: 42,
             circuit_breaker_trips: 0,
             orders_rejected: 0,
+            orders_below_min: 0,
             total_fees_jpy: 123.45,
             traded_volume_jpy: 98_765.0,
             effective_fee_pct: 0.00125,

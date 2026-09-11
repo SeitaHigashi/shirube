@@ -61,6 +61,21 @@ pub struct BacktestReport {
     /// never reached the exchange, so it is absent from `total_trades`.
     #[serde(default)]
     pub orders_rejected: u32,
+    /// How many rebalances the strategy wanted but bitFlyer's lot size
+    /// forbade: the allocation delta had already cleared
+    /// `allocation_threshold`, yet `TradingEngine::allocation_delta_to_order`
+    /// still returned `None` because the resulting order was below
+    /// `min_order_size` (0.001 BTC).
+    ///
+    /// NOTE: an order counted here never reached `RiskManager::evaluate`, so
+    /// it appears in neither `total_trades` nor `orders_rejected` — it was
+    /// previously invisible in every report. The effect is strongly
+    /// capital-dependent: at a BTC price near 12.3M JPY the 0.001 BTC lot is
+    /// ~24.7% of a 50,000 JPY portfolio, ~2.5% of 500,000 JPY and ~0.25% of
+    /// 5,000,000 JPY, so a small account silently drops nearly every
+    /// rebalance its configured threshold asked for.
+    #[serde(default)]
+    pub orders_below_min: u32,
     /// Sum of every filled trade's fee (JPY), i.e. total trading costs paid
     /// over the run.
     ///
@@ -165,6 +180,10 @@ pub struct BacktestReport {
 pub struct RiskEventCounts {
     pub circuit_breaker_trips: u32,
     pub orders_rejected: u32,
+    /// Rebalances suppressed before the risk manager ever saw them because
+    /// the requested size fell below the exchange lot size. See
+    /// `BacktestReport::orders_below_min` for why this is counted.
+    pub orders_below_min: u32,
 }
 
 /// Result of comparing a candidate variant's report against a baseline

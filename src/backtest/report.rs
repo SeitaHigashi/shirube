@@ -17,6 +17,7 @@ pub fn format_report(report: &BacktestReport) -> String {
          Total Trades : {}\n\
          CB Trips     : {}\n\
          Rejected     : {}\n\
+         Below Min Lot: {}\n\
          Total Fees   : {:.2} JPY\n\
          Traded Volume: {:.2} JPY\n\
          Effective Fee: {:.4}%\n\
@@ -33,6 +34,7 @@ pub fn format_report(report: &BacktestReport) -> String {
         report.total_trades,
         report.circuit_breaker_trips,
         report.orders_rejected,
+        report.orders_below_min,
         report.total_fees_jpy,
         report.traded_volume_jpy,
         report.effective_fee_pct * 100.0,
@@ -154,6 +156,7 @@ pub(crate) fn compute_report(
         total_trades,
         circuit_breaker_trips: risk_events.circuit_breaker_trips,
         orders_rejected: risk_events.orders_rejected,
+        orders_below_min: risk_events.orders_below_min,
         total_fees_jpy,
         traded_volume_jpy,
         effective_fee_pct,
@@ -469,6 +472,7 @@ mod tests {
             total_trades: 42,
             circuit_breaker_trips: 2,
             orders_rejected: 7,
+            orders_below_min: 13,
             total_fees_jpy: 1_234.5,
             traded_volume_jpy: 987_654.0,
             effective_fee_pct: 0.00125,
@@ -492,6 +496,7 @@ mod tests {
         assert!(s.contains("42"));
         assert!(s.contains("CB Trips     : 2"));
         assert!(s.contains("Rejected     : 7"));
+        assert!(s.contains("Below Min Lot: 13"));
         assert!(s.contains("Total Fees   : 1234.50 JPY"));
         assert!(s.contains("Traded Volume: 987654.00 JPY"));
         assert!(s.contains("Effective Fee: 0.1250%"));
@@ -538,6 +543,7 @@ mod tests {
             total_trades: trades,
             circuit_breaker_trips: 0,
             orders_rejected: 0,
+            orders_below_min: 0,
             total_fees_jpy: 0.0,
             traded_volume_jpy: 0.0,
             effective_fee_pct: 0.0,
@@ -709,6 +715,8 @@ mod tests {
         assert_eq!(report.static_mix_max_drawdown_pct, 0.0);
         assert_eq!(report.excess_return_vs_static_mix_pct, 0.0);
         assert_eq!(report.sharpe_minus_static_mix, 0.0);
+        // Likewise for the lot-size counter added by this change.
+        assert_eq!(report.orders_below_min, 0);
     }
 
     /// `hold_return_pct` on a strictly monotonically rising price series

@@ -36,6 +36,7 @@ a vague instruction.
 | Promotion rule | Sharpe ratio improves >= 10% relative (or >= 0.1 absolute if baseline Sharpe <= 0) **AND** max drawdown does not worsen **AND** candidate trade count >= 50% of baseline's |
 | PR granularity | one PR per promoted variant |
 | Backtest resolution | **60s (1m) candles** — matches live trading; see "Resolution must match live" below |
+| Evaluation capital | every backtest is run at **50,000 / 500,000 / 5,000,000 JPY**; promotion is decided at **50,000 JPY** alone, the other two are reported diagnostics with no veto — see "Evaluation capital" below |
 | New hypotheses generated per run | at most 3 (see "Hypothesis generation" below) |
 | Trade frequency | **non-binding guideline**: roughly 4-10 trades/day (see below) |
 
@@ -145,6 +146,56 @@ every comparison shared the same distortion.
 Do not raise it for the daily cycle. An ad-hoc coarser run is fine for
 eyeballing a long-horizon effect, but a promotion decision made at any
 resolution other than 60s does not transfer to live trading.
+
+### Evaluation capital: three levels, one decides
+
+Every backtest this pipeline runs — the baseline and every variant — is
+run three times, at `--initial-jpy` **50,000**, **500,000** and
+**5,000,000**. The runs share one DB and take seconds each, so the sweep
+is nearly free.
+
+**Promotion is decided at 50,000 JPY only.** That is the operator's
+current account size. The other two levels are recorded in the report as
+robustness diagnostics and have **no veto power whatsoever** — a variant
+that clears the promotion rule at 50,000 JPY is promoted even if it looks
+worse at 5,000,000 JPY, exactly as with the trade-frequency guideline
+below. 500,000 JPY is the stated near-term target size and is the most
+informative of the two diagnostics.
+
+Why three levels rather than one, and why the results are not
+interchangeable (all figures measured 2026-09-11 over
+2026-08-10 .. 2026-09-09; see
+`experiments/reports/2026-09-11-capital-and-fee-study.md`):
+
+- **Above the lot-size floor, capital only changes the fee tier.** The
+  allocation logic is percentage-based, so with the fee rate pinned, runs
+  at 500,000 and 5,000,000 JPY agree to six decimal places. What differs
+  in a normal (tiered-fee) run is solely the bitFlyer commission tier the
+  account's turnover reaches: 0.0174% effective at 5,000,000 JPY versus
+  0.1106% at 50,000 JPY, a factor of 6.4 for the identical strategy.
+- **At 50,000 JPY the exchange lot size, not the config, is the gate.**
+  `allocation_delta_to_order` returns `None` when the computed size falls
+  under `min_order_size` (0.001 BTC). At ~12.2M JPY/BTC that is ~12,224
+  JPY of notional — 24.4% of a 50,000 JPY portfolio. So on the primary
+  capital, **every `allocation_threshold` below ~0.245 is inert**:
+  thresholds 0.05, 0.10 and 0.15 produced byte-identical reports. The
+  same floor is 2.4% at 500,000 JPY and 0.24% at 5,000,000 JPY.
+
+That second point is a trap for hypothesis generation, and it has the
+same shape as the CoinGecko constant-volume VWMA recorded in
+`tried.json`, where a 0.0 Sharpe delta was arithmetic rather than
+evidence. **A parameter hypothesis that only moves `allocation_threshold`
+below ~0.245 cannot be tested at 50,000 JPY** — it will score identically
+to the baseline no matter how good the idea is. When a candidate's
+primary-capital report is identical to the baseline's, check this before
+recording it as rejected, and say so in the report rather than filing a
+verdict the data cannot support.
+
+Because the lot-size floor also throttles turnover, the three levels do
+not even share a break-even fee: 50,000 JPY turns over ~91x equity per 30
+days against a ~0.114% break-even, while 500,000 JPY and above turn over
+~205-216x against ~0.051%. Quote the capital alongside any turnover or
+break-even figure.
 
 ### Trade frequency is a guideline, not a criterion
 
@@ -349,12 +400,26 @@ Let `HOLDOUT_START = now - 14d`, `NOW = now` (UTC, ISO 8601).
 
 ### 1. Compute the baseline report
 
+Run the baseline once per evaluation capital (see "Evaluation capital"
+above). `/tmp/baseline.json` — the 50,000 JPY run — is the only one the
+promotion decision reads; the other two are reported, not compared.
+
 ```bash
-shirube backtest-variant --db shirube.db \
-  --config experiments/baseline-config.json \
-  --from $HOLDOUT_START --to $NOW \
-  > /tmp/baseline.json
+for JPY in 50000 500000 5000000; do
+  shirube backtest-variant --db ./run.db \
+    --config experiments/baseline-config.json \
+    --from $HOLDOUT_START --to $NOW \
+    --resolution-secs 60 --warmup-candles 300 \
+    --initial-jpy $JPY \
+    > /tmp/baseline-$JPY.json
+done
+cp /tmp/baseline-50000.json /tmp/baseline.json   # primary: decides promotion
 ```
+
+Sanity-check the primary run before continuing: if its report is
+byte-identical to a previous day's despite a changed config, re-read the
+lot-size warning in "Evaluation capital" — at 50,000 JPY an
+`allocation_threshold` under ~0.245 cannot move anything.
 
 ### 2. Filter out already-tried hypotheses
 
@@ -405,12 +470,17 @@ substance:
 > report in step 3 below. Run `cargo test` and fix any failure caused by
 > your change before continuing — do not proceed on a red test suite.
 > 2. Write the hypothesis's `trading_config` field to a temp JSON file.
-> Run `cargo build` then
-> `shirube backtest-variant --db <path-to-a-copy-or-the-shared-read-only-db> --config <temp-config.json> --from <HOLDOUT_START> --to <NOW>`
-> using the exact same `HOLDOUT_START`/`NOW` as the baseline run.
-> 3. Report back: the hypothesis name, the full stdout JSON report,
-> whether `cargo test` passed, and (for algorithm hypotheses) the
-> worktree path and branch name.
+> Run `cargo build`, then run the backtest once per evaluation capital —
+> `for JPY in 50000 500000 5000000; do shirube backtest-variant --db <path-to-a-copy-or-the-shared-read-only-db> --config <temp-config.json> --from <HOLDOUT_START> --to <NOW> --resolution-secs 60 --warmup-candles 300 --initial-jpy $JPY; done`
+> — using the exact same `HOLDOUT_START`/`NOW` as the baseline run. The
+> 50,000 JPY run is the one promotion is decided on; the other two are
+> reported as diagnostics.
+> 3. Report back: the hypothesis name, all three stdout JSON reports
+> labelled by capital, whether `cargo test` passed, and (for algorithm
+> hypotheses) the worktree path and branch name. If the 50,000 JPY report
+> is identical to the baseline's, say so explicitly and check the
+> lot-size floor described under "Evaluation capital" before concluding
+> the hypothesis had no effect.
 > 4. If you hit a missing capability or a defect that blocks or distorts
 > this hypothesis — especially anything that makes the backtest numbers
 > themselves untrustworthy — you are authorized to fix it (see "Enabling
@@ -427,13 +497,21 @@ orders), every worktree agent can safely point at the same
 
 ### 5. Aggregate and decide
 
-For each variant report collected in step 4:
+For each variant report collected in step 4, compare **the 50,000 JPY
+run only** — that is the promotion decision:
 
 ```bash
-shirube compare-backtest --baseline /tmp/baseline.json --candidate /tmp/variant-<name>.json
+shirube compare-backtest --baseline /tmp/baseline.json --candidate /tmp/variant-<name>-50000.json
 ```
 
 Collect the `promoted: true` results.
+
+Do **not** run `compare-backtest` on the 500,000 / 5,000,000 JPY reports
+to gate anything. Those two go into the report's capital table as
+diagnostics only. A promoted variant that looks worse at a larger capital
+is still promoted — note the divergence in the report so a human can see
+it, and if it is stark it is a good source for tomorrow's hypotheses, but
+it never overrides the primary-capital verdict.
 
 ### 6. Open PRs for promoted variants, clean up the rest
 
@@ -484,10 +562,23 @@ Write `experiments/reports/<YYYY-MM-DD>.md` (UTC date) with:
 # Self-improvement report — <date>
 
 ## Baseline
-<the baseline BacktestReport JSON, plus 1-2 sentences of context: any
-notable indicator warmup issue, data gaps, etc. Also note the observed
-trades/day (total_trades / window length in days) against the 4-10
-guideline — recorded for trend visibility only, never as a pass/fail.>
+<the 50,000 JPY BacktestReport JSON in full — this is the primary,
+promotion-deciding run — plus 1-2 sentences of context: any notable
+indicator warmup issue, data gaps, etc. Also note the observed trades/day
+(total_trades / window length in days) against the 4-10 guideline —
+recorded for trend visibility only, never as a pass/fail.>
+
+| Capital | Return % | Sharpe | Max DD % | Trades | Volume JPY | eff fee | fee drag % |
+|---|---|---|---|---|---|---|---|
+| 50,000 (primary) | ... | ... | ... | ... | ... | ... | ... |
+| 500,000 | ... | ... | ... | ... | ... | ... | ... |
+| 5,000,000 | ... | ... | ... | ... | ... | ... | ... |
+
+(`traded_volume_jpy`, `effective_fee_pct` and `fee_drag_pct` come
+straight off `BacktestReport`. `fee_drag_pct` is fees as a percentage of
+initial capital, so it is directly comparable with `total_return_pct` —
+when it is the larger of the two, trading costs, not signal quality, are
+what the run is measuring.)
 
 ## Literature reviewed this run
 | Paper | Link | Pros | Cons | Outcome |
@@ -498,9 +589,14 @@ guideline — recorded for trend visibility only, never as a pass/fail.>
 skipped, e.g. because step 3 didn't need new hypotheses.)
 
 ## Hypotheses tried today
-| Hypothesis | Kind | Verdict | Sharpe Δ | Max DD Δ | Trades (cand/base) |
-|---|---|---|---|---|---|
-| <name> | parameter/algorithm | promoted/rejected | ... | ... | ... |
+| Hypothesis | Kind | Verdict | Sharpe Δ | Max DD Δ | Trades (cand/base) | Return @500k | Return @5M |
+|---|---|---|---|---|---|---|---|
+| <name> | parameter/algorithm | promoted/rejected | ... | ... | ... | ... | ... |
+
+(Verdict, Sharpe Δ, Max DD Δ and the trade counts are all from the
+50,000 JPY run — the promotion decision. The last two columns are
+diagnostics only. Flag in prose any variant whose sign flips between
+capitals.)
 
 (one row per hypothesis tried this run; "no hypotheses tried today —
 N new ones generated for tomorrow" if step 3's candidate list was empty)
@@ -608,6 +704,28 @@ hypothesis from Step 1. Read (in order of priority):
    entry).
 3. The current indicator/config code (`src/config.rs`, `src/signal/`) to
    know what fields and indicators actually exist.
+4. The baseline's **cost metrics** — `fee_drag_pct` against
+   `total_return_pct`, and `effective_fee_pct` against the break-even
+   commission recorded in the most recent capital study. This strategy
+   turns over roughly 200x its equity per 30 days, so its P&L is close to
+   a linear function of the commission rate: as measured 2026-09-11, a
+   0.01 percentage-point change in the effective fee moves the 30-day
+   return by about 2 points, and break-even sits near 0.051% at
+   500,000 JPY (and ~0.114% at the 50,000 JPY primary, where the lot-size
+   floor throttles turnover). When `fee_drag_pct` exceeds
+   `total_return_pct`, the run is measuring trading costs more than
+   signal quality, and a cost-side hypothesis is usually the higher-value
+   thing to test.
+
+   Two caveats keep this honest. First, cutting turnover to save fees
+   also pushes the account into a worse tier, so the saving is sublinear
+   — at 500,000 JPY, cutting volume 4.4x cut total fees only 2.3x. Score
+   such a hypothesis on `total_fees_jpy`, never on trade count. Second,
+   `MockExchangeClient` accumulates volume from zero each run and never
+   expires it, so the simulated tier is too expensive early in a window
+   and too cheap in any run much longer than 30 days; a hypothesis whose
+   whole effect is a tier change is standing on that approximation and
+   should say so.
 
 ### Step 3: draft the hypothesis
 

@@ -30,7 +30,7 @@ a vague instruction.
 | Parameter | Value |
 |---|---|
 | Cadence | daily, 04:00 JST (19:00 UTC previous day) |
-| Price data | bitFlyer public execution history via `shirube backfill-executions`, accumulated across runs in the `backtest-data` release asset (`scripts/backtest-data.sh`) |
+| Price data | bitFlyer public execution history via `shirube backfill-executions`, accumulated across runs in the `backtest-data` release asset (`shirube backtest-data pull\|push`) |
 | Holdout window | last 14 days |
 | Total lookback | **30 days** (16 days train + 14 days holdout) — a floor, not a ceiling: the carried-over DB grows past bitFlyer's 31-day retention by ~1 day per run, see "Why the DB is carried over" below |
 | Promotion rule | Sharpe ratio improves >= 10% relative (or >= 0.1 absolute if baseline Sharpe <= 0) **AND** max drawdown does not worsen **AND** candidate trade count >= 50% of baseline's |
@@ -754,22 +754,28 @@ having the steps baked into the routine's own prompt text.
 
 A cloud routine gets a fresh git checkout, so nothing on local disk
 survives between runs. The DB is instead carried across runs as a
-**GitHub Release asset** on the dedicated `backtest-data` tag, wrapped by
-`scripts/backtest-data.sh` — see "Why the DB is carried over" below for
-why this matters and why a release asset specifically.
+**GitHub Release asset** on the dedicated `backtest-data` tag, restored
+and published with the `shirube backtest-data` subcommand — see "Why the
+DB is carried over" below for why this matters and why a release asset
+specifically.
 
-**Why this no longer uses `gh`/`sqlite3`.** `scripts/backtest-data.sh`
-originally shelled out to the `gh` CLI (for the release download/upload)
-and the `sqlite3` CLI (for `recommended_days()` and the pre-upload
-`VACUUM`). Neither is installed in the cloud routine's container, so
-`pull` hard-exited on "gh CLI not found on PATH" before a single backtest
-could run — the data bootstrap silently could not run there at all. Both
-dependencies are now `shirube` subcommands instead: `shirube db-stats`
-(row count / time range / recommended backfill days, via `rusqlite`) and
-`shirube backtest-data pull|push` (the GitHub release download/upload, via
-`reqwest` against the REST API directly). `scripts/backtest-data.sh` is
-now a thin wrapper around the latter, so the routine's container needs
-nothing beyond the `shirube` binary itself.
+**The routine calls the `shirube` binary directly and never a shell
+script.** This is deliberate. The bootstrap used to go through
+`scripts/backtest-data.sh`, which shelled out to the `gh` CLI (for the
+release download/upload) and the `sqlite3` CLI (for the recommended
+backfill gap and the pre-upload `VACUUM`). Neither is installed in the
+cloud routine's container, so `pull` hard-exited on "gh CLI not found on
+PATH" before a single backtest could run — the data bootstrap silently
+could not run there at all, and the stored DB sat unchanged from
+2026-09-09 while the loop kept running against stale history.
+
+The scripts under `scripts/` are local developer conveniences and are not
+on this pipeline's path. Do not reintroduce one here, and do not assume
+any CLI beyond `git`, `cargo` and the built `shirube` binary exists in the
+routine's container. Everything the bootstrap needs is a subcommand:
+`shirube db-stats` (row count / time range / recommended backfill days,
+via `rusqlite`) and `shirube backtest-data pull|push` (the GitHub release
+download/upload, via `reqwest` against the REST API directly).
 
 **Token fallback.** `shirube backtest-data pull` reads `GITHUB_TOKEN`,
 falling back to `GH_TOKEN`. If neither is set — or no `backtest-data`
@@ -798,7 +804,8 @@ cargo build --release
 #    (no stored DB yet), 2 on a normal daily run, and larger if the routine
 #    has not run for a while — so a skipped day never leaves a hole in the
 #    middle of the window.
-eval "$(scripts/backtest-data.sh pull --db ./run.db | grep '^BACKFILL_DAYS=')"
+eval "$(./target/release/shirube backtest-data pull --db ./run.db \
+        | grep '^BACKFILL_DAYS=')"
 
 # 4. Top up with fresh bitFlyer 1-minute OHLCV bars from the public
 #    execution tape. Bars are written INSERT OR IGNORE on
@@ -811,7 +818,7 @@ eval "$(scripts/backtest-data.sh pull --db ./run.db | grep '^BACKFILL_DAYS=')"
 # 5. Publish the topped-up DB back so tomorrow's run starts from it. Do this
 #    BEFORE the backtests, not after: the data is worth keeping even if the
 #    rest of the cycle fails.
-scripts/backtest-data.sh push --db ./run.db
+./target/release/shirube backtest-data push --db ./run.db
 ```
 
 `backfill-executions` prints a `BackfillStats` JSON, and `pull` reports

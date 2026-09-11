@@ -61,6 +61,36 @@ pub struct BacktestReport {
     /// never reached the exchange, so it is absent from `total_trades`.
     #[serde(default)]
     pub orders_rejected: u32,
+    /// Sum of every filled trade's fee (JPY), i.e. total trading costs paid
+    /// over the run.
+    ///
+    /// NOTE: `#[serde(default)]` so that report JSON written before this
+    /// field existed still parses — `shirube compare-backtest` reads
+    /// baseline reports saved by earlier runs.
+    #[serde(default)]
+    pub total_fees_jpy: f64,
+    /// Sum of `price * size` over every filled trade — the cumulative JPY
+    /// notional traded, i.e. the same quantity bitFlyer's fee-tier table is
+    /// keyed on (see `FEE_TIERS` in `exchange::mock`).
+    #[serde(default)]
+    pub traded_volume_jpy: f64,
+    /// `total_fees_jpy / traded_volume_jpy` — the blended fee rate actually
+    /// paid across the whole run. 0.0 when no trades were placed (or
+    /// `traded_volume_jpy` is 0), rather than dividing by zero.
+    #[serde(default)]
+    pub effective_fee_pct: f64,
+    /// The bitFlyer fee tier rate that applied by the end of the run, i.e.
+    /// looked up from the final cumulative `traded_volume_jpy`. When the run
+    /// used a fixed `--fee-pct` override instead of the tier table, this is
+    /// simply that fixed rate.
+    #[serde(default)]
+    pub final_fee_tier_pct: f64,
+    /// `total_fees_jpy / initial_jpy * 100.0` — total fees as a percentage
+    /// of starting capital, using the same denominator convention as
+    /// `total_return_pct` so the two are directly comparable (e.g. "fees ate
+    /// N percentage points of the return"). 0.0 when `initial_jpy` is 0.
+    #[serde(default)]
+    pub fee_drag_pct: f64,
 }
 
 /// Risk-gate activity observed during a backtest run.

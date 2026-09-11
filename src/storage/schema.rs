@@ -181,6 +181,23 @@ pub async fn migrate(conn: &Connection) -> Result<()> {
             )?;
         }
 
+        if current_version < 8 {
+            // Trading-cost metrics added to BacktestReport (total fees paid,
+            // cumulative traded volume, blended effective fee rate, the fee
+            // tier reached by the end of the run, and fees as a percentage
+            // of starting capital). DEFAULT 0.0 means existing rows read
+            // back as 0.0 for these columns rather than NULL.
+            c.execute_batch(
+                "ALTER TABLE backtest_runs ADD COLUMN total_fees_jpy REAL NOT NULL DEFAULT 0.0;
+                 ALTER TABLE backtest_runs ADD COLUMN traded_volume_jpy REAL NOT NULL DEFAULT 0.0;
+                 ALTER TABLE backtest_runs ADD COLUMN effective_fee_pct REAL NOT NULL DEFAULT 0.0;
+                 ALTER TABLE backtest_runs ADD COLUMN final_fee_tier_pct REAL NOT NULL DEFAULT 0.0;
+                 ALTER TABLE backtest_runs ADD COLUMN fee_drag_pct REAL NOT NULL DEFAULT 0.0;
+
+                 INSERT INTO schema_version(version) VALUES(8);",
+            )?;
+        }
+
         Ok(())
     })
     .await?;

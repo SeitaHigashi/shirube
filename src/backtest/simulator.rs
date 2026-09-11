@@ -177,6 +177,7 @@ impl Simulator {
             self.config.initial_jpy.to_f64().unwrap_or(1.0),
             self.config.resolution_secs,
             risk_events,
+            self.config.fee_pct,
         );
 
         self.db.backtest_runs().insert(&self.config, &report).await?;
@@ -270,6 +271,65 @@ mod tests {
         // Every candle produces an equity point; report is always populated
         // even when zero trades were placed (e.g. sticky target never set).
         assert!(report.total_return_pct.is_finite());
+    }
+
+    /// The report's fee aggregates must reflect the trades a real run
+    /// actually placed: `total_fees_jpy` > 0 whenever at least one trade
+    /// filled with a non-zero fee rate, and `traded_volume_jpy` must equal
+    /// the sum of price*size over those same fills.
+    #[tokio::test]
+    async fn report_fee_metrics_match_filled_trades() {
+        let db = crate::storage::db::Database::open_in_memory().await.unwrap();
+        let config = BacktestConfig {
+            product_code: "BTC_JPY".into(),
+            from: Utc::now(),
+            to: Utc::now(),
+            resolution_secs: 60,
+            slippage_pct: 0.0,
+            // Fixed 0.15% fee so at least one filled trade carries a fee.
+            fee_pct: Some(0.0015),
+            initial_jpy: dec!(1_000_000),
+            warmup_candles: 0,
+        };
+
+        let mut trading_config = TradingConfig::default();
+        trading_config.sma_period = 2;
+        trading_config.ema_period = 2;
+        trading_config.rsi_period = 2;
+        trading_config.macd_fast = 2;
+        trading_config.macd_slow = 3;
+        trading_config.macd_signal = 2;
+        trading_config.bollinger_period = 2;
+        trading_config.allocation_threshold = 0.01;
+
+        let prices = [
+            dec!(9_000_000),
+            dec!(9_100_000),
+            dec!(9_200_000),
+            dec!(9_300_000),
+            dec!(9_400_000),
+            dec!(9_500_000),
+            dec!(9_600_000),
+            dec!(9_700_000),
+        ];
+        let candles: Vec<Candle> = prices.iter().map(|&p| make_candle(p)).collect();
+
+        let simulator = Simulator::new(config, db);
+        let report = simulator.run(candles, trading_config).await.unwrap();
+
+        assert!(
+            report.total_trades > 0,
+            "fixture must produce at least one trade to exercise fee accounting"
+        );
+        assert!(
+            report.total_fees_jpy > 0.0,
+            "a 0.15% fixed fee on a filled trade must be reflected in total_fees_jpy"
+        );
+        assert!(report.traded_volume_jpy > 0.0);
+        // Effective fee rate on a fixed-fee run must equal the fixed rate,
+        // since every fill paid exactly that rate.
+        assert!((report.effective_fee_pct - 0.0015).abs() < 1e-9);
+        assert_eq!(report.final_fee_tier_pct, 0.0015);
     }
 
     #[tokio::test]

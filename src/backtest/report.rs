@@ -1,4 +1,7 @@
-use crate::exchange::mock::FilledTrade;
+use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::Decimal;
+
+use crate::exchange::mock::{fee_from_volume, FilledTrade};
 use crate::types::order::OrderSide;
 
 use super::{BacktestComparison, BacktestReport, RiskEventCounts};
@@ -13,7 +16,11 @@ pub fn format_report(report: &BacktestReport) -> String {
          Win Rate     : {:.1}%\n\
          Total Trades : {}\n\
          CB Trips     : {}\n\
-         Rejected     : {}",
+         Rejected     : {}\n\
+         Total Fees   : {:.2} JPY\n\
+         Traded Volume: {:.2} JPY\n\
+         Effective Fee: {:.4}%\n\
+         Fee Drag     : {:.2}%",
         report.total_return_pct,
         report.sharpe_ratio,
         report.max_drawdown_pct,
@@ -21,18 +28,28 @@ pub fn format_report(report: &BacktestReport) -> String {
         report.total_trades,
         report.circuit_breaker_trips,
         report.orders_rejected,
+        report.total_fees_jpy,
+        report.traded_volume_jpy,
+        report.effective_fee_pct * 100.0,
+        report.fee_drag_pct,
     )
 }
 
 /// Aggregate a sequence of filled trades and an equity curve into a
 /// summary `BacktestReport`.  All financial metrics are computed here
 /// from the raw trade log and per-candle portfolio valuations.
+///
+/// `fixed_fee_pct` mirrors `BacktestConfig::fee_pct`: `Some(rate)` when the
+/// run used a fixed fee override (`MockExchangeClient::with_fee`) instead
+/// of the tier table, so `final_fee_tier_pct` reports that fixed rate
+/// rather than a tier lookup that was never actually applied.
 pub(crate) fn compute_report(
     trades: &[FilledTrade],
     equity_curve: &[f64],
     initial_jpy: f64,
     resolution_secs: u32,
     risk_events: RiskEventCounts,
+    fixed_fee_pct: Option<f64>,
 ) -> BacktestReport {
     let total_trades = trades.len() as u32;
 
@@ -43,6 +60,39 @@ pub(crate) fn compute_report(
     let sharpe_ratio = calculate_sharpe(equity_curve, resolution_secs);
     let win_rate = calculate_win_rate(trades);
 
+    // Trading-cost aggregates: total fees paid, and the JPY notional they
+    // were paid on (price * size per fill — the same quantity bitFlyer's
+    // fee tier table is keyed on).
+    let total_fees_jpy: f64 = trades
+        .iter()
+        .map(|t| t.fee.to_f64().unwrap_or(0.0))
+        .sum();
+    let traded_volume_jpy: f64 = trades
+        .iter()
+        .map(|t| (t.price * t.size).to_f64().unwrap_or(0.0))
+        .sum();
+    let effective_fee_pct = if traded_volume_jpy == 0.0 {
+        0.0
+    } else {
+        total_fees_jpy / traded_volume_jpy
+    };
+    // Tier rate that applied at the end of the run — a fixed override
+    // reports its own rate rather than a tier lookup, since no tier was
+    // ever actually consulted for such a run.
+    let final_fee_tier_pct = match fixed_fee_pct {
+        Some(rate) => rate,
+        None => {
+            let volume_decimal =
+                Decimal::try_from(traded_volume_jpy).unwrap_or(Decimal::ZERO);
+            fee_from_volume(volume_decimal)
+        }
+    };
+    let fee_drag_pct = if initial_jpy == 0.0 {
+        0.0
+    } else {
+        total_fees_jpy / initial_jpy * 100.0
+    };
+
     BacktestReport {
         total_return_pct,
         sharpe_ratio,
@@ -51,6 +101,11 @@ pub(crate) fn compute_report(
         total_trades,
         circuit_breaker_trips: risk_events.circuit_breaker_trips,
         orders_rejected: risk_events.orders_rejected,
+        total_fees_jpy,
+        traded_volume_jpy,
+        effective_fee_pct,
+        final_fee_tier_pct,
+        fee_drag_pct,
     }
 }
 
@@ -298,6 +353,11 @@ mod tests {
             total_trades: 42,
             circuit_breaker_trips: 2,
             orders_rejected: 7,
+            total_fees_jpy: 1_234.5,
+            traded_volume_jpy: 987_654.0,
+            effective_fee_pct: 0.00125,
+            final_fee_tier_pct: 0.0011,
+            fee_drag_pct: 0.12,
         };
         let s = format_report(&report);
         assert!(s.contains("12.34"));
@@ -307,6 +367,10 @@ mod tests {
         assert!(s.contains("42"));
         assert!(s.contains("CB Trips     : 2"));
         assert!(s.contains("Rejected     : 7"));
+        assert!(s.contains("Total Fees   : 1234.50 JPY"));
+        assert!(s.contains("Traded Volume: 987654.00 JPY"));
+        assert!(s.contains("Effective Fee: 0.1250%"));
+        assert!(s.contains("Fee Drag     : 0.12%"));
     }
 
     /// The annualization factor must follow `resolution_secs`; a 1h
@@ -345,6 +409,11 @@ mod tests {
             total_trades: trades,
             circuit_breaker_trips: 0,
             orders_rejected: 0,
+            total_fees_jpy: 0.0,
+            traded_volume_jpy: 0.0,
+            effective_fee_pct: 0.0,
+            final_fee_tier_pct: 0.0,
+            fee_drag_pct: 0.0,
         }
     }
 
@@ -396,6 +465,94 @@ mod tests {
         let cmp = compare(&baseline, &candidate);
         assert_eq!(cmp.trade_count_ratio, 1.0);
         assert!(cmp.promoted, "{:?}", cmp.reasons);
+    }
+
+    /// `compute_report` must aggregate fee/volume figures exactly from the
+    /// raw trade log, independent of the other statistics computed from the
+    /// equity curve.
+    #[test]
+    fn compute_report_aggregates_fee_metrics() {
+        use rust_decimal_macros::dec;
+
+        let trades = vec![
+            FilledTrade {
+                side: OrderSide::Buy,
+                price: dec!(9_000_000),
+                size: dec!(0.001),
+                fee: dec!(13.5), // 9_000 * 0.0015
+            },
+            FilledTrade {
+                side: OrderSide::Sell,
+                price: dec!(9_500_000),
+                size: dec!(0.001),
+                fee: dec!(14.25), // 9_500 * 0.0015
+            },
+        ];
+        let equity_curve = vec![1_000_000.0, 1_000_500.0];
+
+        let report = compute_report(
+            &trades,
+            &equity_curve,
+            1_000_000.0,
+            60,
+            RiskEventCounts::default(),
+            Some(0.0015),
+        );
+
+        // total_fees_jpy = 13.5 + 14.25
+        assert!((report.total_fees_jpy - 27.75).abs() < 1e-9);
+        // traded_volume_jpy = 9_000_000*0.001 + 9_500_000*0.001 = 9_000 + 9_500
+        assert!((report.traded_volume_jpy - 18_500.0).abs() < 1e-9);
+        // effective_fee_pct = 27.75 / 18_500
+        assert!((report.effective_fee_pct - (27.75 / 18_500.0)).abs() < 1e-12);
+        // fee_drag_pct = 27.75 / 1_000_000 * 100
+        assert!((report.fee_drag_pct - (27.75 / 1_000_000.0 * 100.0)).abs() < 1e-12);
+        // fixed fee override was supplied, so final_fee_tier_pct echoes it.
+        assert_eq!(report.final_fee_tier_pct, 0.0015);
+    }
+
+    /// With no trades, the fee metrics must be 0.0 rather than NaN/Inf from
+    /// a division by zero.
+    #[test]
+    fn compute_report_zero_trades_has_zero_fee_metrics() {
+        let report = compute_report(
+            &[],
+            &[1_000_000.0],
+            1_000_000.0,
+            60,
+            RiskEventCounts::default(),
+            None,
+        );
+        assert_eq!(report.total_fees_jpy, 0.0);
+        assert_eq!(report.traded_volume_jpy, 0.0);
+        assert_eq!(report.effective_fee_pct, 0.0);
+        assert_eq!(report.fee_drag_pct, 0.0);
+        // No trades and no fixed override -> tier lookup on zero volume,
+        // which is the highest (10万円未満) tier.
+        assert_eq!(report.final_fee_tier_pct, 0.0015);
+    }
+
+    /// Report JSON saved by a version of this codebase before the fee
+    /// metrics existed must still deserialize — `shirube compare-backtest`
+    /// reads baseline reports written by earlier runs.
+    #[test]
+    fn backtest_report_deserializes_without_fee_fields() {
+        let old_json = r#"{
+            "total_return_pct": 12.34,
+            "sharpe_ratio": 1.5,
+            "max_drawdown_pct": 3.2,
+            "win_rate": 0.5,
+            "total_trades": 10,
+            "circuit_breaker_trips": 0,
+            "orders_rejected": 0
+        }"#;
+        let report: BacktestReport = serde_json::from_str(old_json).unwrap();
+        assert_eq!(report.total_return_pct, 12.34);
+        assert_eq!(report.total_fees_jpy, 0.0);
+        assert_eq!(report.traded_volume_jpy, 0.0);
+        assert_eq!(report.effective_fee_pct, 0.0);
+        assert_eq!(report.final_fee_tier_pct, 0.0);
+        assert_eq!(report.fee_drag_pct, 0.0);
     }
 
     #[test]

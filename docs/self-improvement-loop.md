@@ -758,6 +758,28 @@ survives between runs. The DB is instead carried across runs as a
 `scripts/backtest-data.sh` — see "Why the DB is carried over" below for
 why this matters and why a release asset specifically.
 
+**Why this no longer uses `gh`/`sqlite3`.** `scripts/backtest-data.sh`
+originally shelled out to the `gh` CLI (for the release download/upload)
+and the `sqlite3` CLI (for `recommended_days()` and the pre-upload
+`VACUUM`). Neither is installed in the cloud routine's container, so
+`pull` hard-exited on "gh CLI not found on PATH" before a single backtest
+could run — the data bootstrap silently could not run there at all. Both
+dependencies are now `shirube` subcommands instead: `shirube db-stats`
+(row count / time range / recommended backfill days, via `rusqlite`) and
+`shirube backtest-data pull|push` (the GitHub release download/upload, via
+`reqwest` against the REST API directly). `scripts/backtest-data.sh` is
+now a thin wrapper around the latter, so the routine's container needs
+nothing beyond the `shirube` binary itself.
+
+**Token fallback.** `shirube backtest-data pull` reads `GITHUB_TOKEN`,
+falling back to `GH_TOKEN`. If neither is set — or no `backtest-data`
+release exists yet — it does not fail: it prints the reason to stderr and
+still emits `BACKFILL_DAYS=31` on stdout, so that run falls back to a full
+31-day backfill and the loop proceeds rather than dying. `push` has no
+such fallback: it fails hard without a token, since silently skipping a
+push would lose accumulated history instead of merely deferring a
+backfill.
+
 Before step 1 of the daily procedure, the routine restores that DB and
 tops it up:
 

@@ -2351,6 +2351,7 @@ dependencies = [
  "chrono",
  "dotenvy",
  "feed-rs",
+ "flate2",
  "futures-util",
  "hex",
  "hmac",

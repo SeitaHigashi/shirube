@@ -17,6 +17,29 @@ pub struct DownsampleStats {
     pub tickers_deleted: u64,
 }
 
+/// Row count and time range for one product's stored ticker bars.
+/// Backs `shirube db-stats` (see `cli.rs`), which needs this to decide how
+/// many days of backfill to request without running raw SQL outside the
+/// repository.
+pub struct TickerStats {
+    pub rows: u64,
+    pub oldest: Option<DateTime<Utc>>,
+    pub newest: Option<DateTime<Utc>>,
+}
+
+impl TickerStats {
+    /// The stats of a product with no stored rows at all — also used as the
+    /// fallback when the DB itself could not be opened or queried, so an
+    /// unreadable file degrades the same way as a genuinely empty one.
+    pub fn empty() -> Self {
+        Self {
+            rows: 0,
+            oldest: None,
+            newest: None,
+        }
+    }
+}
+
 /// 内部処理用の生行（id 込み）
 struct RawRow {
     id: i64,
@@ -318,6 +341,44 @@ impl TickerRepository {
             candles.drain(..candles.len() - count as usize);
         }
         Ok(candles)
+    }
+
+    /// 指定した product_code の行数・最古/最新タイムスタンプを返す。
+    /// 行が存在しない場合は `oldest`/`newest` が `None` になる。
+    pub async fn stats(&self, product_code: &str) -> Result<TickerStats> {
+        let pc = product_code.to_string();
+        let (rows, oldest, newest) = self
+            .conn
+            .call(move |c| {
+                let row = c.query_row(
+                    "SELECT COUNT(*), MIN(timestamp), MAX(timestamp)
+                     FROM tickers WHERE product_code = ?1",
+                    rusqlite::params![pc],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                        ))
+                    },
+                )?;
+                Ok(row)
+            })
+            .await?;
+
+        // MIN/MAX(timestamp) come back as RFC3339 strings (the storage
+        // format); a value that fails to parse is treated as absent rather
+        // than panicking or silently defaulting to the UNIX epoch.
+        let parse = |s: Option<String>| {
+            s.and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                .map(|dt| dt.with_timezone(&Utc))
+        };
+
+        Ok(TickerStats {
+            rows: rows.max(0) as u64,
+            oldest: parse(oldest),
+            newest: parse(newest),
+        })
     }
 
     /// 段階的ダウンサンプリングを実行する。
@@ -731,6 +792,33 @@ mod tests {
         assert_eq!(row.ltp_high, dec!(9005000)); // 最大
         assert_eq!(row.ltp_low, dec!(8995000));  // 最小
         assert_eq!(row.ltp, dec!(9002000));       // 最後
+    }
+
+    #[tokio::test]
+    async fn stats_on_empty_db_returns_zero_rows_and_no_timestamps() {
+        let db = Database::open_in_memory().await.unwrap();
+        let repo = db.tickers();
+
+        let stats = repo.stats("BTC_JPY").await.unwrap();
+        assert_eq!(stats.rows, 0);
+        assert!(stats.oldest.is_none());
+        assert!(stats.newest.is_none());
+    }
+
+    #[tokio::test]
+    async fn stats_reports_row_count_and_range() {
+        let db = Database::open_in_memory().await.unwrap();
+        let repo = db.tickers();
+
+        let t1 = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let t2 = Utc.with_ymd_and_hms(2024, 1, 3, 0, 0, 0).unwrap();
+        repo.insert(&make_ticker(t1, dec!(9000000))).await.unwrap();
+        repo.insert(&make_ticker(t2, dec!(9100000))).await.unwrap();
+
+        let stats = repo.stats("BTC_JPY").await.unwrap();
+        assert_eq!(stats.rows, 2);
+        assert_eq!(stats.oldest, Some(t1));
+        assert_eq!(stats.newest, Some(t2));
     }
 
     #[tokio::test]

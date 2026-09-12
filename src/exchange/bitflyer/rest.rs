@@ -51,10 +51,7 @@ impl BitFlyerRestClient {
     }
 
     pub fn new_with_base_url(api_key: String, api_secret: String, base_url: String) -> Self {
-        let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .expect("Failed to build HTTP client");
+        let http = crate::http::client_with_timeout(std::time::Duration::from_secs(10));
         Self {
             http,
             base_url,

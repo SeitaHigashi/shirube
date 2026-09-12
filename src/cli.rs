@@ -402,7 +402,7 @@ fn github_client(token: &str) -> anyhow::Result<reqwest::Client> {
         HeaderValue::from_static("2022-11-28"),
     );
     headers.insert(USER_AGENT, HeaderValue::from_static("shirube-backtest-data"));
-    Ok(reqwest::Client::builder()
+    Ok(crate::http::client_builder()
         .timeout(std::time::Duration::from_secs(60))
         .default_headers(headers)
         .build()?)

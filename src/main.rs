@@ -4,6 +4,7 @@ mod cli;
 mod config;
 mod error;
 mod exchange;
+mod http;
 mod market;
 mod news;
 mod risk;

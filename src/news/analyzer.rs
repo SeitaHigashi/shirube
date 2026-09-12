@@ -37,10 +37,7 @@ pub struct NewsAnalyzer {
 
 impl NewsAnalyzer {
     pub fn new(ollama_url: impl Into<String>, model: impl Into<String>) -> Self {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(300))
-            .build()
-            .expect("Failed to build HTTP client");
+        let client = crate::http::client_with_timeout(std::time::Duration::from_secs(300));
         Self { ollama_url: ollama_url.into(), model: model.into(), client }
     }
 

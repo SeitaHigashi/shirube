@@ -100,6 +100,27 @@ impl Simulator {
         // candles are never traded on and are outside the reported window.
         let mut risk_events = RiskEventCounts::default();
 
+        // Simulated-time clock for rebalance spacing: the timestamp of the
+        // candle on which the allocation delta was last *evaluated*.
+        //
+        // NOTE: `TradingConfig::rebalance_interval_secs` is a DB-persisted,
+        // live-honoured knob that this simulator ignored entirely until
+        // 2026-09-12 — it evaluated the delta on every candle regardless, so a
+        // backtest measured a different strategy from the one the engine runs.
+        // The spacing is measured against the candle's own `open_time`, never
+        // wall-clock: a whole backtest runs inside a single real-time second,
+        // so a wall-clock comparison would make every candle eligible (see the
+        // same argument at `risk_manager.observe_time` below).
+        //
+        // `None` initially so the first evaluated candle always evaluates, and
+        // updated on every *evaluation* (not only when an order is actually
+        // sent), so the spacing is between evaluations exactly as in the live
+        // engine's periodic rebalance ticker.
+        let mut last_rebalance_at: Option<chrono::DateTime<Utc>> = None;
+        let rebalance_interval = chrono::Duration::seconds(
+            i64::try_from(trading_config.rebalance_interval_secs).unwrap_or(i64::MAX),
+        );
+
         for (candle, point) in candles.iter().zip(points.iter()).skip(warmup) {
             // The candle's close is the mid: it prices the portfolio and sizes
             // orders. Slippage widens a synthetic book around it, so
@@ -149,49 +170,73 @@ impl Simulator {
                 risk_events.circuit_breaker_trips += 1;
             }
 
-            if let Some(target_pct) = sticky_target {
-                if !total.is_zero() && !mid.is_zero() {
-                    let current_alloc = (btc_value / total).to_f64().unwrap_or(0.0);
-                    let delta = target_pct - current_alloc;
+            // Rebalance spacing gate. Everything above this point (ticker
+            // update, compute_btc_target, the sticky_target update,
+            // observe_time and the circuit-breaker check) runs on EVERY
+            // candle: they are per-candle state machines, and skipping them
+            // would change drawdown accounting and signal state rather than
+            // only the rebalance cadence. Only the allocation-delta
+            // evaluation below is spaced.
+            //
+            // `>=` (not `>`) so that an interval equal to the candle
+            // resolution — 60s, the default — leaves every candle eligible
+            // and reproduces the pre-2026-09-12 behaviour bar-for-bar.
+            let rebalance_due = match last_rebalance_at {
+                None => true,
+                Some(prev) => candle.open_time - prev >= rebalance_interval,
+            };
 
-                    if delta.abs() >= trading_config.allocation_threshold {
-                        let order_req = TradingEngine::allocation_delta_to_order(
-                            delta,
-                            total,
-                            mid,
-                            &self.config.product_code,
-                            risk_manager.params().min_order_size,
-                        );
+            if rebalance_due {
+                if let Some(target_pct) = sticky_target {
+                    if !total.is_zero() && !mid.is_zero() {
+                        // Count the evaluation itself, not the order: the
+                        // live engine spaces its rebalance *checks*, and a
+                        // check that finds the delta below threshold still
+                        // consumed the slot.
+                        last_rebalance_at = Some(candle.open_time);
 
-                        // A `None` here means the delta had already cleared
-                        // `allocation_threshold` but the resulting order was
-                        // under the exchange lot size, so the rebalance was
-                        // dropped *before* RiskManager ever saw it — invisible
-                        // in both total_trades and orders_rejected. Count it.
-                        // NOTE: counting only; the control flow below is
-                        // unchanged, so this cannot alter any trading decision.
-                        let order_req = match order_req {
-                            Some(req) => Some(req),
-                            None => {
-                                risk_events.orders_below_min += 1;
-                                None
-                            }
-                        };
+                        let current_alloc = (btc_value / total).to_f64().unwrap_or(0.0);
+                        let delta = target_pct - current_alloc;
 
-                        if let Some(req) = order_req {
-                            match risk_manager.evaluate(req) {
-                                RiskDecision::Allow(r) => {
-                                    let _ = exchange.send_order(&r).await;
+                        if delta.abs() >= trading_config.allocation_threshold {
+                            let order_req = TradingEngine::allocation_delta_to_order(
+                                delta,
+                                total,
+                                mid,
+                                &self.config.product_code,
+                                risk_manager.params().min_order_size,
+                            );
+
+                            // A `None` here means the delta had already cleared
+                            // `allocation_threshold` but the resulting order was
+                            // under the exchange lot size, so the rebalance was
+                            // dropped *before* RiskManager ever saw it — invisible
+                            // in both total_trades and orders_rejected. Count it.
+                            // NOTE: counting only; the control flow below is
+                            // unchanged, so this cannot alter any trading decision.
+                            let order_req = match order_req {
+                                Some(req) => Some(req),
+                                None => {
+                                    risk_events.orders_below_min += 1;
+                                    None
                                 }
-                                // Both refusal arms mean the order never
-                                // reached the exchange, so it is absent from
-                                // total_trades — count it instead of
-                                // discarding it silently.
-                                RiskDecision::Reject(_) => {
-                                    risk_events.orders_rejected += 1;
-                                }
-                                RiskDecision::CircuitBreaker { .. } => {
-                                    risk_events.orders_rejected += 1;
+                            };
+
+                            if let Some(req) = order_req {
+                                match risk_manager.evaluate(req) {
+                                    RiskDecision::Allow(r) => {
+                                        let _ = exchange.send_order(&r).await;
+                                    }
+                                    // Both refusal arms mean the order never
+                                    // reached the exchange, so it is absent from
+                                    // total_trades — count it instead of
+                                    // discarding it silently.
+                                    RiskDecision::Reject(_) => {
+                                        risk_events.orders_rejected += 1;
+                                    }
+                                    RiskDecision::CircuitBreaker { .. } => {
+                                        risk_events.orders_rejected += 1;
+                                    }
                                 }
                             }
                         }
@@ -280,8 +325,21 @@ mod tests {
     use chrono::Utc;
     use rust_decimal_macros::dec;
 
-    fn make_candle(close: Decimal) -> Candle {
-        make_candle_at(close, Utc::now())
+    /// Build a candle series spaced one minute apart, i.e. matching the
+    /// `resolution_secs: 60` these fixtures declare.
+    ///
+    /// NOTE: the spacing is load-bearing. `Simulator::run` spaces
+    /// allocation-delta evaluations by `rebalance_interval_secs` of
+    /// *simulated* time, so a fixture whose candles all carry the same
+    /// timestamp (as these did before 2026-09-12, via `Utc::now()` per
+    /// candle) would be evaluated exactly once no matter how many candles it
+    /// contains — an artefact of the fixture, not of the strategy.
+    fn make_series(prices: &[Decimal], base: chrono::DateTime<Utc>) -> Vec<Candle> {
+        prices
+            .iter()
+            .enumerate()
+            .map(|(i, &p)| make_candle_at(p, base + chrono::Duration::minutes(i as i64)))
+            .collect()
     }
 
     fn make_candle_at(close: Decimal, open_time: chrono::DateTime<Utc>) -> Candle {
@@ -334,7 +392,7 @@ mod tests {
             dec!(9_600_000),
             dec!(9_700_000),
         ];
-        let candles: Vec<Candle> = prices.iter().map(|&p| make_candle(p)).collect();
+        let candles: Vec<Candle> = make_series(&prices, Utc::now());
 
         let simulator = Simulator::new(config, db.clone());
         let report = simulator.run(candles, trading_config).await.unwrap();
@@ -385,7 +443,7 @@ mod tests {
             dec!(9_600_000),
             dec!(9_700_000),
         ];
-        let candles: Vec<Candle> = prices.iter().map(|&p| make_candle(p)).collect();
+        let candles: Vec<Candle> = make_series(&prices, Utc::now());
 
         let simulator = Simulator::new(config, db);
         let report = simulator.run(candles, trading_config).await.unwrap();
@@ -448,18 +506,15 @@ mod tests {
             dec!(9_400_000), dec!(9_500_000), dec!(9_600_000), dec!(9_700_000),
             dec!(4_500_000), // crash: >50% drop within the same simulated day
         ];
-        for p in day1_prices {
-            candles.push(make_candle_at(p, day1));
-        }
+        // One minute apart, all still inside simulated day 1.
+        candles.extend(make_series(&day1_prices, day1));
         // Day 2: still bullish (ascending from the crashed price). If the
         // breaker correctly resets at the day boundary, this should still
         // place a rebalance trade instead of staying frozen forever.
         let day2_prices = [
             dec!(4_600_000), dec!(4_700_000), dec!(4_800_000), dec!(4_900_000),
         ];
-        for p in day2_prices {
-            candles.push(make_candle_at(p, day2));
-        }
+        candles.extend(make_series(&day2_prices, day2));
 
         let simulator = Simulator::new(config, db.clone());
         let report = simulator.run(candles, trading_config).await.unwrap();
@@ -627,7 +682,8 @@ mod tests {
             dec!(9_400_000), dec!(9_500_000), dec!(9_600_000), dec!(9_700_000),
             dec!(4_500_000),
         ];
-        let candles: Vec<Candle> = prices.iter().map(|&p| make_candle_at(p, day)).collect();
+        // One minute apart, all still inside the same simulated day.
+        let candles: Vec<Candle> = make_series(&prices, day);
 
         Simulator::new(config, db).run(candles, trading_config).await.unwrap()
     }
@@ -941,5 +997,106 @@ mod tests {
         // window's price move, not the flat 5,000,000 warmup — otherwise
         // this test would trivially "pass" with both sides at 0.
         assert!(report_a.hold_return_pct > 5.0, "got {}", report_a.hold_return_pct);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // rebalance_interval_secs
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// Drive one fixed oscillating 1-minute series through the simulator at a
+    /// given `rebalance_interval_secs`, holding every other input fixed.
+    ///
+    /// The series oscillates so the allocation target keeps crossing back and
+    /// forth: without spacing, essentially every candle produces a rebalance,
+    /// which is exactly the behaviour the interval is supposed to thin out.
+    async fn run_with_rebalance_interval(rebalance_interval_secs: u64) -> BacktestReport {
+        use chrono::TimeZone;
+        let base = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+
+        let db = crate::storage::db::Database::open_in_memory().await.unwrap();
+        let config = BacktestConfig {
+            product_code: "BTC_JPY".into(),
+            from: base,
+            to: base + chrono::Duration::minutes(120),
+            resolution_secs: 60,
+            slippage_pct: 0.0,
+            fee_pct: Some(0.0),
+            initial_jpy: dec!(10_000_000),
+            warmup_candles: 0,
+        };
+
+        let mut trading_config = TradingConfig::default();
+        trading_config.sma_period = 2;
+        trading_config.ema_period = 2;
+        trading_config.rsi_period = 2;
+        trading_config.macd_fast = 2;
+        trading_config.macd_slow = 3;
+        trading_config.macd_signal = 2;
+        trading_config.bollinger_period = 2;
+        trading_config.allocation_threshold = 0.01;
+        trading_config.circuit_breaker_enabled = false;
+        trading_config.rebalance_interval_secs = rebalance_interval_secs;
+
+        let prices: Vec<Decimal> = (0..120)
+            .map(|i| {
+                let wave = if i % 2 == 0 { dec!(200_000) } else { dec!(-200_000) };
+                dec!(9_000_000) + wave
+            })
+            .collect();
+
+        Simulator::new(config, db)
+            .run(make_series(&prices, base), trading_config)
+            .await
+            .unwrap()
+    }
+
+    /// REGRESSION (2026-09-12): `Simulator::run` must honour
+    /// `TradingConfig::rebalance_interval_secs`.
+    ///
+    /// Until this fix the simulator evaluated the allocation delta on every
+    /// candle and never read the field, so a backtest measured a different
+    /// strategy from the one the live `TradingEngine` runs — and the knob was
+    /// untestable as a hypothesis. Spacing the evaluations 15 minutes apart
+    /// on a 1-minute series must leave strictly fewer trades than evaluating
+    /// every minute.
+    #[tokio::test]
+    async fn longer_rebalance_interval_produces_fewer_trades() {
+        let every_minute = run_with_rebalance_interval(60).await;
+        let every_15_minutes = run_with_rebalance_interval(900).await;
+
+        assert!(
+            every_minute.total_trades > 0,
+            "fixture produced no trades at all, so it proves nothing"
+        );
+        assert!(
+            every_15_minutes.total_trades < every_minute.total_trades,
+            "spacing evaluations 900s apart on a 60s series must trade strictly \
+             less than evaluating every candle; got {} vs {}",
+            every_15_minutes.total_trades,
+            every_minute.total_trades
+        );
+    }
+
+    /// The default (60s, equal to the backtest resolution) must be a strict
+    /// no-op, so every baseline recorded before this change stays comparable:
+    /// a 60s interval on a 60s series leaves every candle eligible.
+    ///
+    /// Asserted against a run whose `rebalance_interval_secs` is 1 — i.e. an
+    /// interval too short to gate anything, reproducing the pre-change
+    /// "evaluate on every candle" path exactly.
+    #[tokio::test]
+    async fn rebalance_interval_of_one_resolution_is_unchanged() {
+        let ungated = run_with_rebalance_interval(1).await;
+        let default_60 = run_with_rebalance_interval(60).await;
+
+        assert_eq!(
+            default_60.total_trades, ungated.total_trades,
+            "a 60s interval on a 60s series must not skip any evaluation"
+        );
+        assert_eq!(default_60.total_return_pct, ungated.total_return_pct);
+        assert_eq!(default_60.traded_volume_jpy, ungated.traded_volume_jpy);
+        assert_eq!(default_60.orders_below_min, ungated.orders_below_min);
+        assert_eq!(default_60.orders_rejected, ungated.orders_rejected);
+        assert_eq!(default_60.avg_btc_exposure, ungated.avg_btc_exposure);
     }
 }

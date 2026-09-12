@@ -1,0 +1,39 @@
+{
+  "name": "rebalance-spacing-15m",
+  "kind": "algorithm",
+  "rationale": "TradingConfig has carried a `rebalance_interval_secs` field since the zone-allocation work, and the live TradingEngine honours it, but Simulator::run ignores it completely — it evaluates the allocation delta on every single candle. The 2026-09-10 and 2026-09-11 reports both recorded this as a standing lead ('rebalance_interval_secs remains untestable as a hypothesis — Simulator::run evaluates every candle and never reads the field') and carried it forward specifically so nobody would propose it. That is the wrong resolution: the field is a documented, DB-persisted, live-honoured knob, so the backtest silently measuring a different strategy from the one the engine runs is a defect in the measurement path, not a reason to leave the knob untested. Fixing it is an enabling change under the standing authorization in docs/self-improvement-loop.md, and it unlocks the single cheapest turnover lever the config already exposes. The 2026-09-12 baseline makes it worth unlocking now: at 500,000 JPY the strategy traded 754 times in 14 days (53.9/day, against the doc's 4-10/day guideline), turned over 86x its equity, won 11.7% of its trades, and lost 13.25pp of return and 24.75 Sharpe to a one-trade exposure-matched static mix. Evaluating the delta every 60 seconds is what lets a 1-minute oscillation of the signal become an executed trade; spacing evaluations 15 minutes apart lets the same signal settle before it is acted on, while changing neither the signal, the zone mapping, nor the threshold.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 900
+  },
+  "code_change_summary": "TWO SEPARATE BRANCHES — read this whole paragraph before starting. (A) ENABLING FIX, on its own branch off dev, which is the prerequisite for the hypothesis and must be reported separately so the coordinator can open its own PR for it regardless of this hypothesis's verdict: make Simulator::run (src/backtest/simulator.rs) honour TradingConfig::rebalance_interval_secs. Today its per-candle loop always evaluates the allocation delta; change it to evaluate only when at least `rebalance_interval_secs` of SIMULATED time (the candle's own open_time, never wall-clock — see the existing risk_manager.observe_time comment for why wall-clock is wrong inside a backtest) has elapsed since the last evaluation. Keep a `last_rebalance_at: Option<DateTime<Utc>>` local, initialised None so the first eligible candle always evaluates, and update it every time the delta is evaluated (not only when an order is sent), so the spacing is between evaluations exactly as in the live engine. Everything outside the delta evaluation — the ticker update, compute_btc_target, the sticky_target update, risk_manager.observe_time, and the circuit-breaker check — MUST keep running on every candle, because they are per-candle state machines and skipping them would change drawdown accounting and signal state rather than only rebalance spacing. A value of 60 (the default, and the current resolution) MUST reproduce today's behaviour bar-for-bar: verify this by running experiments/baseline-config.json through the changed binary and confirming the report is byte-identical to the pre-change baseline at all three capitals, and say so in your report. Add a regression test in src/backtest/simulator.rs asserting that a config with a large rebalance_interval_secs produces strictly fewer trades than the same config at 60 over the same candles, and another asserting 60 is unchanged. (B) HYPOTHESIS, on a second branch: nothing further to implement — it is branch (A) plus this file's trading_config, whose only difference from experiments/baseline-config.json is rebalance_interval_secs 60 -> 900. Run the three-capital backtest sweep on that branch. Report (A) and (B) separately, including branch names for both, and state clearly that (B)'s numbers are meaningless without (A).",
+  "constraints": [
+    "The enabling fix (A) MUST live on its own branch, separate from the hypothesis branch (B), and MUST be reported separately — per 'Enabling changes' in docs/self-improvement-loop.md, it gets its own PR against dev whether or not this hypothesis is promoted, and deleting a rejected hypothesis's worktree must not discard it.",
+    "This hypothesis does NOT need to modify the body of TradingEngine::compute_btc_target, and MUST NOT do so.",
+    "MUST NOT change TradingEngine::compute_btc_target's signature (its parameter list or return type) or its body.",
+    "MUST NOT change the live TradingEngine's rebalance scheduling — the live engine already honours rebalance_interval_secs; this change makes the BACKTEST match the engine, not the other way round. If the live scheduling turns out not to match the semantics implemented here, report that discrepancy rather than silently changing either side.",
+    "rebalance_interval_secs == 60 MUST be a strict no-op: the baseline config must produce a byte-identical report at all three capitals before and after the fix. Verify this explicitly and report the result; if it is not byte-identical, stop and report rather than proceeding to the variant.",
+    "MUST keep the ticker update, compute_btc_target, the sticky_target update, risk_manager.observe_time and the circuit-breaker check running on EVERY candle — only the allocation-delta evaluation is spaced.",
+    "MUST NOT change TradingEngine::allocation_delta_to_order, the exchange lot-size check, the orders_below_min counting arm, the RiskManager gates, or the fee logic.",
+    "MUST pass `cargo test`, including the existing simulator tests — several of them set allocation_threshold and assert trade counts, so verify which are affected rather than assuming (do not weaken or delete a test just to make it pass).",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically — a human reviews it like any other algorithm hypothesis.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or the bitFlyer REST/WS client."
+  ]
+}

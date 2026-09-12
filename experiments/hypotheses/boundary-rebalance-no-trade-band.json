@@ -1,0 +1,46 @@
+{
+  "name": "boundary-rebalance-no-trade-band",
+  "kind": "algorithm",
+  "rationale": "shirube currently treats allocation_threshold as a trigger only: once |target - current| clears it, the position is rebalanced all the way back to target. Classical no-trade-region results under proportional transaction costs say the opposite is optimal — trade only far enough to reach the boundary of the no-trade band, never to its centre — and the 2026-09-12 baseline is exactly the regime where that distinction should bite. At 500,000 JPY the baseline made 754 trades in 14 days (53.9/day) with an 11.7% win rate, moved 42.9M JPY of notional on 500k of equity (86x turnover), paid fee_drag_pct 5.68% against a total return of -16.09%, and lost 13.25pp of return and 24.75 of Sharpe to its own exposure-matched static mix. Full-distance rebalancing is what makes each of those 754 trades as large as it can be, and because the target oscillates around the current allocation, an over-correction in one direction immediately manufactures the opposite delta — the same overshoot-into-reversal mechanism the 2026-09-11 report measured in min-notional-aware-rebalance (3,744 buys vs 4,751 sells). Rebalancing to the near edge instead leaves the position inside the band, so a small reversal of the signal no longer clears the threshold at all. This keeps the entry condition, the signal, and the zone mapping byte-for-byte identical and changes only how far each triggered rebalance travels, so the result is attributable to that one mechanism.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 60
+  },
+  "code_change_summary": "Change how far a triggered rebalance travels, without changing when one triggers. Today both the live path (TradingEngine::handle_indicator and the periodic-rebalance path in src/trading/engine.rs, the two sites around lines 485 and 562 that test `delta.abs() < allocation_threshold`) and the backtest path (Simulator::run in src/backtest/simulator.rs, the `delta.abs() >= trading_config.allocation_threshold` test) pass the FULL `delta` to TradingEngine::allocation_delta_to_order, which rebalances all the way to target. Add one new pub(crate) associated function on TradingEngine, e.g. `fn band_edge_delta(delta: f64, allocation_threshold: f64) -> f64`, that returns the distance to the near edge of the no-trade band rather than to its centre: if `delta.abs() < allocation_threshold` return 0.0 (caller must not trade), otherwise return `delta - delta.signum() * allocation_threshold`. Document it with the formula, the [0, |delta|] range of the magnitude it returns, and a NOTE citing this hypothesis and the classical proportional-cost no-trade-region result. Then, at ALL THREE call sites above, keep the existing threshold test exactly as it is and pass `Self::band_edge_delta(delta, allocation_threshold)` (or `TradingEngine::band_edge_delta(...)` in the simulator) to allocation_delta_to_order in place of the raw `delta`. Do not change allocation_delta_to_order itself, the threshold comparison, the sign/side derivation (band_edge_delta preserves delta's sign whenever it is non-zero), compute_btc_target, apply_zone, the sticky_target logic, the RiskManager call sequence, or the orders_below_min counting arm. Note in your report that this change necessarily shrinks every order by allocation_threshold of equity, which at the 50,000 JPY primary capital pushes more orders under the 0.001 BTC lot floor (the baseline already suppressed 5,960 there) — that is a real effect of the mechanism, not a bug, but it must be quantified via orders_below_min rather than left implicit. Add unit tests in src/trading/engine.rs's test module covering: a positive delta above threshold (returns delta - threshold, strictly less than delta, same sign), a negative delta below -threshold (returns delta + threshold, same sign), a delta exactly at +threshold (returns 0.0), a sub-threshold delta (returns 0.0), and an end-to-end assertion that an order built from band_edge_delta is strictly smaller than one built from the raw delta for the same equity and price.",
+  "constraints": [
+    "This hypothesis does NOT need to modify the body of TradingEngine::compute_btc_target, and MUST NOT do so — the signal is held fixed so the measured effect is attributable to the sizing change alone.",
+    "MUST NOT change TradingEngine::compute_btc_target's signature (its parameter list or return type) or its body.",
+    "MUST NOT change the threshold entry condition itself — `delta.abs() >= allocation_threshold` stays exactly as it is at every call site, so this variant triggers on precisely the same candles as the baseline.",
+    "MUST apply the change at ALL THREE call sites (both live sites in src/trading/engine.rs and the one in src/backtest/simulator.rs), so the backtest cannot measure a strategy the live engine would not run. Leaving the live path unchanged would make the backtest result meaningless.",
+    "MUST NOT change TradingEngine::allocation_delta_to_order, the exchange lot-size check, or the fee logic.",
+    "MUST pass `cargo test`, including the existing compute_btc_target_* and simulator tests in src/trading/engine.rs and src/backtest/simulator.rs — update an expected value only where the new sizing legitimately changes it (do not weaken or delete a test just to make it pass).",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically — a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff changes order sizing on the LIVE order-submission path, per the 'anything touching live trading behavior gets flagged explicitly' rule in docs/self-improvement-loop.md.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or the bitFlyer REST/WS client."
+  ],
+  "paper_reference": {
+    "title": "Optimal two-parameter portfolio management strategy with transaction costs",
+    "authors": "Chutian Ma, Paul Smith",
+    "venue_year": "arXiv:2411.07949v2, 2024",
+    "url": "https://arxiv.org/abs/2411.07949",
+    "key_claim": "Under a trading-frequency cost proxy, a no-trade band applied directly to an unsmoothed signal — holding the position unchanged inside the band, so the policy has hysteresis — is locally optimal, and dominates smoothing the signal and then thresholding it: the band alone minimises trading frequency subject to a fixed return constraint.",
+    "pros": "It isolates the exact lever shirube leaves on the table. shirube already has the band's entry half (allocation_threshold) but none of its hysteresis: it snaps back to the centre on every trigger, so the position is never left resting inside the band and a small signal reversal immediately re-triggers. The paper's mechanism is the cheapest possible remedy — no new signal, no new indicator, no new config field — and it targets the deficit the 2026-09-12 baseline actually shows (754 trades, 86x turnover, 11.7% win rate, -24.75 Sharpe against a one-trade static mix at 500,000 JPY), which is a turnover problem rather than a signal problem.",
+    "cons": "Do not trust the result at face value here. The paper's portfolio is binary long/short (+1/-1) whereas shirube holds a continuous [0,1] BTC allocation, so 'rebalance to the boundary' is a construction the paper never analyses. Its signals are synthetic Gaussian AR(1) processes with no empirical validation on any market, let alone BTC/JPY at 1-minute resolution. It deliberately declines to model transaction costs at all, using trading frequency as a proxy — which is precisely the approximation that made shirube's own pre-#14 numbers wrong by ~19.5pp, since cost depends on notional traded and not only on trade count. Its price model is a standard rather than geometric random walk. And critically, the doc's own 'Benchmarks' section establishes that shirube has no measured gross alpha at zero fee, so a purely turnover-reducing mechanism can at best move the result toward the static mix and cannot by itself make the strategy profitable; promotion is still decided solely by shirube's own Sharpe/drawdown/trade-count rule on the holdout."
+  }
+}

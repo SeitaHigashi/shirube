@@ -1,0 +1,39 @@
+{
+  "name": "reversal-hysteresis-multiplier",
+  "kind": "algorithm",
+  "rationale": "The 2026-09-11 report's post-mortem on the rejected min-notional-aware-rebalance ended with an explicit recommendation that has never been tested: 'add hysteresis/cooldown so a lot-sized overshoot cannot trigger its own reversal'. Its evidence was a near-symmetric 3,744 buys against 4,751 sells — a ping-pong in which each correction manufactured the opposite delta. The 2026-09-12 baseline shows the same signature without any rounding involved: at 500,000 JPY, 754 trades in 14 days at an 11.7% win rate, i.e. seven trades in eight lose, which is what a position oscillating across a single threshold looks like rather than a strategy taking directional views. The current gate is sign-agnostic — it tests |delta| >= allocation_threshold whether the delta continues the last trade or reverses it — so reversing costs exactly as little as continuing. This hypothesis makes reversals strictly more expensive to trigger than continuations: after a fill, an opposite-signed delta must clear allocation_threshold * reversal_threshold_multiplier, while a same-signed delta clears the unchanged threshold. It is deliberately asymmetric, because the failure mode being targeted is asymmetric — letting a winning direction keep running while damping the oscillation is the whole point, and a symmetric cooldown (the other reading of the 2026-09-11 note) would suppress both equally.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 60,
+    "reversal_threshold_multiplier": 2.0
+  },
+  "code_change_summary": "Add one new field to TradingConfig (src/config.rs): `reversal_threshold_multiplier: f64`, with `#[serde(default = \"default_reversal_threshold_multiplier\")]` returning 1.0 so every existing stored config and every existing hypothesis file deserialises to exactly today's behaviour (1.0 makes the reversal gate identical to the normal gate, i.e. a no-op). Add it to TradingConfig::default() as 1.0, and extend TradingConfig::validate() to require it to be >= 1.0 and finite, with a Japanese error message matching the style of the existing messages. Confirm the DB round-trip in src/storage/config.rs still works (the repository serialises the whole struct as JSON, so a serde default is sufficient — verify this rather than assuming, and extend the config round-trip test to cover the new field). Then apply the gate. Track the side of the last EXECUTED fill: add a field to TradingEngine (src/trading/engine.rs) such as `last_fill_side: Option<OrderSide>`, initialised None, set to the order's side immediately after RiskManager returns Allow and the order is actually sent, at both live call sites (around lines 485 and 562); and a matching local variable in Simulator::run (src/backtest/simulator.rs), set in the RiskDecision::Allow arm after exchange.send_order. Introduce one shared pub(crate) associated function on TradingEngine so the two paths cannot drift, e.g. `fn effective_threshold(delta: f64, last_fill_side: Option<OrderSide>, allocation_threshold: f64, reversal_threshold_multiplier: f64) -> f64`, returning `allocation_threshold * reversal_threshold_multiplier` when last_fill_side is Some and the delta's implied side (Buy for delta > 0.0, Sell for delta < 0.0) is the OPPOSITE of it, and plain `allocation_threshold` otherwise (including when last_fill_side is None, i.e. before the first fill). Document it with the rule and a NOTE citing this hypothesis and the 2026-09-11 ping-pong observation. At all three call sites, replace the bare `allocation_threshold` in the comparison with the value this function returns; leave everything downstream untouched. Do not change compute_btc_target, apply_zone, sticky_target, allocation_delta_to_order, the lot-size check, the orders_below_min counting arm, the RiskManager call sequence, or the fee logic. In your report, state the resulting buy/sell split and total_trades alongside the baseline's, so the report can say whether the oscillation actually fell rather than only whether Sharpe moved. Add unit tests in src/trading/engine.rs's test module covering: no prior fill (multiplier inert, threshold unchanged); prior Buy with a positive delta (continuation, threshold unchanged); prior Buy with a negative delta whose magnitude is between threshold and threshold*multiplier (gated, no order); prior Buy with a negative delta above threshold*multiplier (allowed); the mirror cases for a prior Sell; and reversal_threshold_multiplier == 1.0 reproducing the pre-change threshold exactly in every case. Add a TradingConfig::validate() test rejecting a multiplier below 1.0.",
+  "constraints": [
+    "This hypothesis does NOT need to modify the body of TradingEngine::compute_btc_target, and MUST NOT do so — the signal is held fixed so the measured effect is attributable to the gating change alone.",
+    "MUST NOT change TradingEngine::compute_btc_target's signature (its parameter list or return type) or its body.",
+    "The new TradingConfig field MUST default to 1.0 and MUST be a strict no-op at that value, so that every config already persisted in a DB and every existing hypothesis file continues to produce byte-identical behaviour. Verify this by running the baseline config through the changed binary and confirming the report is identical to the pre-change baseline before running the variant.",
+    "MUST apply the change at ALL THREE call sites (both live sites in src/trading/engine.rs and the one in src/backtest/simulator.rs), so the backtest cannot measure a strategy the live engine would not run.",
+    "MUST key the gate on the side of an ACTUALLY EXECUTED fill (after RiskDecision::Allow and send_order), never on a merely intended or lot-floor-suppressed order — otherwise at the 50,000 JPY primary capital, where the baseline suppressed 5,960 rebalances below the lot size, the gate would be driven almost entirely by orders that never happened.",
+    "MUST NOT change TradingEngine::allocation_delta_to_order, the exchange lot-size check, the RiskManager gates, or the fee logic.",
+    "MUST pass `cargo test`, including the existing config, compute_btc_target_* and simulator tests — update an expected value only where the new gate legitimately changes it (do not weaken or delete a test just to make it pass).",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically — a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff changes the order-triggering condition on the LIVE order-submission path and adds a persisted TradingConfig field, per the 'anything touching live trading behavior gets flagged explicitly' rule in docs/self-improvement-loop.md.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or the bitFlyer REST/WS client."
+  ]
+}

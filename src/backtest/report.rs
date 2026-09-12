@@ -14,7 +14,7 @@ pub fn format_report(report: &BacktestReport) -> String {
          Sharpe Ratio : {:.3}\n\
          Max Drawdown : {:.2}%\n\
          Win Rate     : {:.1}%\n\
-         Total Trades : {}\n\
+         Total Trades : {} (buy {} / sell {})\n\
          CB Trips     : {}\n\
          Rejected     : {}\n\
          Below Min Lot: {}\n\
@@ -32,6 +32,8 @@ pub fn format_report(report: &BacktestReport) -> String {
         report.max_drawdown_pct,
         report.win_rate * 100.0,
         report.total_trades,
+        report.buy_trades,
+        report.sell_trades,
         report.circuit_breaker_trips,
         report.orders_rejected,
         report.orders_below_min,
@@ -78,6 +80,17 @@ pub(crate) fn compute_report(
     slippage_pct: f64,
 ) -> BacktestReport {
     let total_trades = trades.len() as u32;
+    // Side split of the filled trades. Reported so a run makes its own
+    // turnover *mechanism* visible: a near-symmetric buy/sell count over a
+    // short window is the signature of a position oscillating across one
+    // allocation threshold rather than of directional trading.
+    let buy_trades = trades
+        .iter()
+        .filter(|t| matches!(t.side, OrderSide::Buy))
+        .count() as u32;
+    // Derived by subtraction so the invariant buy + sell == total holds by
+    // construction even if a third side is ever introduced.
+    let sell_trades = total_trades - buy_trades;
 
     let final_equity = equity_curve.last().copied().unwrap_or(initial_jpy);
     let total_return_pct = (final_equity - initial_jpy) / initial_jpy * 100.0;
@@ -154,6 +167,8 @@ pub(crate) fn compute_report(
         max_drawdown_pct,
         win_rate,
         total_trades,
+        buy_trades,
+        sell_trades,
         circuit_breaker_trips: risk_events.circuit_breaker_trips,
         orders_rejected: risk_events.orders_rejected,
         orders_below_min: risk_events.orders_below_min,
@@ -470,6 +485,8 @@ mod tests {
             max_drawdown_pct: 3.21,
             win_rate: 0.55,
             total_trades: 42,
+            buy_trades: 20,
+            sell_trades: 22,
             circuit_breaker_trips: 2,
             orders_rejected: 7,
             orders_below_min: 13,
@@ -541,6 +558,8 @@ mod tests {
             max_drawdown_pct: dd,
             win_rate: 0.5,
             total_trades: trades,
+            buy_trades: 0,
+            sell_trades: 0,
             circuit_breaker_trips: 0,
             orders_rejected: 0,
             orders_below_min: 0,
@@ -657,6 +676,89 @@ mod tests {
         assert!((report.fee_drag_pct - (27.75 / 1_000_000.0 * 100.0)).abs() < 1e-12);
         // fixed fee override was supplied, so final_fee_tier_pct echoes it.
         assert_eq!(report.final_fee_tier_pct, 0.0015);
+    }
+
+    /// Regression test for the buy/sell split: `compute_report` must count
+    /// the sides of the filled trades, and the two counts must always sum to
+    /// `total_trades`. Without this split a report cannot distinguish
+    /// directional trading from a position ping-ponging across a single
+    /// allocation threshold.
+    #[test]
+    fn compute_report_splits_trades_by_side() {
+        use rust_decimal_macros::dec;
+
+        let buy = |price: Decimal| FilledTrade {
+            side: OrderSide::Buy,
+            price,
+            size: dec!(0.001),
+            fee: dec!(0),
+        };
+        let sell = |price: Decimal| FilledTrade {
+            side: OrderSide::Sell,
+            price,
+            size: dec!(0.001),
+            fee: dec!(0),
+        };
+        // Deliberately asymmetric (3 buys, 2 sells) so a swapped-counter bug
+        // cannot pass.
+        let trades = vec![
+            buy(dec!(9_000_000)),
+            sell(dec!(9_100_000)),
+            buy(dec!(9_200_000)),
+            sell(dec!(9_300_000)),
+            buy(dec!(9_400_000)),
+        ];
+        let equity_curve = vec![1_000_000.0; 5];
+        let evaluated_closes = vec![9_000_000.0; 5];
+
+        let report = compute_report(
+            &trades,
+            &equity_curve,
+            1_000_000.0,
+            60,
+            RiskEventCounts::default(),
+            Some(0.0),
+            0.5,
+            &evaluated_closes,
+            0.0,
+        );
+
+        assert_eq!(report.total_trades, 5);
+        assert_eq!(report.buy_trades, 3);
+        assert_eq!(report.sell_trades, 2);
+        assert_eq!(report.buy_trades + report.sell_trades, report.total_trades);
+
+        // A run with no trades must report a 0/0 split rather than panicking
+        // on the subtraction that derives sell_trades.
+        let empty = compute_report(
+            &[],
+            &equity_curve,
+            1_000_000.0,
+            60,
+            RiskEventCounts::default(),
+            Some(0.0),
+            0.5,
+            &evaluated_closes,
+            0.0,
+        );
+        assert_eq!(empty.total_trades, 0);
+        assert_eq!(empty.buy_trades, 0);
+        assert_eq!(empty.sell_trades, 0);
+    }
+
+    /// Report JSON written before `buy_trades`/`sell_trades` existed must
+    /// still deserialise (`shirube compare-backtest` reads baseline reports
+    /// saved by earlier runs), falling back to 0 for the new fields.
+    #[test]
+    fn report_json_without_side_split_still_parses() {
+        let r = report(1.0, 5.0, 42);
+        let mut json: serde_json::Value = serde_json::to_value(&r).unwrap();
+        json.as_object_mut().unwrap().remove("buy_trades");
+        json.as_object_mut().unwrap().remove("sell_trades");
+        let loaded: BacktestReport = serde_json::from_value(json).unwrap();
+        assert_eq!(loaded.total_trades, 42);
+        assert_eq!(loaded.buy_trades, 0);
+        assert_eq!(loaded.sell_trades, 0);
     }
 
     /// With no trades, the fee metrics must be 0.0 rather than NaN/Inf from

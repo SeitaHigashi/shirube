@@ -101,15 +101,22 @@ impl Simulator {
         let mut risk_events = RiskEventCounts::default();
 
         for (candle, point) in candles.iter().zip(points.iter()).skip(warmup) {
-            let price_with_slip = apply_slippage(candle.close, self.config.slippage_pct);
+            // The candle's close is the mid: it prices the portfolio and sizes
+            // orders. Slippage widens a synthetic book around it, so
+            // MockExchangeClient fills a buy at the ask and a sell at the bid
+            // and a round trip actually pays ~2 * slippage_pct. Valuing the
+            // book at the mid (rather than at a slipped price, as this did
+            // until 2026-09-09) keeps `slippage_pct` a pure cost instead of a
+            // distortion of the equity curve's level.
+            let mid = candle.close;
             let ticker = Ticker {
                 product_code: self.config.product_code.clone(),
                 timestamp: Utc::now(),
-                best_bid: price_with_slip,
-                best_ask: price_with_slip,
+                best_bid: sell_price(mid, self.config.slippage_pct),
+                best_ask: buy_price(mid, self.config.slippage_pct),
                 best_bid_size: Decimal::ONE,
                 best_ask_size: Decimal::ONE,
-                ltp: price_with_slip,
+                ltp: mid,
                 volume: Decimal::ONE,
                 volume_by_product: Decimal::ONE,
             };
@@ -124,7 +131,7 @@ impl Simulator {
 
             let jpy = exchange.jpy_balance();
             let btc = exchange.btc_balance();
-            let btc_value = btc * price_with_slip;
+            let btc_value = btc * mid;
             let total = jpy + btc_value;
 
             // Re-baseline the daily drawdown tracker off the candle's own
@@ -143,7 +150,7 @@ impl Simulator {
             }
 
             if let Some(target_pct) = sticky_target {
-                if !total.is_zero() && !price_with_slip.is_zero() {
+                if !total.is_zero() && !mid.is_zero() {
                     let current_alloc = (btc_value / total).to_f64().unwrap_or(0.0);
                     let delta = target_pct - current_alloc;
 
@@ -151,7 +158,7 @@ impl Simulator {
                         let order_req = TradingEngine::allocation_delta_to_order(
                             delta,
                             total,
-                            price_with_slip,
+                            mid,
                             &self.config.product_code,
                             risk_manager.params().min_order_size,
                         );
@@ -231,15 +238,36 @@ impl Simulator {
     }
 }
 
-/// Apply slippage to a price by multiplying by (1 + slippage_pct).
+/// Fill price for a buy: the candle's close widened *up* by `slippage_pct`.
 ///
-/// Slippage models the difference between the mid-price and the actual
-/// fill price due to market impact and bid/ask spread. A positive
-/// `slippage_pct` (e.g. 0.001 = 0.1%) always increases the price,
-/// meaning buys cost more and sells receive less than the close price.
-fn apply_slippage(price: Decimal, slippage_pct: f64) -> Decimal {
+/// Slippage models the difference between the mid-price and the actual fill
+/// price due to market impact and the bid/ask spread, so it must move against
+/// the trader on **both** sides — see `sell_price` for the other half.
+///
+/// NOTE: until 2026-09-09 a single `apply_slippage` multiplied by
+/// `(1 + slippage_pct)` and was applied to the bid, the ask and the
+/// mark-to-market price alike. That is a uniform price-level shift, not a
+/// cost: a buy-then-sell round trip at an unchanged close returned exactly
+/// what it paid, so the backtest charged nothing whatsoever for turnover
+/// (only the mock's tiered exchange fee applied). The old doc comment
+/// claimed "buys cost more and sells receive less" — the code did the
+/// opposite for sells, subsidising every one of them.
+fn buy_price(price: Decimal, slippage_pct: f64) -> Decimal {
     let slip = Decimal::try_from(slippage_pct).unwrap_or(Decimal::ZERO);
     price * (Decimal::ONE + slip)
+}
+
+/// Fill price for a sell: the candle's close widened *down* by `slippage_pct`.
+/// Clamped at zero so a nonsensical `slippage_pct > 1.0` cannot produce a
+/// negative price.
+fn sell_price(price: Decimal, slippage_pct: f64) -> Decimal {
+    let slip = Decimal::try_from(slippage_pct).unwrap_or(Decimal::ZERO);
+    let p = price * (Decimal::ONE - slip);
+    if p < Decimal::ZERO {
+        Decimal::ZERO
+    } else {
+        p
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -637,10 +665,105 @@ mod tests {
     }
 
     #[test]
-    fn apply_slippage_increases_price() {
+    fn slippage_widens_the_book_around_the_mid() {
         let price = dec!(9_000_000);
-        let slipped = apply_slippage(price, 0.001);
-        assert!(slipped > price);
+        // A buy pays above the mid and a sell receives below it — the two
+        // must straddle the mid, or slippage is a price shift, not a cost.
+        assert!(buy_price(price, 0.001) > price);
+        assert!(sell_price(price, 0.001) < price);
+        assert_eq!(buy_price(price, 0.001), dec!(9_009_000));
+        assert_eq!(sell_price(price, 0.001), dec!(8_991_000));
+    }
+
+    #[test]
+    fn slippage_of_zero_leaves_both_sides_at_the_mid() {
+        let price = dec!(9_000_000);
+        assert_eq!(buy_price(price, 0.0), price);
+        assert_eq!(sell_price(price, 0.0), price);
+    }
+
+    #[test]
+    fn sell_price_never_goes_negative() {
+        // A nonsensical slippage above 100% must clamp rather than invert the
+        // trade's sign, which would credit the seller for selling.
+        assert_eq!(sell_price(dec!(9_000_000), 1.5), Decimal::ZERO);
+    }
+
+    /// REGRESSION (2026-09-09): slippage must cost the strategy something.
+    ///
+    /// The simulator used to set bid, ask and the mark-to-market price all to
+    /// `close * (1 + slippage_pct)`, so a round trip at an unchanged price
+    /// returned exactly what it paid and turnover was free. This asserts the
+    /// property that broke: with everything else held equal, raising
+    /// `slippage_pct` must not *improve* the reported return.
+    #[tokio::test]
+    async fn higher_slippage_never_improves_return() {
+        let cheap = run_with_slippage(0.0).await;
+        let dear = run_with_slippage(0.01).await;
+
+        assert!(
+            dear.total_return_pct <= cheap.total_return_pct,
+            "slippage 1% returned {:.4}% but slippage 0% returned {:.4}% — \
+             slippage is not being charged as a cost",
+            dear.total_return_pct,
+            cheap.total_return_pct
+        );
+        // And it must actually bite: the same trades at a 1% spread cannot
+        // come out identical to a frictionless run.
+        assert!(
+            dear.total_trades > 0,
+            "test set-up produced no trades, so it proves nothing"
+        );
+        assert!(
+            (dear.total_return_pct - cheap.total_return_pct).abs() > 1e-9,
+            "slippage made no difference at all to the result"
+        );
+    }
+
+    /// Drive a short oscillating series through the simulator at one
+    /// slippage level, holding every other input fixed.
+    async fn run_with_slippage(slippage_pct: f64) -> BacktestReport {
+        let db = crate::storage::db::Database::open_in_memory().await.unwrap();
+        let config = BacktestConfig {
+            product_code: "BTC_JPY".into(),
+            from: Utc::now(),
+            to: Utc::now(),
+            resolution_secs: 60,
+            slippage_pct,
+            // Isolate slippage: no exchange fee, so any difference between the
+            // two runs is attributable to the spread alone.
+            fee_pct: Some(0.0),
+            initial_jpy: dec!(1_000_000),
+            warmup_candles: 0,
+        };
+
+        let mut trading_config = TradingConfig::default();
+        trading_config.sma_period = 2;
+        trading_config.ema_period = 2;
+        trading_config.rsi_period = 2;
+        trading_config.macd_fast = 2;
+        trading_config.macd_slow = 3;
+        trading_config.macd_signal = 2;
+        trading_config.bollinger_period = 2;
+        trading_config.allocation_threshold = 0.01;
+        trading_config.circuit_breaker_enabled = false;
+
+        // Oscillate so the allocation target keeps crossing back and forth and
+        // the run actually round-trips rather than buying once and holding.
+        let mut candles = Vec::new();
+        let start = Utc::now();
+        for i in 0..60 {
+            let wave = if i % 2 == 0 { dec!(200_000) } else { dec!(-200_000) };
+            candles.push(make_candle_at(
+                dec!(9_000_000) + wave,
+                start + chrono::Duration::seconds(60 * i),
+            ));
+        }
+
+        Simulator::new(config, db)
+            .run(candles, trading_config)
+            .await
+            .unwrap()
     }
 
     #[tokio::test]

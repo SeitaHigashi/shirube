@@ -170,37 +170,66 @@ earned anything. `excess_return_vs_static_mix_pct` and
 `sharpe_minus_static_mix` are the headline numbers: positive means the
 trading paid for itself.
 
-What this measured on 2026-09-11 (2026-08-10 .. 2026-09-09, real 1-minute
-bars, benchmarks net of the same slippage and a single entry commission —
-see `experiments/reports/2026-09-11-capital-and-fee-study.md`):
+What this measures on merged `dev` (2026-08-10 .. 2026-09-09, real
+1-minute bars, benchmarks net of the same slippage and a single entry
+commission), re-measured 2026-09-12 after PR #14 (`97b0e0c`) made
+slippage an actual round-trip cost:
 
 | | Return | Sharpe | Max DD | Trades |
 |---|---|---|---|---|
-| 100% buy-and-hold | +19.33% | 6.73 | 7.67% | 1 |
-| Static mix @ exposure 0.498 | +9.62% | 6.43 | 4.27% | 1 |
-| Strategy, zero fee | +10.87% | **7.36** | **3.28%** | 1635 |
-| Strategy @5,000,000 JPY | +7.00% | 4.94 | 4.01% | 1635 |
-| Strategy @1,000,000 JPY | +3.64% | 2.72 | 4.73% | 1635 |
-| Strategy @500,000 JPY | +0.92% | 0.86 | 5.69% | 1635 |
-| Strategy @50,000 JPY | +2.35% | 1.94 | 5.74% | 286 |
+| 100% buy-and-hold | +17.23% | 6.14 | 7.67% | 1 |
+| Static mix @ exposure 0.499 | +8.59% | 5.84 | 4.27% | 1 |
+| Strategy, zero fee | **-9.63%** | **-7.19** | 12.42% | 1607 |
+| Strategy @5,000,000 JPY | -12.77% | -9.68 | 13.82% | 1605 |
+| Strategy @1,000,000 JPY | -15.51% | -11.98 | 15.67% | 1606 |
+| Strategy @500,000 JPY | -17.76% | -13.92 | 17.90% | 1606 |
+| Strategy @50,000 JPY | -5.00% | -3.43 | 7.61% | 293 |
 
 Read that carefully, because it is the single most important fact this
-pipeline has established. **The signal has a real edge, and it is
-modest**: against its own exposure-matched benchmark the zero-fee strategy
-earns **+1.16pp of return and +0.94 of Sharpe**, at a lower drawdown
-(3.28% vs 4.27%). That is the entire gross alpha of the timing logic.
+pipeline has established, and it is the opposite of what this section
+claimed until 2026-09-12. **The timing logic has no measured edge — it
+destroys value even before fees.** Against its own exposure-matched
+benchmark the *zero-fee* strategy loses **18.30pp of return and 13.03 of
+Sharpe**, at nearly three times the drawdown (12.42% vs 4.27%). There is
+no gross alpha here to protect.
 
-**The fees then destroy it several times over.** `sharpe_minus_static_mix`
-runs from **-1.48** at 5,000,000 JPY to **-5.57** at 500,000 JPY: even in
-the cheapest fee tier the commission costs about 2.6x the alpha the signal
-generates, and at 500,000 JPY about 7x. At every capital level the
-fee-paying strategy loses to a static mix that requires exactly one trade,
-on return *and* on Sharpe.
+**Why the earlier figure was wrong, and by how much.** This section
+previously reported the zero-fee strategy at +10.87% / Sharpe 7.36 and
+concluded it earned "+1.16pp of return and +0.94 of Sharpe" against the
+static mix. That was measured while `Simulator::run` set bid, ask and the
+mark-to-market price all to `close * (1 + slippage_pct)`, so a round trip
+at an unchanged price cost exactly nothing — the strategy paid no
+slippage on any of its ~1,600 trades while the benchmark paid it on its
+single entry. The comparison was therefore structurally rigged in the
+strategy's favour. The correction is ~19.5pp of return, which is what the
+arithmetic predicts independently: turnover of roughly 205x equity over
+the window at 0.1% one-way is ~20.5pp of cost the old model never
+charged.
 
-The implication for hypothesis generation is direct and quantitative: the
-gross alpha available to be protected is ~0.94 Sharpe, while the cost
-being paid is 2.4-6.5 Sharpe. **Cost reduction is worth several times more
-than signal work** until that ratio inverts.
+**Fees are no longer the headline; turnover itself is.** Going from zero
+fee to the 500,000 JPY tier costs a further 8.13pp of return and 6.73 of
+Sharpe, which is real and worth reducing — but it is now the *second*
+problem. The first is that trading at all, at this turnover, loses to
+holding the same average exposure. At every capital level the strategy
+loses to a static mix that requires exactly one trade, on return *and* on
+Sharpe, and it does so by a margin far larger than any fee tier explains.
+
+The implication for hypothesis generation has changed accordingly, and
+this matters more than any individual variant result: **there is no
+measured gross alpha to protect, so cost reduction alone cannot make this
+strategy profitable.** A hypothesis that only trims turnover moves the
+result toward the static mix at best. Until some variant demonstrates
+positive `excess_return_vs_static_mix_pct` at zero fee, the honest
+description of this system is an allocation model that has not yet been
+shown to beat its own exposure held statically.
+
+One caveat on the levels, not on the conclusion: these figures come from
+the `backtest-data` release snapshot (33,452 bars, ending
+2026-09-09T09:11Z), which is a slightly sparser series than the local DB
+the 2026-09-11 study used — hence buy-and-hold reading +17.23% here
+versus +19.33% there. Every row above moves together with that, so the
+strategy-versus-benchmark *gaps*, which are what the conclusion rests on,
+are unaffected.
 
 **Why this is not a promotion gate.** The measurement above covers one
 30-day bull window. Static long exposure is structurally strong in a

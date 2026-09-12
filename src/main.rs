@@ -1,36 +1,25 @@
-mod api;
-mod backtest;
-mod cli;
-mod config;
-mod error;
-mod exchange;
-mod http;
-mod market;
-mod news;
-mod risk;
-mod signal;
-mod storage;
-mod sync_ext;
-mod trading;
-mod types;
-mod updater;
+//! Binary entry point. All logic lives in the `shirube` library crate (src/lib.rs)
+//! so that integration tests under `tests/` can exercise the same public API.
+
+use shirube::*;
+
 
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-use crate::config::TradingConfig;
-use crate::exchange::ExchangeClient;
-use crate::market::bus::MarketDataBus;
-use crate::risk::manager::RiskManager;
-use crate::signal::engine::SignalEngine;
-use crate::signal::indicators::{
+use shirube::config::TradingConfig;
+use shirube::exchange::ExchangeClient;
+use shirube::market::bus::MarketDataBus;
+use shirube::risk::manager::RiskManager;
+use shirube::signal::engine::SignalEngine;
+use shirube::signal::indicators::{
     bollinger::Bollinger, ema::Ema, macd::Macd, rsi::Rsi, sma::Sma,
 };
-use crate::signal::{Indicator, IndicatorSignal, SignalDetail};
-use crate::storage::db::Database;
-use crate::trading::engine::TradingEngine;
+use shirube::signal::{Indicator, IndicatorSignal, SignalDetail};
+use shirube::storage::db::Database;
+use shirube::trading::engine::TradingEngine;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -198,7 +187,7 @@ async fn main() -> anyhow::Result<()> {
 
     // News cache shared between TradingEngine and the news AI task.
     // Declared here so TradingEngine can hold a reference before the news task starts.
-    let news_cache: Arc<RwLock<Vec<crate::news::analyzer::SentimentScore>>> =
+    let news_cache: Arc<RwLock<Vec<shirube::news::analyzer::SentimentScore>>> =
         Arc::new(RwLock::new(vec![]));
 
     // TradingEngine: IndicatorOutput → aggregate_with_zone → RiskManager → send_order → SignalDetail broadcast
@@ -216,7 +205,7 @@ async fn main() -> anyhow::Result<()> {
 
     // 最新シグナルをキャッシュするタスク（API配信用）
     // TradingEngine が SignalDetail をブロードキャストするので、そちらを subscribe する
-    let latest_signal: Arc<RwLock<Option<crate::signal::SignalDetail>>> =
+    let latest_signal: Arc<RwLock<Option<shirube::signal::SignalDetail>>> =
         Arc::new(RwLock::new(None));
     {
         let cache = Arc::clone(&latest_signal);
@@ -235,7 +224,7 @@ async fn main() -> anyhow::Result<()> {
     if !warmup_signals.is_empty() {
         // target_pct at warmup: no sticky_target yet, use neutral 0.5
         let detail = SignalDetail {
-            aggregate: crate::signal::AllocationSignal { normalized: 0.5 },
+            aggregate: shirube::signal::AllocationSignal { normalized: 0.5 },
             target_pct: 0.5,
             indicators: warmup_signals,
             raw_indicators: None,

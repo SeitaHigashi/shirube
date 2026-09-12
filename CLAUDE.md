@@ -52,121 +52,15 @@ Storage (SQLite)
 
 ## Module Structure
 
-```
-src/
-  config.rs           # TradingConfig + ZoneConfig (zone-based BTC allocation, DB-persisted)
-  error.rs            # unified error type
-  main.rs             # startup entry point (auto-switches based on API key presence)
+`src/` mirrors the architecture above, one directory per box:
+`config` · `error` · `types` · `exchange` (`bitflyer/{rest,ws,auth,models}`, `mock`, `rate_limiter`)
+· `market` · `signal` (`engine`, `indicators/`) · `risk` · `trading` · `backtest` · `news`
+· `storage` (one repository per table) · `api` (`server`, `ws_handler`, `routes/`).
 
-  types/
-    market.rs         # Ticker, Trade, Candle
-    order.rs          # Order, Balance
-    mod.rs
+`frontend/` is a Svelte app: `src/lib/{api,ws,stores,types}.ts` plus `src/components/*.svelte`;
+`bun run build` emits `frontend/static/`, which axum's `ServeDir` serves and which **is committed**.
 
-  exchange/
-    bitflyer/
-      rest.rs         # REST client + rate_limiter.acquire() on all HTTP methods
-      ws.rs           # WebSocket client + run_with_reconnect() (exponential backoff)
-      auth.rs         # HMAC-SHA256 signature
-      models.rs       # bitFlyer-specific response structs
-      mod.rs
-    mock.rs           # MockExchangeClient (for tests and paper trading)
-    rate_limiter.rs   # Token bucket (200 req/min)
-    mod.rs            # ExchangeClient trait, PublicBitFlyerClient
-
-  market/
-    bus.rs            # MarketDataBus — WS + REST → Candle broadcast + DB save
-    candle_aggregator.rs  # WS executions / REST ticker → Candle aggregation (bucket mgmt)
-    mod.rs
-
-  signal/
-    mod.rs            # Signal type, Indicator trait, MockIndicator, SignalDetail, AllocationSignal
-    engine.rs         # SignalEngine — multi-indicator aggregation → Signal broadcast
-    indicators/
-      sma.rs / ema.rs / rsi.rs / macd.rs / bollinger.rs
-      mod.rs
-
-  risk/
-    mod.rs            # RiskParams, RiskDecision (Allow/Reject/CircuitBreaker)
-    manager.rs        # RiskManager — position limit / daily drawdown / circuit breaker
-
-  trading/
-    engine.rs         # TradingEngine — Signal → RiskManager → send_order
-                      # last_reset_date detects UTC date change → auto reset_daily()
-    mod.rs
-
-  backtest/
-    mod.rs            # BacktestConfig, BacktestReport type definitions
-    downloader.rs     # ExecutionSource trait + Downloader (DB cache first)
-    simulator.rs      # SimulatedExchange (ExchangeClient impl) + Simulator
-    report.rs         # format_report() statistics output utility
-
-  news/
-    mod.rs
-    fetcher.rs        # FeedSource trait + NewsFetcher (feed-rs, dedup)
-    analyzer.rs       # NewsAnalyzer (Ollama HTTP API, fallback score=0.0)
-    scorer.rs         # NewsScorer (combined_confidence, sentiment_to_signal)
-
-  storage/
-    db.rs             # Database wrapper (WAL mode)
-    schema.rs         # CREATE TABLE definitions
-    candles.rs        # CandleRepository
-    tickers.rs        # TickerRepository
-    orders.rs         # OrderRepository
-    trades.rs         # TradeRepository
-    news_sentiments.rs # NewsSentimentRepository
-    config.rs         # ConfigRepository (TradingConfig persistence)
-    mock_state.rs     # MockStateRepository (paper trading balance/order state)
-    mod.rs
-
-  api/
-    mod.rs            # AppState (db, exchange, candle_tx, signal_tx, news_cache, trading_config, latest_signal)
-    server.rs         # axum server + build_router() + ServeDir
-    ws_handler.rs     # WebSocket /ws/candles (Candle broadcast → JSON push)
-    routes/
-      ticker.rs       # GET /api/ticker
-      candles.rs      # GET /api/candles
-      orders.rs       # GET/POST /api/orders
-      balance.rs      # GET /api/balance
-      backtest.rs     # GET /api/backtest
-      news.rs         # GET /api/news/latest
-      config.rs       # GET/PUT /api/config (TradingConfig)
-      signal.rs       # GET /api/signal (latest SignalDetail)
-      mod.rs
-
-  bin/
-    migrate_candles_to_tickers.rs  # one-off migration utility
-```
-
-```
-frontend/
-  src/
-    App.svelte              # ルートレイアウト（レスポンシブ CSS Grid）
-    main.ts                 # エントリポイント
-    lib/
-      types.ts              # 共通型定義
-      stores.ts             # Svelte writable stores（ticker, signal, balances, news…）
-      api.ts                # REST fetch ラッパー（/api/* エンドポイント）
-      ws.ts                 # WebSocket 管理（/ws/candles, /ws/tickers, /ws/signal）
-    components/
-      Header.svelte         # タイトル + ティッカー
-      ChartPanel.svelte     # lightweight-charts 3チャート + 解像度切替 + BEP ライン
-      SignalPanel.svelte    # シグナル・ゲージ・信頼度
-      BalancePanel.svelte   # JPY/BTC 残高
-      OrdersPanel.svelte    # 最近の注文テーブル
-      NewsPanel.svelte      # ニュースセンチメント
-      SettingsPanel.svelte  # TradingConfig フォーム
-      StatusBar.svelte      # WS 接続ステータス
-  index.html                # Vite エントリ HTML
-  package.json              # bun スクリプト定義
-  vite.config.ts            # ビルド出力先: static/、開発プロキシ設定
-  svelte.config.js          # vitePreprocess（TypeScript 有効化）
-  tsconfig.json
-  bun.lock                  # bun ロックファイル（コミット対象）
-  static/                   # Vite ビルド出力（axum ServeDir が配信）
-    index.html
-    assets/
-```
+Read the directory itself for file-level detail — it is authoritative, this list is not.
 
 ---
 
@@ -200,8 +94,44 @@ frontend/
 ## Development
 
 - Build: `cargo build`
-- Test: `cargo test`
+- Test: `cargo test` (unit tests + `tests/` integration tests)
 - API keys via environment variables. Never hardcode secrets.
+
+## Testing Policy
+
+**IMPORTANT: write the test first.** Write a failing test, run `cargo test` and
+confirm it fails for the reason you expect, then implement until it passes.
+**Never edit a test to make it pass** — fix the implementation. If a test turns
+out to encode the wrong expectation, say so explicitly before changing it.
+
+### Tests are REQUIRED for
+
+- Pure logic: `signal/` (indicators, `engine`), `risk/manager`, `news/scorer`,
+  `config`, `backtest/` — normal case, boundary values, and error case
+- Any new `storage/` repository method or `api/routes/` endpoint
+  (use `Database::open_in_memory()`)
+- **Every bug fix** — a regression test that fails before the fix and passes after
+
+Tests are optional for thin I/O wrappers (`exchange/bitflyer/{rest,ws}`,
+`market/bus`, `updater`); prefer covering those through `MockExchangeClient`
+rather than hand-mocking each call.
+
+### Where tests go
+
+- Unit tests: `#[cfg(test)] mod tests` in the same file (can reach private items)
+- Integration tests: `tests/*.rs`, public API only, shared helpers in `tests/common/`.
+  Add one when a change crosses a module boundary — signal→trading→risk→exchange,
+  api→storage, or the backtest pipeline.
+
+### Quality bar (a bad test is worse than no test)
+
+- Test **behavior**, not implementation. Ask: *would this fail if the logic broke?*
+  If not, delete it.
+- No trivial tests (getters, struct construction, `Default` values)
+- Never mock the thing under test; use real in-memory DB and `MockExchangeClient`
+- Assert on values, never just "it didn't panic"
+- Deterministic: inject timestamps, never `sleep` on a fixed duration to await work
+- Name the scenario, not the function: `a_bearish_reversal_sells_the_position_back_out`
 
 ## Frontend Development
 
@@ -240,17 +170,18 @@ git push
 After completing any implementation task:
 
 1. If frontend source (`frontend/src/`) was changed, run `cd frontend && bun run build` first
-2. Run `cargo test` and confirm all tests pass
-2. Stage only changed files (avoid `git add -A`)
-3. Commit using conventional commits format with an **English** message:
+2. Confirm the change carries the tests the Testing Policy requires
+3. Run `cargo test` and confirm all tests pass
+4. Stage only changed files (avoid `git add -A`)
+5. Commit using conventional commits format with an **English** message:
    ```
    <type>: <short description>
 
    - bullet points of changes
    ```
    Types: `feat` / `fix` / `refactor` / `docs` / `test` / `chore` / `perf`
-4. Verify with `git log --oneline -3`
-5. Run `git push` to push the commit to remote
+6. Verify with `git log --oneline -3`
+7. Run `git push` to push the commit to remote
 
 **Rules:**
 - Never commit secrets or `.env` files

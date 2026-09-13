@@ -9,7 +9,7 @@ use crate::error::Result;
 use crate::exchange::mock::MockExchangeClient;
 use crate::exchange::ExchangeClient;
 use crate::risk::{RiskManager, RiskDecision};
-use crate::signal::{apply_zone, compute_indicators};
+use crate::signal::{apply_zone, compute_indicators, SmoothedSignal};
 use crate::storage::db::Database;
 use crate::trading::engine::TradingEngine;
 use crate::types::market::{Candle, Ticker};
@@ -79,6 +79,16 @@ impl Simulator {
         // TradingEngine と同じ sticky-target ロジック: compute_btc_target が
         // None（ウォームアップ中）を返した間は直前の目標配分を維持する。
         let mut sticky_target: Option<f64> = None;
+        // EWMA over the composite normalized signal, applied to
+        // compute_btc_target's return value before range_max scaling and
+        // apply_zone. The live TradingEngine holds the identical filter in its
+        // `signal_filter` field, so backtest and live cannot diverge here.
+        // NOTE: this site sees exactly one update per 60s bar; the live
+        // SignalEngine evaluates ~4x/second, so the bar-expressed half-life is
+        // only equivalent live if the live cadence is one evaluation per bar.
+        // See SmoothedSignal's doc comment — that divergence is a separately
+        // tracked open question and is deliberately not addressed here.
+        let mut signal_filter = SmoothedSignal::new();
         let mut equity_curve: Vec<f64> = Vec::with_capacity(candles.len() - warmup);
         // Raw (unslipped) close of every evaluated candle, in order — feeds
         // the buy-and-hold / static-mix benchmarks in `compute_report`.
@@ -125,7 +135,11 @@ impl Simulator {
             // 本番と同一の compute_btc_target を呼び出す（NOTE: この関数の
             // 内部ロジックは手動管理対象 — trading/engine.rs のコメント参照）
             if let Some(normalized) = TradingEngine::compute_btc_target(point, &[], &trading_config) {
-                let raw = normalized * trading_config.zone.range_max;
+                // Smooth across bars first; on a warmup candle (None above) the
+                // filter is left untouched rather than decayed, matching the
+                // sticky-target semantics.
+                let smoothed = signal_filter.update(normalized);
+                let raw = smoothed * trading_config.zone.range_max;
                 sticky_target = Some(apply_zone(raw, &trading_config.zone));
             }
 

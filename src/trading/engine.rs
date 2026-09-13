@@ -15,7 +15,7 @@ use crate::exchange::ExchangeClient;
 use crate::news::analyzer::SentimentScore;
 use crate::risk::manager::RiskManager;
 use crate::risk::RiskDecision;
-use crate::signal::{AllocationSignal, IndicatorOutput, IndicatorPoint, SignalDetail};
+use crate::signal::{AllocationSignal, IndicatorOutput, IndicatorPoint, SignalDetail, SmoothedSignal};
 use crate::storage::orders::OrderRepository;
 use crate::types::order::{Order, OrderRequest, OrderSide, OrderStatus, OrderType};
 
@@ -53,6 +53,16 @@ pub struct TradingEngine {
     /// Latest news sentiment scores from the news analysis task.
     /// Used to incorporate news into the BTC allocation target calculation.
     news_cache: Arc<RwLock<Vec<SentimentScore>>>,
+    /// EWMA filter over the composite normalized signal returned by
+    /// `compute_btc_target`, applied *before* `range_max` scaling and
+    /// `apply_zone`. Gives the strategy memory of its own recent signal so a
+    /// single bar of indicator noise cannot swing the allocation target.
+    ///
+    /// NOTE: the backtest holds the identical filter in
+    /// `backtest::simulator::Simulator::run`, so live and backtest cannot
+    /// diverge on this. See `SmoothedSignal`'s cadence caveat: live feeds it at
+    /// the SignalEngine's ~4 Hz evaluation rate rather than once per bar.
+    signal_filter: SmoothedSignal,
 }
 
 impl TradingEngine {
@@ -74,6 +84,7 @@ impl TradingEngine {
                 order_repo: None,
                 sticky_target: None,
                 news_cache: Arc::new(RwLock::new(vec![])),
+                signal_filter: SmoothedSignal::new(),
             },
             signal_tx,
         )
@@ -382,11 +393,18 @@ impl TradingEngine {
         // Compute combined TA + news normalized value [0.0, 1.0], then apply zone mapping.
         // Returns None when all indicators are in warmup or both TA and news are neutral.
         let (maybe_target, agg_normalized) = {
-            let cfg = self.config.read().await;
+            // NOTE: snapshot the config by value rather than holding the read
+            // guard across the block — the guard borrows `self`, and the EWMA
+            // filter update below needs `&mut self`.
+            let cfg = self.config.read().await.clone();
             let news_scores = self.news_cache.read().await.clone();
             let combined = Self::compute_btc_target(&output.raw, &news_scores, &cfg);
-            let agg_norm = combined.unwrap_or(0.5);
-            let target = combined.map(|normalized| {
+            // Smooth the composite signal across evaluations before it becomes an
+            // allocation target. On a warmup/neutral `None` the filter is left
+            // untouched (not decayed), mirroring the sticky-target semantics below.
+            let smoothed = combined.map(|normalized| self.signal_filter.update(normalized));
+            let agg_norm = smoothed.unwrap_or(0.5);
+            let target = smoothed.map(|normalized| {
                 // Scale normalized value by range_max, then map through zone boundaries
                 // into the final BTC allocation ratio.
                 let raw = normalized * cfg.zone.range_max;

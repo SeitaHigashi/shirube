@@ -66,6 +66,107 @@ pub fn apply_zone(raw: f64, zone: &crate::config::ZoneConfig) -> f64 {
     ((raw - zone.hold_jpy_below) / span).clamp(0.0, 1.0)
 }
 
+// ---- SmoothedSignal — composite シグナルの EWMA 平滑化 ----
+
+/// Half-life of the composite-signal EWMA, expressed in **bars**.
+///
+/// 30 bars of 60s candles = 30 minutes of market time. This is an a priori
+/// round figure: it was chosen because it is the obvious "half an hour" value
+/// for a 1-minute bar series, and it was **NOT fitted on the holdout window,
+/// the training window, or any other window**. If it turns out to be the wrong
+/// scale that is a result to report, not a knob to retune mid-run.
+pub(crate) const EWMA_HALF_LIFE_BARS: f64 = 30.0;
+
+/// Smoothing factor derived from [`EWMA_HALF_LIFE_BARS`].
+///
+/// Formula (standard half-life → alpha conversion):
+///
+/// ```text
+///   alpha = 1 - 0.5^(1 / half_life)
+/// ```
+///
+/// With `half_life = 30` this is `1 - 0.5^(1/30) ≈ 0.022840`. After exactly
+/// `half_life` updates the filter has closed half the distance to a step
+/// input, because `(1 - alpha)^half_life = 0.5` by construction.
+///
+/// NOTE: not a `const fn` candidate — `f64::powf` is not const — so this is a
+/// `LazyLock`-free plain function evaluated at each construction instead.
+#[inline]
+pub(crate) fn ewma_alpha() -> f64 {
+    1.0 - 0.5_f64.powf(1.0 / EWMA_HALF_LIFE_BARS)
+}
+
+/// Exponentially weighted moving average over the composite normalized signal.
+///
+/// This is applied to `TradingEngine::compute_btc_target`'s **return value**,
+/// before it is scaled by `zone.range_max` and passed to [`apply_zone`].
+/// `compute_btc_target` itself stays a pure function of a single
+/// `IndicatorPoint`; all temporal memory lives here, in the caller.
+///
+/// Update rule, for each candle where `compute_btc_target` returns `Some`:
+///
+/// ```text
+///   s_0 = x_0                              (seed with the first value seen)
+///   s_t = alpha * x_t + (1 - alpha) * s_{t-1}
+/// ```
+///
+/// Seeding with the first observed value (rather than 0.5, or 0.0) means the
+/// very first evaluated candle is passed through unsmoothed, so the filter
+/// introduces no startup bias toward the neutral allocation.
+///
+/// On a warmup candle — where `compute_btc_target` returns `None` — the state
+/// is left **untouched**: it is neither updated nor decayed toward anything,
+/// matching the existing sticky-target semantics where a `None` preserves the
+/// last directional decision rather than erasing it.
+///
+/// # Cadence caveat
+///
+/// NOTE: the two call sites see different cadences. The backtest
+/// (`backtest::simulator`) performs exactly one update per 60s bar, while the
+/// live `SignalEngine` re-evaluates roughly every 250ms (~4 Hz), so live can
+/// feed this filter many updates within a single bar. The half-life is
+/// therefore expressed in **bars** and is only equivalent live if the live
+/// evaluation cadence is one update per bar. That ~4 Hz live/backtest
+/// divergence is a pre-existing, separately tracked open question (flagged in
+/// the 2026-09-12 report's "Suspected defects"); it is deliberately NOT
+/// addressed here.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SmoothedSignal {
+    /// Current filter state. `None` until the first value is seen.
+    value: Option<f64>,
+}
+
+impl SmoothedSignal {
+    /// A fresh filter with no state — the next value it sees seeds it.
+    pub(crate) fn new() -> Self {
+        Self { value: None }
+    }
+
+    /// Feed one composite normalized value and return the smoothed value to act on.
+    ///
+    /// Seeds on the first call (returns `normalized` unchanged); afterwards
+    /// applies `s_t = alpha * x_t + (1 - alpha) * s_{t-1}`. Because the input
+    /// is a normalized allocation signal in `[0.0, 1.0]` and the update is a
+    /// convex combination, the output stays inside that same range.
+    pub(crate) fn update(&mut self, normalized: f64) -> f64 {
+        let next = match self.value {
+            None => normalized,
+            Some(prev) => {
+                let alpha = ewma_alpha();
+                alpha * normalized + (1.0 - alpha) * prev
+            }
+        };
+        self.value = Some(next);
+        next
+    }
+
+    /// Current filter state without updating it. `None` before the first update.
+    #[cfg(test)]
+    pub(crate) fn value(&self) -> Option<f64> {
+        self.value
+    }
+}
+
 // ---- IndicatorOutput — SignalEngine が出力する純粋な計算結果 ----
 
 /// SignalEngine がブロードキャストする計算結果。
@@ -287,6 +388,89 @@ mod tests {
         let mut ind = MockIndicator::new("empty", vec![]);
         ind.update(&candle);
         assert!(ind.value().is_none());
+    }
+
+    mod smoothed_signal_tests {
+        use super::*;
+
+        #[test]
+        fn ewma_alpha_matches_half_life_formula() {
+            // alpha = 1 - 0.5^(1/30) = 1 - exp(-ln2/30) ≈ 0.0228400316
+            let alpha = ewma_alpha();
+            assert!((alpha - 0.0228400316_f64).abs() < 1e-9, "alpha={}", alpha);
+            // By construction (1 - alpha)^half_life must be exactly one half.
+            let decayed = (1.0 - alpha).powf(EWMA_HALF_LIFE_BARS);
+            assert!((decayed - 0.5).abs() < 1e-12, "decayed={}", decayed);
+        }
+
+        #[test]
+        fn first_value_seeds_filter_unsmoothed() {
+            let mut f = SmoothedSignal::new();
+            assert_eq!(f.value(), None);
+            // The first value must pass straight through — no pull toward 0.5.
+            let out = f.update(0.9);
+            assert_eq!(out, 0.9);
+            assert_eq!(f.value(), Some(0.9));
+        }
+
+        #[test]
+        fn constant_input_converges_to_that_constant() {
+            let mut f = SmoothedSignal::new();
+            f.update(0.2); // seed away from the target so convergence is real
+            for _ in 0..2000 {
+                f.update(0.73);
+            }
+            let out = f.update(0.73);
+            assert!((out - 0.73).abs() < 1e-6, "out={}", out);
+        }
+
+        #[test]
+        fn step_reaches_half_after_exactly_half_life_updates() {
+            // Seed at 0.0, then step to 1.0: after EWMA_HALF_LIFE_BARS updates
+            // at the new level the output must be ~0.5 (the half-life property).
+            let mut f = SmoothedSignal::new();
+            f.update(0.0);
+            let mut out = 0.0;
+            for _ in 0..(EWMA_HALF_LIFE_BARS as usize) {
+                out = f.update(1.0);
+            }
+            assert!((out - 0.5).abs() < 1e-9, "after 30 updates out={}", out);
+            // And it is genuinely a *lag*: one update short of the half-life it
+            // has covered strictly less than half the step.
+            let mut g = SmoothedSignal::new();
+            g.update(0.0);
+            let mut short = 0.0;
+            for _ in 0..(EWMA_HALF_LIFE_BARS as usize - 1) {
+                short = g.update(1.0);
+            }
+            assert!(short < 0.5, "after 29 updates short={}", short);
+        }
+
+        #[test]
+        fn warmup_none_leaves_state_unchanged() {
+            // A warmup candle is expressed by the caller simply not calling
+            // update(): the state must be neither advanced nor decayed.
+            let mut f = SmoothedSignal::new();
+            f.update(0.8);
+            let before = f.value();
+            // ... several "None" candles happen here; no update() call ...
+            assert_eq!(f.value(), before);
+            // The next Some resumes from exactly the retained state.
+            let out = f.update(0.8);
+            assert!((out - 0.8).abs() < 1e-12, "out={}", out);
+        }
+
+        #[test]
+        fn output_stays_within_input_range() {
+            // Convex combination ⇒ the filter can never leave [min, max] of its
+            // inputs, so a normalized signal in [0,1] stays in [0,1].
+            let mut f = SmoothedSignal::new();
+            let inputs = [0.0, 1.0, 0.0, 1.0, 0.35, 0.99, 0.01];
+            for x in inputs {
+                let out = f.update(x);
+                assert!((0.0..=1.0).contains(&out), "out={}", out);
+            }
+        }
     }
 
     mod zone_tests {

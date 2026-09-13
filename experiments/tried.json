@@ -230,5 +230,35 @@
     "sharpe_absolute_delta": -3.1284353135978993,
     "report_path": "experiments/reports/2026-09-12.md",
     "note": "Rejected on Sharpe (-3.128) and drawdown (+1.57pp) at the primary capital. Effect sign flips between capitals: at 500k/5M spacing halved turnover as predicted (-36% volume, +4.11pp return at 500k), but at 50,000 JPY the lot floor was the real turnover brake and wider spacing lets the delta accumulate, so turnover ROSE 58%. Its prerequisite enabling fix is PR #21, whose merge is gated on a live-vs-backtest semantic question."
+  },
+  {
+    "name": "post-trade-cooldown-30m",
+    "content_hash": "264949b71d577df951c07e9c7be7d3d30d23135e78399b2c5942c226c7e5e2a7",
+    "tried_at": "2026-09-13T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 0.0,
+    "report_path": "experiments/reports/2026-09-13.md",
+    "note": "UNTESTABLE at the 50,000 JPY promotion capital, not disproven. The primary report is identical to the baseline in every field except orders_below_min (5394 -> 5392), so sharpe_absolute_delta is exactly 0.000 -- arithmetic, not evidence. The baseline itself makes only 1 trade this window, so there was no second trade for a cooldown to suppress: of the 13 candles the gate reached, 2 cleared allocation_threshold and ZERO would have produced an order above the 0.001 BTC lot floor. At 500,000 JPY the mechanism suppressed 1,984 real orders, cut trades 765 -> 416 (-46%), and improved Sharpe -30.58 -> -22.19 (+8.386), return -16.69% -> -12.39% and max drawdown 16.91% -> 12.57%; compare-backtest returns promoted:true at BOTH diagnostic capitals. Implementation preserved on origin/experiment/post-trade-cooldown-30m (cargo test 233 passed); compute_btc_target untouched."
+  },
+  {
+    "name": "ewma-smoothed-composite-signal",
+    "content_hash": "23a743e73d51fead0ad343ee365cb4f6e6a6d2c6448c667f5925f54cb080450e",
+    "tried_at": "2026-09-13T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 0.0,
+    "report_path": "experiments/reports/2026-09-13.md",
+    "note": "UNTESTABLE at the 50,000 JPY promotion capital, not disproven -- same shape as post-trade-cooldown-30m and as the CoinGecko constant-volume VWMA. The primary report is identical to the baseline in every field except orders_below_min (5394 -> 209, -96%), which proves the filter fired; it simply had no P&L consequence where the lot floor already suppressed 100% of rebalances. The filter measurably works: realized signal range shrank 48.6% (0.3190 -> 0.1641) and stddev 50.6% (0.07323 -> 0.03617) with the mean preserved to 4dp. At 500,000 JPY it is the largest improvement this pipeline has measured: Sharpe -30.58 -> -6.17, return -16.69% -> -3.73%, max drawdown 16.91% -> 4.52%, fee drag 5.75% -> 0.60%, win rate 0.108 -> 0.417, excess_return_vs_static_mix_pct -13.56 -> -0.54 -- and unlike boundary-rebalance-no-trade-band it does NOT collapse to a static mix (48 trades, 24/24 buy/sell). CAVEAT: the half-life is expressed in BARS; the live SignalEngine re-evaluates at ~4 Hz, so live the effective half-life would be ~7.5s of market time, not 30 minutes. Non-transferable to live until that cadence is resolved. Implementation preserved on origin/experiment/ewma-smoothed-composite-signal (cargo test 236 passed); compute_btc_target untouched."
+  },
+  {
+    "name": "ta-weight-085-signal-amplitude",
+    "content_hash": "85795d340edd74489b87e5d52c2fcf264b029b05a045519e1a91a627c5bd9de1",
+    "tried_at": "2026-09-13T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -14.033944046225361,
+    "report_path": "experiments/reports/2026-09-13.md",
+    "note": "GENUINELY TESTED and decisively refuted -- the only one of today's three the primary capital could score. Amplitude rose 1.2143x (= 0.85/0.70), pushing 143 rebalances through the lot floor that the baseline could not clear: trades 1 -> 144 at 50k, 765 -> 1100 at 500k. Worse on every promotion criterion at all three capitals: Sharpe -5.367 -> -19.401 (-14.034), max drawdown 4.23% -> 12.05% (+7.82pp), return -3.28% -> -11.41%, fee_drag_pct 0.08 -> 4.62. The hypothesis's factual premise was verified TRUE in all four parts (empty news slice pins sentiment_normalized at 0.5; combined spans [0.15,0.85] at ta_weight 0.7; apply_zone's saturation arms are structurally unreachable; target confined to [0.0625,0.9375]) -- but the diagnosis it implied is WRONG. The realized composite never leaves [0.3359, 0.6548], nowhere near either bound, so the zone and the constant sentiment term were never what compressed the signal; the five-sub-signal weighted mean is. Reweighting only dilates the same curve about its centre, buying turnover and cost without buying information."
   }
 ]

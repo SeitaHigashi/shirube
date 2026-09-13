@@ -1,0 +1,24 @@
+{
+  "name": "ta-weight-085-signal-amplitude",
+  "kind": "parameter",
+  "rationale": "Measured on the current code, not guessed. Simulator::run calls `TradingEngine::compute_btc_target(point, &[], &trading_config)` with an EMPTY news slice (src/backtest/simulator.rs:127), so in every backtest this pipeline has ever run avg_sentiment is exactly 0.0 and sentiment_normalized is pinned at exactly 0.5. The composite is therefore `combined = 0.7 * ta_normalized + 0.3 * 0.5 = 0.7 * ta + 0.15`, which spans [0.15, 0.85] no matter what the indicators do. With experiments/baseline-config.json's zone (hold_jpy_below 0.1, hold_btc_above 0.9, range_max 1.0) apply_zone's saturation arms trigger at raw < 0.1 and raw > 0.9, so BOTH are structurally unreachable: the allocation target is confined to [0.0625, 0.9375] and the strategy can never go fully to JPY or fully to BTC, however saturated every indicator is. That also means 30% of the signal's dynamic range is spent on a constant, damping the amplitude of every allocation swing by the same 30%. This hypothesis moves ta_weight 0.70 -> 0.85 and sentiment_weight 0.30 -> 0.15, the single smallest change that tests whether restoring amplitude helps, leaving every indicator period, the threshold and the zone byte-identical to the baseline. It is not full-ta-weight-no-sentiment (rejected 2026-09-08 at ta 1.0 / sentiment 0.0): that variant removed news entirely and, decisively, was measured on the CoinGecko 1-hour series that docs/self-improvement-loop.md's 'Data source' section says is not comparable to the current bitFlyer 1-minute bars -- its -0.67% is not evidence about today's setup. Keeping sentiment_weight at 0.15 rather than 0.0 also keeps news a live input on the running instance, where the cache is NOT empty, so a promotion here would not silently delete a production signal.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.85,
+    "sentiment_weight": 0.15,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 60
+  }
+}

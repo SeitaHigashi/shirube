@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use chrono::Utc;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 
@@ -108,10 +107,18 @@ impl Simulator {
             // book at the mid (rather than at a slipped price, as this did
             // until 2026-09-09) keeps `slippage_pct` a pure cost instead of a
             // distortion of the equity curve's level.
+            // Advance the exchange's simulated clock to this candle before
+            // anything else touches it. MockExchangeClient keys its trailing
+            // 30-day fee-tier window off this: with wall-clock time the whole
+            // backtest happens inside one real-time instant, so the window
+            // would never move and the tier would behave exactly like the
+            // lifetime accumulator it replaced.
+            exchange.set_clock(candle.open_time);
+
             let mid = candle.close;
             let ticker = Ticker {
                 product_code: self.config.product_code.clone(),
-                timestamp: Utc::now(),
+                timestamp: candle.open_time,
                 best_bid: sell_price(mid, self.config.slippage_pct),
                 best_ask: buy_price(mid, self.config.slippage_pct),
                 best_bid_size: Decimal::ONE,

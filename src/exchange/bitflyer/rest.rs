@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde::{de::DeserializeOwned, Serialize};
 use tracing::debug;
@@ -17,7 +19,7 @@ use crate::types::{
     order::{Order, OrderRequest, OrderSide, OrderType},
 };
 
-const DEFAULT_BASE_URL: &str = "https://api.bitflyer.com";
+pub const DEFAULT_BASE_URL: &str = "https://api.bitflyer.com";
 
 /// bitFlyer's error status for `/v1/getexecutions` requests that reach past
 /// its retention window ("Execution history is limited to the most recent 31
@@ -41,9 +43,19 @@ pub struct BitFlyerRestClient {
     base_url: String,
     api_key: String,
     api_secret: String,
-    /// Shared across all HTTP methods; enforces 200 req/min rate limit
-    rate_limiter: RateLimiter,
+    /// Shared across all HTTP methods; enforces 200 req/min rate limit.
+    ///
+    /// `Arc` so that a composite client (`PublicBitFlyerClient`) can hand the
+    /// *same* budget to the mock half it delegates to. bitFlyer's limit applies
+    /// per account/IP, not per client object, so two independent buckets would
+    /// model twice the real allowance — see `PublicBitFlyerClient`.
+    rate_limiter: Arc<RateLimiter>,
 }
+
+/// bitFlyer's published request ceiling, shared by public and authenticated
+/// endpoints. `RateLimiter::new` takes the ceiling itself; a caller wanting
+/// headroom passes something smaller.
+pub const BITFLYER_MAX_REQ_PER_MIN: u32 = 200;
 
 impl BitFlyerRestClient {
     pub fn new(api_key: String, api_secret: String) -> Self {
@@ -51,15 +63,31 @@ impl BitFlyerRestClient {
     }
 
     pub fn new_with_base_url(api_key: String, api_secret: String, base_url: String) -> Self {
-        let http = crate::http::client_with_timeout(std::time::Duration::from_secs(10));
-        Self {
-            http,
-            base_url,
+        Self::new_with_limiter(
             api_key,
             api_secret,
-            // bitFlyer: 200 req/min (公開・認証共通)
-            rate_limiter: RateLimiter::new(200),
-        }
+            base_url,
+            Arc::new(RateLimiter::new(BITFLYER_MAX_REQ_PER_MIN)),
+        )
+    }
+
+    /// Build a client that draws on an externally owned rate-limit budget.
+    ///
+    /// Used by `PublicBitFlyerClient` so that its real-ticker half and its
+    /// mock order/balance half consume one shared bucket.
+    pub fn new_with_limiter(
+        api_key: String,
+        api_secret: String,
+        base_url: String,
+        rate_limiter: Arc<RateLimiter>,
+    ) -> Self {
+        let http = crate::http::client_with_timeout(std::time::Duration::from_secs(10));
+        Self { http, base_url, api_key, api_secret, rate_limiter }
+    }
+
+    /// The budget this client draws on, for observability.
+    pub fn rate_limiter(&self) -> &Arc<RateLimiter> {
+        &self.rate_limiter
     }
 
     async fn get_public<T: DeserializeOwned>(&self, path: &str) -> Result<T> {

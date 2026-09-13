@@ -47,6 +47,21 @@ pub struct BacktestReport {
     pub max_drawdown_pct: f64,
     pub win_rate: f64,
     pub total_trades: u32,
+    /// How many of `total_trades` were buys.
+    ///
+    /// NOTE: added 2026-09-12. `total_trades` alone cannot distinguish a
+    /// strategy taking directional views from one oscillating across a
+    /// single allocation threshold — the 2026-09-11 ping-pong observation
+    /// (3,744 buys against 4,751 sells) was only visible because someone
+    /// counted the sides by hand. Reporting the split makes that mechanism
+    /// readable directly off every run. `#[serde(default)]` so report JSON
+    /// written before this field existed still parses.
+    #[serde(default)]
+    pub buy_trades: u32,
+    /// How many of `total_trades` were sells. See `buy_trades`.
+    /// `buy_trades + sell_trades == total_trades` by construction.
+    #[serde(default)]
+    pub sell_trades: u32,
     /// How many times the daily-drawdown circuit breaker tripped during the
     /// run (at most once per simulated day, since `RiskManager` clears the
     /// flag at each day boundary).

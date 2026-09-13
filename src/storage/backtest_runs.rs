@@ -214,6 +214,11 @@ impl BacktestRunRepository {
                     max_drawdown_pct,
                     win_rate,
                     total_trades,
+                    // NOTE: the backtest_runs table predates the buy/sell
+                    // split as well as the risk-event counters below, so a
+                    // report read back from the DB reports zero for both.
+                    buy_trades: 0,
+                    sell_trades: 0,
                     // NOTE: the backtest_runs table predates the risk-event
                     // counters and does not store them, so a report read back
                     // from the DB reports zero rather than the run's real
@@ -271,6 +276,8 @@ mod tests {
             max_drawdown_pct: 3.5,
             win_rate: 0.55,
             total_trades: 42,
+            buy_trades: 20,
+            sell_trades: 22,
             circuit_breaker_trips: 0,
             orders_rejected: 0,
             orders_below_min: 0,

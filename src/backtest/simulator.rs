@@ -115,19 +115,12 @@ impl Simulator {
         // updated on every *evaluation* (not only when an order is actually
         // sent), so the spacing is between evaluations exactly as in the live
         // engine's periodic rebalance ticker.
-        let mut last_rebalance_at: Option<chrono::DateTime<Utc>> = None;
+        let mut last_rebalance_at: Option<chrono::DateTime<chrono::Utc>> = None;
         let rebalance_interval = chrono::Duration::seconds(
             i64::try_from(trading_config.rebalance_interval_secs).unwrap_or(i64::MAX),
         );
 
         for (candle, point) in candles.iter().zip(points.iter()).skip(warmup) {
-            // The candle's close is the mid: it prices the portfolio and sizes
-            // orders. Slippage widens a synthetic book around it, so
-            // MockExchangeClient fills a buy at the ask and a sell at the bid
-            // and a round trip actually pays ~2 * slippage_pct. Valuing the
-            // book at the mid (rather than at a slipped price, as this did
-            // until 2026-09-09) keeps `slippage_pct` a pure cost instead of a
-            // distortion of the equity curve's level.
             // Advance the exchange's simulated clock to this candle before
             // anything else touches it. MockExchangeClient keys its trailing
             // 30-day fee-tier window off this: with wall-clock time the whole
@@ -136,6 +129,13 @@ impl Simulator {
             // lifetime accumulator it replaced.
             exchange.set_clock(candle.open_time);
 
+            // The candle's close is the mid: it prices the portfolio and sizes
+            // orders. Slippage widens a synthetic book around it, so
+            // MockExchangeClient fills a buy at the ask and a sell at the bid
+            // and a round trip actually pays ~2 * slippage_pct. Valuing the
+            // book at the mid (rather than at a slipped price, as this did
+            // until 2026-09-09) keeps `slippage_pct` a pure cost instead of a
+            // distortion of the equity curve's level.
             let mid = candle.close;
             let ticker = Ticker {
                 product_code: self.config.product_code.clone(),

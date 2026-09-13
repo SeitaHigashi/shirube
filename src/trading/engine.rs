@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use tokio::sync::{broadcast, RwLock};
 use tokio::time::{interval, MissedTickBehavior};
 use tracing::{debug, info, warn};
@@ -18,6 +18,45 @@ use crate::risk::RiskDecision;
 use crate::signal::{AllocationSignal, IndicatorOutput, IndicatorPoint, SignalDetail};
 use crate::storage::orders::OrderRepository;
 use crate::types::order::{Order, OrderRequest, OrderSide, OrderStatus, OrderType};
+
+/// Minimum time that must elapse after an order actually filled before the
+/// engine may place another one, in **seconds**. 1800 s = 30 minutes.
+///
+/// NOTE: hypothesis `post-trade-cooldown-30m`. The engine previously had no
+/// notion of a minimum holding period at all: the moment an order filled, the
+/// very next 1-minute bar could produce an opposite-signed delta that cleared
+/// `allocation_threshold` and reversed the position, paying the spread twice
+/// for a round trip that lasted 60 seconds. Kearns, Kulesza & Nevmyvaka
+/// (arXiv:1007.2593) bound the profitability of exactly that regime — market
+/// orders only, holding periods of seconds to minutes — and find it
+/// "surprisingly modest" even with perfect foresight, because execution cost
+/// is paid per round trip while edge accrues with holding time.
+///
+/// NOTE: 30 minutes is a round figure picked **a priori** — 30x the 60s bar
+/// this engine trades on, so it spans the shortest indicator period in
+/// `experiments/baseline-config.json`'s neighbourhood without approaching the
+/// 200-bar SMA. It is **not** fitted on any window, holdout or training, and
+/// must not be retuned against a backtest result.
+pub(crate) const POST_TRADE_COOLDOWN_SECS: i64 = 1800;
+
+/// `true` while `now` still falls inside the post-fill cooldown opened by a
+/// fill at `last_fill`.
+///
+/// Shared by the live engine and `backtest::simulator` so the two cannot
+/// diverge: a filter that is live in one and dead in the other makes every
+/// backtest number untransferable (see `docs/self-improvement-loop.md`).
+///
+/// `last_fill == None` (nothing has filled yet) is never a cooldown. A `now`
+/// that precedes `last_fill` — only reachable live, via a clock step — yields
+/// a negative elapsed time and is treated as still inside the cooldown, i.e.
+/// the conservative direction: this gate may only ever *suppress* an order the
+/// current logic would have placed, never enable one.
+pub(crate) fn in_post_trade_cooldown(last_fill: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
+    match last_fill {
+        Some(filled_at) => (now - filled_at).num_seconds() < POST_TRADE_COOLDOWN_SECS,
+        None => false,
+    }
+}
 
 /// Core trading loop that converts IndicatorOutput into orders and SignalDetail broadcasts.
 ///
@@ -53,6 +92,14 @@ pub struct TradingEngine {
     /// Latest news sentiment scores from the news analysis task.
     /// Used to incorporate news into the BTC allocation target calculation.
     news_cache: Arc<RwLock<Vec<SentimentScore>>>,
+    /// Wall-clock time at which the most recent order actually reached the
+    /// exchange, or `None` before the first fill. Opens the
+    /// `POST_TRADE_COOLDOWN_SECS` window during which no further order may be
+    /// placed. Set only in `submit_order`, only on the branch where
+    /// `send_order` returned `Ok` — never for a delta that was gated below
+    /// `allocation_threshold`, dropped under the exchange lot size, or refused
+    /// by the risk manager, so a suppressed cycle cannot extend the cooldown.
+    last_fill_at: Option<DateTime<Utc>>,
 }
 
 impl TradingEngine {
@@ -74,6 +121,7 @@ impl TradingEngine {
                 order_repo: None,
                 sticky_target: None,
                 news_cache: Arc::new(RwLock::new(vec![])),
+                last_fill_at: None,
             },
             signal_tx,
         )
@@ -475,7 +523,19 @@ impl TradingEngine {
         }
 
         let min_order_size = self.risk_manager.params().min_order_size;
-        let order_req = if total_value.is_zero() || btc_price.is_zero() {
+        // Post-fill cooldown: suppress the whole order path while the previous
+        // fill's cooldown is still open. Deliberately placed *after*
+        // sticky_target was updated above, so the target the engine resumes
+        // from once the cooldown expires is current rather than stale, and
+        // after the drawdown observation so the risk manager keeps tracking
+        // the day exactly as before.
+        let order_req = if in_post_trade_cooldown(self.last_fill_at, Utc::now()) {
+            debug!(
+                last_fill_at = ?self.last_fill_at,
+                "Post-trade cooldown active, skipping order"
+            );
+            None
+        } else if total_value.is_zero() || btc_price.is_zero() {
             None
         } else {
             let current_alloc = (btc_value / total_value)
@@ -554,7 +614,17 @@ impl TradingEngine {
         }
 
         let min_order_size = self.risk_manager.params().min_order_size;
-        let order_req = if total_value.is_zero() || btc_price.is_zero() {
+        // Post-fill cooldown, same gate as handle_indicator: the periodic
+        // rebalance is the other path that can place an order, so leaving it
+        // ungated would let a timer tick reverse a position 60 seconds after
+        // it filled.
+        let order_req = if in_post_trade_cooldown(self.last_fill_at, Utc::now()) {
+            debug!(
+                last_fill_at = ?self.last_fill_at,
+                "Post-trade cooldown active, skipping rebalance order"
+            );
+            None
+        } else if total_value.is_zero() || btc_price.is_zero() {
             None
         } else {
             let current_alloc = (btc_value / total_value).to_f64().unwrap_or(0.0);
@@ -582,6 +652,10 @@ impl TradingEngine {
         match self.risk_manager.evaluate(order_req) {
             RiskDecision::Allow(req) => {
                 let acceptance_id = self.exchange.send_order(&req).await?;
+                // The order actually reached the exchange (send_order returned
+                // Ok; the `?` above bails out otherwise), so this is the only
+                // place that opens the post-fill cooldown window.
+                self.last_fill_at = Some(Utc::now());
                 info!(
                     side = ?req.side,
                     size = %req.size,
@@ -809,6 +883,13 @@ mod tests {
             best_ask: crashed_price,
             ..ticker
         });
+
+        // Clear the post-fill cooldown opened by the first buy. This test is
+        // about the *circuit breaker* refusing the rebalance; leaving the
+        // cooldown armed would suppress the second order before the breaker
+        // was ever consulted and make the assertion below pass for the wrong
+        // reason. (Cooldown behaviour has its own tests.)
+        engine.last_fill_at = None;
 
         // Same-day bullish signal again: the drawdown check should trip the
         // breaker before the (otherwise large) rebalance order is evaluated,
@@ -1087,6 +1168,91 @@ mod tests {
         let val = result.unwrap();
         assert!((val - 0.62).abs() < 1e-9, "expected ~0.62, got {}", val);
         assert!(val > 0.5);
+    }
+
+    // ---- post-trade cooldown ----
+
+    #[test]
+    fn post_trade_cooldown_window_boundaries() {
+        let t = chrono::Utc::now();
+
+        // Nothing has filled yet → never a cooldown.
+        assert!(!in_post_trade_cooldown(None, t));
+
+        // One bar after a fill: squarely inside the 30-minute window.
+        assert!(in_post_trade_cooldown(Some(t), t + chrono::Duration::seconds(60)));
+        // One second short of the window: still suppressed.
+        assert!(in_post_trade_cooldown(
+            Some(t),
+            t + chrono::Duration::seconds(POST_TRADE_COOLDOWN_SECS - 1)
+        ));
+        // Exactly at the window, and one second past it: allowed again.
+        assert!(!in_post_trade_cooldown(
+            Some(t),
+            t + chrono::Duration::seconds(POST_TRADE_COOLDOWN_SECS)
+        ));
+        assert!(!in_post_trade_cooldown(
+            Some(t),
+            t + chrono::Duration::seconds(POST_TRADE_COOLDOWN_SECS + 1)
+        ));
+
+        // A backwards clock step is treated as still inside the cooldown:
+        // the gate may only ever suppress an order, never enable one.
+        assert!(in_post_trade_cooldown(Some(t), t - chrono::Duration::seconds(60)));
+    }
+
+    #[tokio::test]
+    async fn post_trade_cooldown_suppresses_reversal_and_does_not_extend_itself() {
+        // A fill must block the *next* opposite-signed rebalance, and a
+        // blocked cycle must not push the cooldown's expiry forward — or the
+        // gate would latch and the engine would never trade again.
+        let mock_exchange = Arc::new(MockExchangeClient::with_fee(0.0));
+        let (_indicator_tx, indicator_rx) = broadcast::channel::<IndicatorOutput>(16);
+        let (mut engine, _signal_tx) = TradingEngine::new(
+            indicator_rx,
+            mock_exchange.clone(),
+            RiskManager::new(RiskParams::default()),
+            "BTC_JPY".into(),
+        );
+        engine = engine.with_config(Arc::new(RwLock::new(TradingConfig::default())));
+
+        // t: strong bullish → buys up to ~86% BTC and opens the cooldown.
+        engine.handle_indicator(bullish_output()).await.unwrap();
+        assert_eq!(mock_exchange.placed_orders().len(), 1, "first signal must buy");
+        let filled_at = engine.last_fill_at.expect("a filled order must arm the cooldown");
+
+        // t + ~0s (wall clock, well inside the 30-minute window): a strong
+        // bearish signal targets ~0.35 against a ~0.86 holding, a delta far
+        // above allocation_threshold that would otherwise reverse the position
+        // immediately. The cooldown must swallow it.
+        engine.handle_indicator(bearish_output()).await.unwrap();
+        assert_eq!(
+            mock_exchange.placed_orders().len(),
+            1,
+            "an opposite-signed delta inside the cooldown must be suppressed"
+        );
+        assert_eq!(
+            engine.last_fill_at,
+            Some(filled_at),
+            "a suppressed cycle must not extend the cooldown"
+        );
+
+        // Backdate the fill past the window (the same reversal, now outside
+        // the cooldown) — the identical signal must go through.
+        engine.last_fill_at =
+            Some(Utc::now() - chrono::Duration::seconds(POST_TRADE_COOLDOWN_SECS + 1));
+        engine.handle_indicator(bearish_output()).await.unwrap();
+        let orders = mock_exchange.placed_orders();
+        assert_eq!(
+            orders.len(),
+            2,
+            "the same delta must be allowed once the cooldown has expired"
+        );
+        assert_eq!(orders[1].side, OrderSide::Sell);
+        assert!(
+            engine.last_fill_at.unwrap() > filled_at,
+            "a fill must re-arm the cooldown"
+        );
     }
 
     #[tokio::test]

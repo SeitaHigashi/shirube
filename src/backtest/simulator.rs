@@ -11,7 +11,7 @@ use crate::exchange::ExchangeClient;
 use crate::risk::{RiskManager, RiskDecision};
 use crate::signal::{apply_zone, compute_indicators};
 use crate::storage::db::Database;
-use crate::trading::engine::TradingEngine;
+use crate::trading::engine::{in_post_trade_cooldown, TradingEngine};
 use crate::types::market::{Candle, Ticker};
 
 use super::{BacktestConfig, BacktestReport, RiskEventCounts};
@@ -79,6 +79,12 @@ impl Simulator {
         // TradingEngine と同じ sticky-target ロジック: compute_btc_target が
         // None（ウォームアップ中）を返した間は直前の目標配分を維持する。
         let mut sticky_target: Option<f64> = None;
+        // Post-fill cooldown state, mirroring TradingEngine::last_fill_at.
+        // Keyed on the *candle* clock rather than wall-clock for the same
+        // reason RiskManager::observe_time is (a whole backtest runs inside a
+        // single real-time second, so Utc::now() would never advance). Set
+        // only where an order actually reached the exchange.
+        let mut last_fill_time: Option<chrono::DateTime<Utc>> = None;
         let mut equity_curve: Vec<f64> = Vec::with_capacity(candles.len() - warmup);
         // Raw (unslipped) close of every evaluated candle, in order — feeds
         // the buy-and-hold / static-mix benchmarks in `compute_report`.
@@ -149,8 +155,16 @@ impl Simulator {
                 risk_events.circuit_breaker_trips += 1;
             }
 
+            // Post-fill cooldown: while the previous fill's window is still
+            // open the entire order path is skipped, exactly as in
+            // TradingEngine. Note this sits *below* the sticky_target update
+            // and the risk-manager observations above, so the target keeps
+            // tracking the market during a cooldown and the engine resumes
+            // from a current target rather than a stale one.
+            let in_cooldown = in_post_trade_cooldown(last_fill_time, candle.open_time);
+
             if let Some(target_pct) = sticky_target {
-                if !total.is_zero() && !mid.is_zero() {
+                if !total.is_zero() && !mid.is_zero() && !in_cooldown {
                     let current_alloc = (btc_value / total).to_f64().unwrap_or(0.0);
                     let delta = target_pct - current_alloc;
 
@@ -181,7 +195,16 @@ impl Simulator {
                         if let Some(req) = order_req {
                             match risk_manager.evaluate(req) {
                                 RiskDecision::Allow(r) => {
-                                    let _ = exchange.send_order(&r).await;
+                                    // Open the post-fill cooldown only when the
+                                    // order actually reached the exchange —
+                                    // never for a delta that was gated below
+                                    // the threshold, dropped under the lot
+                                    // size, or refused by the risk manager, so
+                                    // a suppressed candle cannot extend the
+                                    // cooldown indefinitely.
+                                    if exchange.send_order(&r).await.is_ok() {
+                                        last_fill_time = Some(candle.open_time);
+                                    }
                                 }
                                 // Both refusal arms mean the order never
                                 // reached the exchange, so it is absent from
@@ -496,12 +519,18 @@ mod tests {
         trading_config.bollinger_period = 2;
         trading_config.allocation_threshold = 0.01;
 
-        // Steadily rising series so the post-warmup half is unambiguously bullish.
+        // Steadily rising series so the post-warmup half is unambiguously
+        // bullish. Spaced an hour apart so the POST_TRADE_COOLDOWN_SECS gate
+        // never binds: this fixture isolates the *warmup* skip, and at 1-minute
+        // spacing the cooldown would cap both runs at a single trade and make
+        // the comparison below vacuous. Candle timestamps do not feed the
+        // indicators (compute_indicators reads closes only), so the two series
+        // produce identical signals either way.
         let candles: Vec<Candle> = (0..12)
             .map(|i| {
                 make_candle_at(
                     dec!(9_000_000) + Decimal::from(i) * dec!(100_000),
-                    base + chrono::Duration::minutes(i as i64),
+                    base + chrono::Duration::hours(i as i64),
                 )
             })
             .collect();
@@ -509,7 +538,7 @@ mod tests {
         let make_cfg = |warmup: usize| BacktestConfig {
             product_code: "BTC_JPY".into(),
             from: base,
-            to: base + chrono::Duration::minutes(12),
+            to: base + chrono::Duration::hours(12),
             resolution_secs: 60,
             slippage_pct: 0.0,
             fee_pct: Some(0.0),
@@ -627,7 +656,17 @@ mod tests {
             dec!(9_400_000), dec!(9_500_000), dec!(9_600_000), dec!(9_700_000),
             dec!(4_500_000),
         ];
-        let candles: Vec<Candle> = prices.iter().map(|&p| make_candle_at(p, day)).collect();
+        // Candles are spaced an hour apart (all still inside the same UTC day,
+        // so the daily drawdown baseline is unaffected) purely so the
+        // POST_TRADE_COOLDOWN_SECS gate never binds here. This fixture exists
+        // to observe the *risk manager's* behaviour: it must be the breaker
+        // that refuses the post-crash order, not the post-fill cooldown
+        // swallowing it before RiskManager::evaluate is ever reached.
+        let candles: Vec<Candle> = prices
+            .iter()
+            .enumerate()
+            .map(|(i, &p)| make_candle_at(p, day + chrono::Duration::hours(i as i64)))
+            .collect();
 
         Simulator::new(config, db).run(candles, trading_config).await.unwrap()
     }
@@ -662,6 +701,95 @@ mod tests {
             fired.circuit_breaker_trips,
             fired.orders_rejected
         );
+    }
+
+    /// The post-fill cooldown must actually bind in the backtest, and must
+    /// not latch.
+    ///
+    /// The identical oscillating price series is run twice, differing *only*
+    /// in candle spacing: 60s (every bar falls inside the previous fill's
+    /// 30-minute window) versus 3600s (no bar ever does). Indicator values are
+    /// computed from closes alone, so both runs see byte-identical signals and
+    /// any difference in trade count is attributable to the cooldown and
+    /// nothing else.
+    #[tokio::test]
+    async fn post_trade_cooldown_throttles_backtest_turnover() {
+        const CANDLES: i64 = 240;
+
+        let tight = run_oscillating_with_spacing(60).await;
+        let loose = run_oscillating_with_spacing(3600).await;
+
+        assert!(
+            loose.total_trades > tight.total_trades,
+            "the cooldown must suppress orders at 60s spacing: {} trades vs {} when it never binds",
+            tight.total_trades,
+            loose.total_trades
+        );
+        // At 60s spacing a fill blocks the next 30 bars, so the run cannot
+        // exceed one trade per 1800s of simulated time.
+        let max_fills = (CANDLES * 60 / crate::trading::engine::POST_TRADE_COOLDOWN_SECS) + 1;
+        assert!(
+            tight.total_trades as i64 <= max_fills,
+            "at most one fill per cooldown window is possible ({} allowed), got {}",
+            max_fills,
+            tight.total_trades
+        );
+        // And the gate must not latch: a suppressed candle does not re-arm the
+        // cooldown, so trading resumes once the window lapses.
+        assert!(
+            tight.total_trades >= 2,
+            "a suppressed candle must not extend the cooldown; got {} trades",
+            tight.total_trades
+        );
+    }
+
+    /// Drive one fixed oscillating series through the simulator at a given
+    /// candle spacing, holding prices and every config value constant.
+    async fn run_oscillating_with_spacing(spacing_secs: i64) -> BacktestReport {
+        use chrono::TimeZone;
+        let base = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+
+        let db = crate::storage::db::Database::open_in_memory().await.unwrap();
+        let config = BacktestConfig {
+            product_code: "BTC_JPY".into(),
+            from: base,
+            to: base + chrono::Duration::seconds(spacing_secs * 240),
+            resolution_secs: 60,
+            slippage_pct: 0.0,
+            fee_pct: Some(0.0),
+            initial_jpy: dec!(1_000_000),
+            warmup_candles: 0,
+        };
+
+        let mut trading_config = TradingConfig::default();
+        trading_config.sma_period = 2;
+        trading_config.ema_period = 2;
+        trading_config.rsi_period = 2;
+        trading_config.macd_fast = 2;
+        trading_config.macd_slow = 3;
+        trading_config.macd_signal = 2;
+        trading_config.bollinger_period = 2;
+        trading_config.allocation_threshold = 0.01;
+        // Keep the breaker out of it, so the only gate that differs between
+        // the two spacings is the cooldown.
+        trading_config.circuit_breaker_enabled = false;
+
+        // Alternating ±200,000 around 9,000,000: the target flips every bar,
+        // so without a cooldown nearly every candle rebalances.
+        let candles: Vec<Candle> = (0..240)
+            .map(|i| {
+                let wave = if i % 2 == 0 { dec!(200_000) } else { dec!(-200_000) };
+                make_candle_at(
+                    dec!(9_000_000) + wave,
+                    base + chrono::Duration::seconds(spacing_secs * i),
+                )
+            })
+            .collect();
+
+        Simulator::new(config, db)
+            .run(candles, trading_config)
+            .await
+            .unwrap()
     }
 
     #[test]

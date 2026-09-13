@@ -200,5 +200,35 @@
     "sharpe_improvement_pct": null,
     "sharpe_absolute_delta": -93.13935424342688,
     "report_path": "experiments/reports/2026-09-11.md"
+  },
+  {
+    "name": "boundary-rebalance-no-trade-band",
+    "content_hash": "22c6fdcbb5bdb11caa40dc970ab8365beaeebf26dc2b6924060a2dea57484f4c",
+    "tried_at": "2026-09-12T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 4.7823588237957315,
+    "report_path": "experiments/reports/2026-09-12.md",
+    "note": "Rejected solely on the trade-count criterion (2 vs 70 = 3% of baseline). Sharpe improved 4.782 absolute and max drawdown improved 2.18pp, and every metric improved at 500k and 5M too. The collapse to 2 trades is the 0.001 BTC lot floor at 50,000 JPY, not the mechanism: excess_return_vs_static_mix_pct went -2.98 -> +0.02, i.e. the variant essentially became its own static mix. Worth re-testing at a promotion capital where the lot floor does not bind."
+  },
+  {
+    "name": "reversal-hysteresis-multiplier",
+    "content_hash": "5ad26cce259e6e5b560d6584ac515b5366f678590a8518bfd25c619dec73bd65",
+    "tried_at": "2026-09-12T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 0.0,
+    "report_path": "experiments/reports/2026-09-12.md",
+    "note": "UNTESTABLE at the 50,000 JPY promotion capital, not disproven. The primary report is identical to the baseline in every field except orders_below_min (5960 -> 1340), so sharpe_absolute_delta is exactly 0.000 -- the same shape as the CoinGecko constant-volume VWMA, where 0.0 was arithmetic rather than evidence. The gate demonstrably fired (4,620 would-be reversals suppressed) but all of them were already being dropped by the lot floor. At 500k it cut trades 754 -> 288 (-62%), doubled win rate 0.117 -> 0.246, and improved return -16.09% -> -11.20% and Sharpe -29.57 -> -19.36."
+  },
+  {
+    "name": "rebalance-spacing-15m",
+    "content_hash": "42d117fdbb4d9a9f6153bf40fbf7e5f00033350a917944fdf3419b2155378baf",
+    "tried_at": "2026-09-12T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -3.1284353135978993,
+    "report_path": "experiments/reports/2026-09-12.md",
+    "note": "Rejected on Sharpe (-3.128) and drawdown (+1.57pp) at the primary capital. Effect sign flips between capitals: at 500k/5M spacing halved turnover as predicted (-36% volume, +4.11pp return at 500k), but at 50,000 JPY the lot floor was the real turnover brake and wider spacing lets the delta accumulate, so turnover ROSE 58%. Its prerequisite enabling fix is PR #21, whose merge is gated on a live-vs-backtest semantic question."
   }
 ]

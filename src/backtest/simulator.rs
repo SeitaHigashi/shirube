@@ -8,7 +8,7 @@ use crate::error::Result;
 use crate::exchange::mock::MockExchangeClient;
 use crate::exchange::ExchangeClient;
 use crate::risk::{RiskManager, RiskDecision};
-use crate::signal::{apply_zone, compute_indicators};
+use crate::signal::{apply_zone, compute_indicators, TimeSmoothedSignal};
 use crate::storage::db::Database;
 use crate::trading::engine::TradingEngine;
 use crate::types::market::{Candle, Ticker};
@@ -78,6 +78,20 @@ impl Simulator {
         // TradingEngine と同じ sticky-target ロジック: compute_btc_target が
         // None（ウォームアップ中）を返した間は直前の目標配分を維持する。
         let mut sticky_target: Option<f64> = None;
+
+        // Wall-clock-decayed EWMA applied to compute_btc_target's return value
+        // before it is scaled by zone.range_max — the same filter, with the
+        // same 30-minute half-life, that the live TradingEngine holds.
+        //
+        // NOTE: the two paths see very different update cadences (one update
+        // per 60 s candle here, roughly one per 250 ms live), and expressing
+        // the half-life in wall-clock seconds is precisely what makes them
+        // equivalent: 30 minutes of market time is 30 minutes either way. The
+        // clock fed in is the candle's own `open_time`, never `Utc::now()`,
+        // for the same reason `risk_manager.observe_time` below takes it — a
+        // whole backtest runs inside a single real-time second, so wall-clock
+        // dt would be ~0 and the filter would never decay at all.
+        let mut smoothed_signal = TimeSmoothedSignal::new();
         let mut equity_curve: Vec<f64> = Vec::with_capacity(candles.len() - warmup);
         // Raw (unslipped) close of every evaluated candle, in order — feeds
         // the buy-and-hold / static-mix benchmarks in `compute_report`.
@@ -153,7 +167,12 @@ impl Simulator {
             // 本番と同一の compute_btc_target を呼び出す（NOTE: この関数の
             // 内部ロジックは手動管理対象 — trading/engine.rs のコメント参照）
             if let Some(normalized) = TradingEngine::compute_btc_target(point, &[], &trading_config) {
-                let raw = normalized * trading_config.zone.range_max;
+                // Smooth the composite signal in wall-clock time BEFORE the
+                // zone scaling. A warmup candle (None above) skips this
+                // entirely, so the filter's state and timestamp are left
+                // untouched rather than decayed toward anything.
+                let smoothed = smoothed_signal.update(normalized, candle.open_time);
+                let raw = smoothed * trading_config.zone.range_max;
                 sticky_target = Some(apply_zone(raw, &trading_config.zone));
             }
 

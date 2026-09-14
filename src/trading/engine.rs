@@ -53,6 +53,14 @@ pub struct TradingEngine {
     /// Latest news sentiment scores from the news analysis task.
     /// Used to incorporate news into the BTC allocation target calculation.
     news_cache: Arc<RwLock<Vec<SentimentScore>>>,
+    /// Wall-clock-decayed EWMA over `compute_btc_target`'s return value,
+    /// applied before the zone scaling (see `handle_indicator`).
+    ///
+    /// NOTE: held here rather than inside `compute_btc_target` so that function
+    /// stays a pure function of one `IndicatorPoint`. The backtest simulator
+    /// holds the identical filter over its own candle clock, so live and
+    /// backtest cannot diverge.
+    smoothed_signal: crate::signal::TimeSmoothedSignal,
 }
 
 impl TradingEngine {
@@ -74,6 +82,7 @@ impl TradingEngine {
                 order_repo: None,
                 sticky_target: None,
                 news_cache: Arc::new(RwLock::new(vec![])),
+                smoothed_signal: crate::signal::TimeSmoothedSignal::new(),
             },
             signal_tx,
         )
@@ -387,9 +396,33 @@ impl TradingEngine {
             let combined = Self::compute_btc_target(&output.raw, &news_scores, &cfg);
             let agg_norm = combined.unwrap_or(0.5);
             let target = combined.map(|normalized| {
-                // Scale normalized value by range_max, then map through zone boundaries
+                // Smooth the composite signal in wall-clock time BEFORE the
+                // zone scaling, with a 30-minute half-life (see
+                // `crate::signal::TimeSmoothedSignal`).
+                //
+                // Clock: `output.calculated_at` — the timestamp the
+                // SignalEngine stamped on this evaluation. `output.raw.time`
+                // is the *candle bucket's* open_time, which is frozen for the
+                // whole 60 s a bucket is open and would therefore give dt = 0
+                // for every intra-bar update, freezing the filter. The
+                // simulator instead passes its candle's `open_time`, because
+                // there the candle clock IS the passage of market time.
+                //
+                // NOTE: the two paths see very different cadences — one update
+                // per 60 s bar in the simulator, roughly one per 250 ms live —
+                // and expressing the half-life in wall-clock seconds is
+                // precisely what makes them equivalent, so the backtest
+                // measures the filter the live engine actually runs. The ~4 Hz
+                // live evaluation rate itself is a separate open question and
+                // is deliberately NOT changed here.
+                //
+                // A warmup point (combined == None) never reaches this closure,
+                // so the filter's value and timestamp are left untouched rather
+                // than decayed toward anything.
+                let smoothed = self.smoothed_signal.update(normalized, output.calculated_at);
+                // Scale smoothed value by range_max, then map through zone boundaries
                 // into the final BTC allocation ratio.
-                let raw = normalized * cfg.zone.range_max;
+                let raw = smoothed * cfg.zone.range_max;
                 crate::signal::apply_zone(raw, &cfg.zone)
             });
             (target, agg_norm)

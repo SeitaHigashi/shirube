@@ -260,5 +260,35 @@
     "sharpe_absolute_delta": -14.033944046225361,
     "report_path": "experiments/reports/2026-09-13.md",
     "note": "GENUINELY TESTED and decisively refuted -- the only one of today's three the primary capital could score. Amplitude rose 1.2143x (= 0.85/0.70), pushing 143 rebalances through the lot floor that the baseline could not clear: trades 1 -> 144 at 50k, 765 -> 1100 at 500k. Worse on every promotion criterion at all three capitals: Sharpe -5.367 -> -19.401 (-14.034), max drawdown 4.23% -> 12.05% (+7.82pp), return -3.28% -> -11.41%, fee_drag_pct 0.08 -> 4.62. The hypothesis's factual premise was verified TRUE in all four parts (empty news slice pins sentiment_normalized at 0.5; combined spans [0.15,0.85] at ta_weight 0.7; apply_zone's saturation arms are structurally unreachable; target confined to [0.0625,0.9375]) -- but the diagnosis it implied is WRONG. The realized composite never leaves [0.3359, 0.6548], nowhere near either bound, so the zone and the constant sentiment term were never what compressed the signal; the five-sub-signal weighted mean is. Reweighting only dilates the same curve about its centre, buying turnover and cost without buying information."
+  },
+  {
+    "name": "ewma-smoothed-signal-wallclock-30m",
+    "content_hash": "1a84fb33006ebb7ef7d12f8ffd4859962ceff84cd83cd15c768d70cbc162f32a",
+    "tried_at": "2026-09-14T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 2.549876980982274,
+    "report_path": "experiments/reports/2026-09-14.md",
+    "note": "REJECTED ON THE TRADE-COUNT CRITERION ALONE, on a run where the primary capital was NOT degenerate (baseline 48 trades). Both other criteria passed decisively: Sharpe -5.849 -> -3.299 (+2.550 absolute) and max drawdown 5.67% -> 4.61% (-1.06pp). Trade count 2 vs 48 = 4%, below the 50% floor. Same shape at both diagnostic capitals: 500k Sharpe +23.572 (-29.137 -> -5.565), drawdown 16.47% -> 4.91%, trades 64 vs 771 = 8%; 5M Sharpe +17.681, drawdown 13.44% -> 4.70%, trades 8%. The wall-clock reformulation works and is cadence-invariant by construction and by test (a 0->1 step reaches 0.5 after 1800s whether delivered as 30x60s or 7200x250ms updates), so unlike the bar-indexed ewma-smoothed-composite-signal this version IS transferable to the live ~4 Hz engine. Mechanism measured: smoothed signal range -35.7% (0.318991 -> 0.205012), sd -43.7% (0.073610 -> 0.041478); bar-to-bar target moves >= allocation_threshold went 228 raw -> 0 smoothed. CAVEAT: at 50k the variant makes 2 trades, both buys, win rate 0.0, and excess_return_vs_static_mix_pct goes -1.683 -> -0.046, i.e. it again approximates its own static mix; the 500k/5M runs, with 33/31 buy/sell and ~4.6 trades/day, are the informative ones. Implementation preserved on origin/experiment/ewma-smoothed-signal-wallclock-30m (cargo test 255 passed); compute_btc_target untouched."
+  },
+  {
+    "name": "subsignal-agreement-gate",
+    "content_hash": "4f16633aaafa5710cd3d3bea4b2ac302bf5016f412a74fbbe44d1580e02a360f",
+    "tried_at": "2026-09-14T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 2.7031,
+    "report_path": "experiments/reports/2026-09-14.md",
+    "note": "REJECTED ON THE TRADE-COUNT CRITERION ALONE (1 vs 48 = 2%). Sharpe -5.849 -> -3.146 (+2.703) and max drawdown 5.67% -> 4.05% (-1.62pp) both passed. At 500k: Sharpe +18.065, drawdown 16.47% -> 7.62%, trades 199 vs 771 = 26%. THE VERDICT IS NOT THE VALUABLE PART. The instrumented run answers 2026-09-13's lead #4 decisively: over 15,286 candles the gate rejected 13,117 (85.8%), and on ALL 2,998 candles where all five sub-signals expressed an opinion they NEVER ONCE reached 4-of-5 agreement, nor were the 8,230 four-vote candles ever unanimous. Every pass came from a sparse 1-3 voter candle. The composite's narrow [0.3359, 0.6548] band is therefore GENUINE CANCELLATION between a reversion family (RSI, %B) and a trend family (SMA/EMA/MACD) that are near-mechanically opposed -- price above its moving averages is usually also high in the Bollinger band -- not a small real edge being averaged down. Gating did not widen the realized band, it narrowed it ([0.2655,0.7212] -> [0.2876,0.6975] plus an 85.8% point mass at exactly 0.5), because the most extreme points were themselves the disagreeing ones. Also recorded, not retuned: AGREEMENT_MIN_FRACTION=0.8 with majority >= 0.8*n_votes demands unanimity at n=2,3,4 (3-of-4 = 75% fails), so the gate was far stricter than '4 of 5' on sparse candles. Implementation preserved on origin/experiment/subsignal-agreement-gate (cargo test 253 passed); compute_btc_target's BODY was modified (signature unchanged)."
+  },
+  {
+    "name": "post-trade-cooldown-90m",
+    "content_hash": "ea999cf128a821f0bb7f872cb8ae6e26ff029826db79ad89f65c1f96359a084a",
+    "tried_at": "2026-09-14T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -5.7005,
+    "report_path": "experiments/reports/2026-09-14.md",
+    "note": "GENUINELY TESTED AND REFUTED at the promotion capital -- the only one of today's three whose rejection was decided by the strategy metrics rather than by the trade-count floor, and the first cooldown result this pipeline has been able to score at 50,000 JPY. Sharpe -5.849 -> -11.549 (-5.701), max drawdown 5.67% -> 8.07% (+2.40pp), return -3.76% -> -6.89%; the trade-count criterion PASSED at 175%. The counter-intuitive mechanism is measured, not inferred: a suppression-only gate RAISED the trade count at 50k (48 -> 84) because the 0.001 BTC lot floor, not the signal, sets trade size there -- suppressing rebalances lets allocation drift accumulate, so the pending delta clears the floor more often (orders_below_min 6203 -> 4376, 1,827 previously-dropped rebalances became 36 extra fills, traded volume doubled, fee_drag_pct 1.70 -> 2.83). The cooldown fired hard everywhere (465 suppressions at 50k, 5,141 at 500k, 5,140 at 5M). At the diagnostic capitals it looks strongly beneficial on Sharpe (+17.456 at 500k, +13.624 at 5M) and drawdown but fails trade count at 25%. It closes no part of the static-mix gap at any capital (sharpe_minus_static_mix -8.41 at 50k vs baseline -2.72). Discarded outright: worktree and branch deleted, nothing preserved. compute_btc_target untouched."
   }
 ]

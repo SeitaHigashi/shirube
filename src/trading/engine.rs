@@ -240,10 +240,31 @@ impl TradingEngine {
     /// available still yields exactly the RSI sub-signal, and the result always
     /// stays in [0.0, 1.0].
     ///
+    /// # Sub-signal agreement gate
+    ///
+    /// After the weighted mean is computed, and *before* it is combined with
+    /// sentiment, the sub-signals are polled for consensus on direction. If
+    /// fewer than `AGREEMENT_MIN_FRACTION` of the sub-signals that actually
+    /// expressed an opinion agree — or if the majority's direction disagrees
+    /// with the weighted mean's own side of 0.5 — `ta_normalized` is replaced
+    /// with exactly 0.5 (neutral).
+    ///
+    /// NOTE: hypothesis `subsignal-agreement-gate`. This is an *information
+    /// filter*, not a gain change: it changes nothing about how the sub-signals
+    /// are computed or weighted, and its only possible effect is to move a
+    /// disagreeing point to neutral. The motivation is that the composite
+    /// signal measured over 15,248 holdout candles never left [0.3359, 0.6548]
+    /// — a band that narrow is either a genuinely tiny edge or the arithmetic
+    /// residue of sub-signals cancelling each other out. Widening the band was
+    /// already tried (`ta-weight-085-signal-amplitude`) and bought turnover and
+    /// nothing else; suppressing the cancelling points is the untested
+    /// alternative.
+    ///
     /// # Formula
     ///   cross_sub_signal = ((x / ref) / SATURATION).clamp(-1, 1) * 0.5 + 0.5
     ///                                                     ∈ [0.0, 1.0]
     ///   ta_normalized    = Σ(value * weight) / Σ(weight)  ∈ [0.0, 1.0]
+    ///   ta_normalized   := 0.5 when the agreement gate fails
     ///   sentiment_norm   = (avg_sentiment + 1.0) / 2.0  ∈ [0.0, 1.0]
     ///   combined         = ta_normalized * ta_weight + sentiment_norm * sentiment_weight
     pub(crate) fn compute_btc_target(
@@ -354,6 +375,83 @@ impl TradingEngine {
         let weight_sum: f64 = sub_signals.iter().map(|(_, w)| w).sum();
         let ta_normalized =
             sub_signals.iter().map(|(v, w)| v * w).sum::<f64>() / weight_sum;
+
+        // ---- Sub-signal agreement gate --------------------------------
+        //
+        // The gate runs strictly between the weighted mean and the sentiment
+        // combine. Its only possible effect is `ta_normalized := 0.5`; it never
+        // moves the value anywhere else, and every downstream stage (sentiment
+        // combine, zone scaling, apply_zone, sticky_target, allocation_threshold,
+        // lot-size check, RiskManager, fees) is untouched.
+
+        /// Fraction of the *voting* sub-signals that must agree on direction
+        /// before the allocation is allowed to leave neutral: "at least 80% of
+        /// the sub-signals this point actually supplied must agree on
+        /// direction". With the usual five sub-signals present this is 4 of 5.
+        ///
+        /// NOTE: 0.8 is an a priori round figure. It was NOT fitted on the
+        /// holdout window or on any other window; if it proves to be the wrong
+        /// level that is a result to report, not a value to retune.
+        const AGREEMENT_MIN_FRACTION: f64 = 0.8;
+
+        /// Half-width of the neutral dead band around 0.5. A sub-signal landing
+        /// within ±epsilon of 0.5 is counted as *abstaining* — neither bullish
+        /// nor bearish — rather than being pushed onto a side by floating-point
+        /// noise in a value that is, for trading purposes, exactly neutral.
+        ///
+        /// NOTE: 0.02 is likewise an a priori round figure, not a fitted one.
+        const AGREEMENT_NEUTRAL_EPSILON: f64 = 0.02;
+
+        // Count opinions, NOT weighted votes: the family weight is deliberately
+        // ignored here. The question the gate asks is "do the sub-signals agree
+        // about direction", which is a property of the raw sub-signal values;
+        // folding REVERSION/TREND weights in would turn it back into a second
+        // gain knob, which is exactly what this hypothesis is not.
+        let mut bullish = 0usize;
+        let mut bearish = 0usize;
+        for (value, _family_weight) in &sub_signals {
+            if *value > 0.5 + AGREEMENT_NEUTRAL_EPSILON {
+                bullish += 1;
+            } else if *value < 0.5 - AGREEMENT_NEUTRAL_EPSILON {
+                bearish += 1;
+            }
+            // else: within epsilon of 0.5 → abstains, counted on neither side.
+        }
+        let n_votes = bullish + bearish;
+
+        let ta_normalized = if n_votes == 0 {
+            // Nothing expressed an opinion, so there is nothing to disagree
+            // about: the gate passes trivially and the (already near-neutral)
+            // weighted mean is used as-is.
+            ta_normalized
+        } else {
+            // Consensus test: the larger side must hold at least
+            // AGREEMENT_MIN_FRACTION of the votes cast.
+            let majority = bullish.max(bearish);
+            let has_consensus = majority as f64 >= AGREEMENT_MIN_FRACTION * n_votes as f64;
+
+            // Coherence test: the majority's direction must also be the side of
+            // 0.5 the weighted mean landed on. A bullish majority whose weighted
+            // mean still came out bearish (possible because the families carry
+            // different weights) is a disagreeing point, not a consensus one.
+            let direction_agrees = if bullish > bearish {
+                ta_normalized > 0.5
+            } else if bearish > bullish {
+                ta_normalized < 0.5
+            } else {
+                // Exact tie — no majority direction exists. (Unreachable while
+                // AGREEMENT_MIN_FRACTION > 0.5, since a tie already fails the
+                // consensus test; kept explicit so the invariant is visible.)
+                false
+            };
+
+            if has_consensus && direction_agrees {
+                ta_normalized
+            } else {
+                // Gate failed → neutral. Exactly 0.5, never any other value.
+                0.5
+            }
+        };
 
         // Average news sentiment: [-1.0, 1.0] → normalize to [0.0, 1.0]
         // Empty cache (Ollama unavailable or not yet run) → neutral 0.0
@@ -1034,11 +1132,17 @@ mod tests {
         //                      histogram → all three saturate at 1.0 (bullish)
         //   mean-reverting   — RSI=90 (→0.1) and close pinned to the upper
         //                      Bollinger band, %B=100 (→0.0) (both bearish)
-        // Under the weighted mean the mean-reverting family (weight 1.0 each)
-        // must outweigh the trend family (weight 0.25 each), so the composite
-        // comes out bearish. The old unweighted mean would have produced
-        // (0.1+0.0+1.0+1.0+1.0)/5 = 0.62 → combined 0.584, i.e. bullish, so this
-        // assertion genuinely discriminates between the two aggregations.
+        //
+        // NOTE (hypothesis `subsignal-agreement-gate`): this point is a 3-bullish
+        // / 2-bearish split, i.e. precisely the disagreement the agreement gate
+        // exists to suppress — 3 of 5 votes is below the 80% consensus
+        // requirement. The weighted mean still computes 0.85/2.75 = 0.309090
+        // internally (the family weighting below is unchanged), but the gate
+        // then replaces it with exactly 0.5, so the composite is now neutral
+        // rather than bearish. The expected value is updated for that reason
+        // and for that reason only; the family-weighting behaviour this test
+        // used to discriminate is now covered, under a consensus the gate lets
+        // through, by `compute_btc_target_family_weighting_under_consensus`.
         let raw = IndicatorPoint {
             time: chrono::Utc::now(),
             close: Some(10_100.0),
@@ -1053,16 +1157,196 @@ mod tests {
             bb_lower: Some(9_900.0),
         };
         let val = TradingEngine::compute_btc_target(&raw, &[], &make_cfg()).unwrap();
-        // ta_normalized = (0.1*1.0 + 0.0*1.0 + 1.0*0.25 * 3) / (1.0 + 1.0 + 0.75)
-        //               = 0.85 / 2.75 = 0.309090...
-        // combined = 0.309090*0.7 + 0.5*0.3 = 0.366363...
-        let expected = (0.1 + 0.0 + 3.0 * 0.25) / 2.75 * 0.7 + 0.5 * 0.3;
-        assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
+        // Gate fails (3 of 5 < 80%) → ta_normalized := 0.5.
+        // combined = 0.5*0.7 + 0.5*0.3 = 0.5.
+        assert!((val - 0.5).abs() < 1e-9, "expected exactly 0.5, got {}", val);
+        // Guard against the gate silently becoming a no-op: the ungated
+        // weighted mean would have produced 0.366363..., clearly bearish.
+        let ungated = (0.1 + 0.0 + 3.0 * 0.25) / 2.75 * 0.7 + 0.5 * 0.3;
         assert!(
-            val < 0.5,
-            "mean-reverting family must dominate: expected a bearish composite, got {}",
+            (val - ungated).abs() > 1e-3,
+            "gate must have suppressed the disagreeing point, got {}",
             val
         );
+    }
+
+    #[test]
+    fn compute_btc_target_family_weighting_under_consensus() {
+        // Family weighting must still decide the composite's level on points
+        // the agreement gate lets through. All four sub-signals here are
+        // bearish, so the gate passes trivially; the mean-reverting pair
+        // (RSI=70 → 0.3, %B=70 → 0.3, weight 1.0 each) and the trend pair
+        // (close 0.05% below SMA and EMA → 0.45 each, weight 0.25) differ in
+        // magnitude, so the weighted and unweighted means disagree:
+        //   weighted   = (0.3 + 0.3 + 0.45*0.25*2) / 2.5   = 0.33
+        //   unweighted = (0.3 + 0.3 + 0.45 + 0.45) / 4     = 0.375
+        // Asserting the weighted value therefore discriminates between them.
+        let raw = IndicatorPoint {
+            time: chrono::Utc::now(),
+            close: Some(9_995.0),
+            sma: Some(10_000.0),
+            ema: Some(10_000.0),
+            rsi: Some(70.0),
+            macd_line: None,
+            signal_line: None,
+            histogram: None,
+            // bandwidth 100, %B = (9995-9925)/100 = 70% → sub-signal 0.3
+            bb_upper: Some(10_025.0),
+            bb_middle: None,
+            bb_lower: Some(9_925.0),
+        };
+        let val = TradingEngine::compute_btc_target(&raw, &[], &make_cfg()).unwrap();
+        let expected = (0.3 + 0.3 + 0.45 * 0.25 * 2.0) / 2.5 * 0.7 + 0.5 * 0.3;
+        assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
+        let unweighted = (0.3 + 0.3 + 0.45 + 0.45) / 4.0 * 0.7 + 0.5 * 0.3;
+        assert!(
+            (val - unweighted).abs() > 1e-3,
+            "weighted mean must differ from the plain average, got {}",
+            val
+        );
+    }
+
+    // ---- sub-signal agreement gate unit tests ----
+
+    /// All five sub-signals bullish → unanimous → gate passes, weighted mean used as-is.
+    #[test]
+    fn compute_btc_target_gate_passes_when_all_five_agree() {
+        let raw = IndicatorPoint {
+            time: chrono::Utc::now(),
+            close: Some(10_100.0),
+            sma: Some(10_000.0),   // +1% → saturated bullish 1.0
+            ema: Some(10_000.0),   // +1% → saturated bullish 1.0
+            rsi: Some(20.0),       // → 0.8 bullish
+            macd_line: None,
+            signal_line: None,
+            histogram: Some(100.0), // 100/10150 ≈ +0.99% → saturated bullish 1.0
+            // bandwidth 300, %B = (10100-10000)/300 = 33.33% → sub-signal 0.6667 bullish
+            bb_upper: Some(10_300.0),
+            bb_middle: Some(10_150.0),
+            bb_lower: Some(10_000.0),
+        };
+        let val = TradingEngine::compute_btc_target(&raw, &[], &make_cfg()).unwrap();
+        let pct_b_sub = 1.0 - 1.0 / 3.0;
+        let ta = (0.8 + pct_b_sub + 3.0 * 0.25) / 2.75;
+        let expected = ta * 0.7 + 0.5 * 0.3;
+        assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
+        assert!(val > 0.5, "unanimous bullish point must stay bullish, got {}", val);
+    }
+
+    /// 3 bullish / 2 bearish → 60% consensus, below the 80% requirement →
+    /// gate fails → ta_normalized is exactly 0.5 going into the sentiment
+    /// combine, so with no news the result is exactly 0.5.
+    #[test]
+    fn compute_btc_target_gate_rejects_three_two_split() {
+        let raw = IndicatorPoint {
+            time: chrono::Utc::now(),
+            close: Some(10_100.0),
+            sma: Some(10_000.0),    // bullish 1.0
+            ema: Some(10_000.0),    // bullish 1.0
+            rsi: Some(90.0),        // → 0.1 bearish
+            macd_line: None,
+            signal_line: None,
+            histogram: Some(60.0),  // 60/10025 ≈ +0.6% → bullish 1.0
+            // bandwidth 450, %B = (10100-9800)/450 = 66.67% → sub-signal 0.3333 bearish
+            bb_upper: Some(10_250.0),
+            bb_middle: Some(10_025.0),
+            bb_lower: Some(9_800.0),
+        };
+        let val = TradingEngine::compute_btc_target(&raw, &[], &make_cfg()).unwrap();
+        assert!((val - 0.5).abs() < 1e-9, "expected exactly 0.5, got {}", val);
+        // The ungated weighted mean would have been 0.4303..., i.e. bearish,
+        // so 0.5 here is the gate acting rather than an arithmetic coincidence.
+        let pct_b_sub = 1.0 - (10_100.0 - 9_800.0) / 450.0;
+        let ungated = (0.1 + pct_b_sub + 3.0 * 0.25) / 2.75 * 0.7 + 0.5 * 0.3;
+        assert!(
+            (val - ungated).abs() > 1e-3,
+            "gate must have changed the outcome, got {}",
+            val
+        );
+    }
+
+    /// 4 bullish / 1 bearish → exactly 80% → the `>=` boundary of
+    /// AGREEMENT_MIN_FRACTION → gate passes, value unchanged.
+    #[test]
+    fn compute_btc_target_gate_passes_four_one_split() {
+        let raw = IndicatorPoint {
+            time: chrono::Utc::now(),
+            close: Some(10_100.0),
+            sma: Some(10_000.0),    // bullish 1.0
+            ema: Some(10_000.0),    // bullish 1.0
+            rsi: Some(90.0),        // → 0.1 bearish (the lone dissenter)
+            macd_line: None,
+            signal_line: None,
+            histogram: Some(100.0), // bullish 1.0
+            // %B = 33.33% → sub-signal 0.6667 bullish
+            bb_upper: Some(10_300.0),
+            bb_middle: Some(10_150.0),
+            bb_lower: Some(10_000.0),
+        };
+        let val = TradingEngine::compute_btc_target(&raw, &[], &make_cfg()).unwrap();
+        let pct_b_sub = 1.0 - 1.0 / 3.0;
+        let ta = (0.1 + pct_b_sub + 3.0 * 0.25) / 2.75;
+        let expected = ta * 0.7 + 0.5 * 0.3;
+        assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
+        assert!(val > 0.5, "4-of-5 bullish consensus must survive the gate, got {}", val);
+    }
+
+    /// A point supplying only RSI casts a single vote: n_votes == 1, majority
+    /// 1 >= 0.8 * 1 → gate passes trivially, so warmup points are unaffected.
+    #[test]
+    fn compute_btc_target_gate_passes_single_vote() {
+        let raw = IndicatorPoint {
+            time: chrono::Utc::now(),
+            close: None,
+            sma: None, ema: None, rsi: Some(20.0),
+            macd_line: None, signal_line: None, histogram: None,
+            bb_upper: None, bb_middle: None, bb_lower: None,
+        };
+        let val = TradingEngine::compute_btc_target(&raw, &[], &make_cfg()).unwrap();
+        // ta_normalized = 0.8 → 0.8*0.7 + 0.5*0.3 = 0.71
+        assert!((val - 0.71).abs() < 1e-9, "expected ~0.71, got {}", val);
+    }
+
+    /// Every sub-signal within AGREEMENT_NEUTRAL_EPSILON of 0.5 → all abstain →
+    /// n_votes == 0 → nothing to disagree about → gate passes trivially and the
+    /// (slightly off-neutral) weighted mean survives rather than being clamped.
+    #[test]
+    fn compute_btc_target_gate_passes_when_all_abstain() {
+        let raw = IndicatorPoint {
+            time: chrono::Utc::now(),
+            close: Some(10_001.0), // +0.01% → damped cross 0.51, inside ±0.02
+            sma: Some(10_000.0),
+            ema: Some(10_000.0),
+            rsi: Some(49.0),       // → 0.51, inside ±0.02
+            macd_line: None, signal_line: None, histogram: None,
+            bb_upper: None, bb_middle: None, bb_lower: None,
+        };
+        let val = TradingEngine::compute_btc_target(&raw, &[], &make_cfg()).unwrap();
+        // ta_normalized = (0.51 + 0.51*0.25*2) / 1.5 = 0.51 → 0.51*0.7 + 0.15 = 0.507
+        assert!((val - 0.507).abs() < 1e-9, "expected ~0.507, got {}", val);
+    }
+
+    /// The neutral dead band is load-bearing, not cosmetic: one decisive bearish
+    /// sub-signal plus two barely-off-neutral bullish ones must count as a
+    /// 1-vote unanimous bearish point (gate passes). Without the epsilon
+    /// abstention this would read as 2 bullish / 1 bearish → 66% → gate failure
+    /// → 0.5, so this assertion discriminates the dead band.
+    #[test]
+    fn compute_btc_target_gate_epsilon_abstention_changes_outcome() {
+        let raw = IndicatorPoint {
+            time: chrono::Utc::now(),
+            close: Some(10_001.0), // +0.01% → 0.51, abstains
+            sma: Some(10_000.0),
+            ema: Some(10_000.0),
+            rsi: Some(70.0),       // → 0.3, decisively bearish
+            macd_line: None, signal_line: None, histogram: None,
+            bb_upper: None, bb_middle: None, bb_lower: None,
+        };
+        let val = TradingEngine::compute_btc_target(&raw, &[], &make_cfg()).unwrap();
+        // ta_normalized = (0.3*1.0 + 0.51*0.25*2) / 1.5 = 0.555/1.5 = 0.37
+        let expected = (0.3 + 0.51 * 0.25 * 2.0) / 1.5 * 0.7 + 0.5 * 0.3;
+        assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
+        assert!(val < 0.5, "lone decisive bearish vote must survive, got {}", val);
     }
 
     #[test]

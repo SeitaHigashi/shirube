@@ -1,0 +1,37 @@
+{
+  "name": "post-trade-cooldown-90m",
+  "kind": "algorithm",
+  "rationale": "`post-trade-cooldown-30m` was recorded on 2026-09-13 as UNTESTABLE at the promotion capital rather than refuted: the 50,000 JPY baseline made 1 trade that window, so there was no second trade for a cooldown to suppress, and its primary report was byte-identical to the baseline's except for orders_below_min (5394 -> 5392). At 500,000 JPY the same mechanism suppressed 1,984 real orders, cut trades 765 -> 416 and improved Sharpe -30.58 -> -22.19, and compare-backtest returned promoted:true at BOTH diagnostic capitals. Today's primary baseline makes 48 trades over 14 days, so the mechanism is scorable at the promotion capital for the first time. The length is deliberately NOT 30 minutes: at 48 trades / 14 days the primary capital averages one fill roughly every 7 hours, so a 30-minute window would be close to inert there and would risk reproducing exactly the 'identical report' non-result the doc warns about under 'Evaluation capital'. 90 minutes is the smallest round multiple that can plausibly bind on a clustered fill sequence while still permitting up to 16 fills/day, well above the 4-10/day guideline's upper end, so it cannot be accused of targeting the guideline.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 60
+  },
+  "code_change_summary": "Add a post-fill cooldown that suppresses new orders for a fixed interval after any order that actually filled. Introduce a named private constant with a doc comment stating the value, the unit and its source: POST_TRADE_COOLDOWN_SECS = 5400 (90 minutes). State in the comment that 90 minutes is a round figure picked a priori and NOT fitted on any window, holdout or training, and that it is deliberately longer than the 1800s of the already-tried `post-trade-cooldown-30m` because at the 50,000 JPY promotion capital the baseline averages roughly one fill every 7 hours and a 30-minute window would be near-inert there. Implement it in BOTH places so live and backtest cannot diverge -- the 2026-09-09 report records a filter that is live in one and dead in the other as a trap that makes every future backtest number untransferable: (a) src/backtest/simulator.rs, in Simulator::run's per-candle loop -- track `last_fill_time: Option<DateTime<Utc>>` and, before the `delta.abs() >= trading_config.allocation_threshold` check, skip the whole order path when `candle.open_time - last_fill < POST_TRADE_COOLDOWN_SECS`; set last_fill_time to `candle.open_time` ONLY on the RiskDecision::Allow branch where `exchange.send_order` is actually called, never on a delta that was gated, dropped under the lot size, or rejected by the risk manager. (b) src/trading/engine.rs, as a `last_fill_at: Option<DateTime<Utc>>` field on TradingEngine, checked in both order paths (the `delta.abs() < allocation_threshold` sites in handle_indicator and handle_rebalance) and set in submit_order only on the branch where send_order returned Ok. Use the candle/indicator timestamp in the backtest and Utc::now() live, mirroring how RiskManager::observe_time already takes the candle clock in the simulator (see its NOTE on why wall-clock would be wrong there). The cooldown must only ever SUPPRESS an order the current logic would have placed; it must never enable one, change an order's side or size, or alter the sticky target -- sticky_target must keep updating during a cooldown so that the target the engine resumes from is current, not stale. Add unit tests covering: an order placed at t, an opposite-signed delta at t+60s being suppressed, the same delta at t+5401s being allowed, a delta at t+1801s still being suppressed (which is what distinguishes this from the 30-minute variant), and that a suppressed candle does not update last_fill_time so the cooldown cannot extend itself indefinitely. Report in step 3 how many orders the cooldown suppressed at EACH capital, not just the report JSON -- the mechanism's behaviour is what distinguishes a real effect from a lot-floor artifact -- and state explicitly whether the 50,000 JPY report differs from the baseline's at all.",
+  "constraints": [
+    "MUST NOT modify the body or the signature of TradingEngine::compute_btc_target. The cooldown gates whether an order is SENT; the allocation formula itself is out of scope for this change.",
+    "This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST pass `cargo test`. Update an existing test's expected values only where this change legitimately alters them, and do not weaken or delete a test just to make it pass.",
+    "MUST apply the change at both the live site in src/trading/engine.rs and the backtest site in src/backtest/simulator.rs, so live and backtest behaviour cannot diverge.",
+    "MUST NOT change src/signal/engine.rs's broadcast cadence or anything about live scheduling. The ~4 Hz live evaluation rate is a known open question (2026-09-12 and 2026-09-13 reports, 'Suspected defects'); report it, do not fix it here.",
+    "MUST NOT fit any new constant on the holdout window, or on any window at all. Values are a priori round numbers; if one turns out to be wrong, that is a result to report, not a value to retune mid-run.",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff changes the allocation target the live engine acts on, since it alters what the running instance would hold.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or the order-submission mechanics themselves.",
+    "The cooldown MUST only suppress orders. It must never enable an order, change a side or size, or freeze sticky_target.",
+    "You MAY read origin/experiment/post-trade-cooldown-30m for reference, but MUST NOT merge or cherry-pick it wholesale -- the constant differs and the unit tests must assert the 90-minute behaviour, including that a delta at t+1801s is still suppressed."
+  ]
+}

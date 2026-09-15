@@ -910,6 +910,58 @@ such fallback: it fails hard without a token, since silently skipping a
 push would lose accumulated history instead of merely deferring a
 backfill.
 
+**`push` cannot work from the cloud routine, and no token grant will fix
+it.** Since 2026-09-11 every run has failed at
+`DELETE /repos/.../releases/assets/<id>` with `403 Forbidden`. The
+2026-09-11 report diagnosed this as a credential *scope* limitation and
+made "grant the routine's token release-asset write access" its lead #2;
+the 2026-09-12 run read the response body and found that diagnosis is
+wrong. The token is not under-scoped — `GET /repos/SeitaHigashi/shirube`
+returns `"permissions": {"admin": true, "maintain": true, "push": true}`.
+The 403 body is:
+
+```json
+{"message":"Creating, editing, or deleting releases is not permitted for this session type.",
+ "documentation_url":"https://docs.anthropic.com/en/docs/claude-code/github-actions"}
+```
+
+That is a **policy of the Claude Code session type**, applied above the
+token: releases may not be created, edited, or deleted from this kind of
+session at all. It is not repository configuration, so it cannot be
+granted by a repo admin, and since it blocks *create* as well as *delete*,
+neither uploading under a fresh asset name nor recreating the release is a
+way around it.
+
+**Consequence: the release asset cannot accumulate.** `pull` still works
+(the download path is an ordinary read), so the stored snapshot is usable,
+but it is frozen at whatever a human last uploaded — in practice the
+2026-09-09 bootstrap, 33,452 bars. Every routine run therefore re-backfills
+the gap from bitFlyer and discards that work when the container is
+reclaimed, which caps the lookback at bitFlyer's 31-day retention wall
+permanently. The "Why the DB is carried over" section above describes a
+mechanism that, as built, works only when a human runs it.
+
+**Two ways out, both needing a human decision:**
+
+1. **A human runs `shirube backtest-data push` periodically** from a normal
+   local session, which is not subject to the session-type policy. Cheapest
+   fix, no code change; the cost is that accumulation happens only as often
+   as someone remembers.
+2. **Move the store off releases and onto a git branch** — e.g. a dedicated
+   orphan branch holding one gzipped DB blob, force-pushed as a single
+   commit each run so history does not accumulate. `git push` is *not*
+   blocked for this session type (the routine already pushes `dev` and its
+   PR branches every run), and `git` is explicitly on the routine's allowed
+   tool list above, so this would let the DB accumulate again without any
+   new credential. It needs a `backtest-data` backend change and a human's
+   agreement that a ~1.5MB blob force-pushed daily to its own branch is an
+   acceptable use of the repository.
+
+Until one of those happens, treat the stored snapshot as read-only and
+expect each run's lookback to be bounded by the 31-day wall. Do not record
+"grant the token release write access" as a lead again — it has been
+tested and it is not the blocker.
+
 Before step 1 of the daily procedure, the routine restores that DB and
 tops it up:
 

@@ -1,0 +1,24 @@
+{
+  "name": "binding-allocation-threshold-030",
+  "kind": "parameter",
+  "rationale": "This run is the THIRD consecutive one whose baseline `sharpe_minus_static_mix` is negative (2026-09-14: -2.7158; 2026-09-15: -1.3154; today: -4.2352), which triggers the doc's three-run clause requiring at least one generated hypothesis to target trading cost rather than signal quality. The cheapest cost lever shirube has is `allocation_threshold`, and the doc's 'Evaluation capital' section establishes that at the 50,000 JPY promotion capital EVERY value below roughly 0.245 of equity is inert, because the 0.001 BTC exchange lot floor gates first — today's baseline confirms it, with 5,846 of 5,885 intended rebalances (99.3%) dying under the lot floor at `allocation_threshold: 0.1`. Every threshold this pipeline has ever scored sits at or under that wall: 0.05 (`lower-allocation-threshold`), 0.1 (baseline), 0.15 (`code-default-allocation-threshold`) and 0.25 (`higher-allocation-threshold`, which is within noise of the wall and was additionally run against the old 52/104/18 MACD and the 0.2/0.8 zone, neither of which is today's baseline). So no threshold has ever been tested that is STRICTLY binding at the deciding capital: 0.30 is the first, and it is the first such test on today's baseline config (classic 12/26/9 MACD from PR #24, plus the 0.1/0.9 wide zone). It is a pure turnover/cost reducer with no code change at all, which makes it the highest-value-per-cost way to satisfy the three-run clause. Prediction: notional traded and `total_fees_jpy` fall sharply at all three capitals (score it on `total_fees_jpy`, never on trade count, per the doc's cost caveat); the risk is that trade count at 50,000 JPY drops below the promotion rule's 50%-of-baseline floor (19.5 of today's 39 trades), which would be 2026-09-15's lead #2 biting exactly as predicted. Record that outcome plainly if it happens — it is evidence for the human decision that lead #2 asks for, not a failure of the idea.",
+  "trading_config": {
+    "allocation_threshold": 0.3,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 60
+  }
+}

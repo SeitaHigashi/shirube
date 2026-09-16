@@ -281,8 +281,27 @@ interchangeable (all figures measured 2026-09-11 over
   under `min_order_size` (0.001 BTC). At ~12.2M JPY/BTC that is ~12,224
   JPY of notional — 24.4% of a 50,000 JPY portfolio. So on the primary
   capital, **every `allocation_threshold` below ~0.245 is inert**:
-  thresholds 0.05, 0.10 and 0.15 produced byte-identical reports. The
-  same floor is 2.4% at 500,000 JPY and 0.24% at 5,000,000 JPY.
+  thresholds 0.05, 0.10, 0.15 and 0.20 produced economically identical
+  reports. The same floor is 2.4% at 500,000 JPY and 0.24% at
+  5,000,000 JPY.
+
+  **The wall is a cliff, not a ramp, and "identical" now means
+  *economically* identical.** Measured 2026-09-16 over
+  2026-09-02 .. 2026-09-16 and reproduced independently by the
+  coordinator: thresholds 0.10 and 0.20 both give 39 trades / 696.32 JPY
+  fees / Sharpe −7.886; 0.25 still trades (41 trades, Sharpe −7.939);
+  and **every value from 0.26 upward collapses to the same degenerate
+  single-trade result** (the opening buy, 33.57 JPY of fees, Sharpe
+  −3.654). So the binding value sits between 0.25 and 0.26 rather than
+  at a gradual ~0.245, and a threshold above it does not "trade less" —
+  it stops trading. Note also that the 0.10 and 0.20 runs are *not*
+  byte-identical: since `orders_below_min` was added to
+  `BacktestReport`, that field moves (5,846 vs 833) while every
+  economic field stays bit-for-bit equal. Compare
+  `total_trades` / `total_fees_jpy` / `sharpe_ratio` /
+  `max_drawdown_pct`, and treat `orders_below_min` as a diagnostic that
+  is free to move — a literal byte comparison will now report an effect
+  where there is none.
 
 That second point is a trap for hypothesis generation, and it has the
 same shape as the CoinGecko constant-volume VWMA recorded in
@@ -290,7 +309,8 @@ same shape as the CoinGecko constant-volume VWMA recorded in
 evidence. **A parameter hypothesis that only moves `allocation_threshold`
 below ~0.245 cannot be tested at 50,000 JPY** — it will score identically
 to the baseline no matter how good the idea is. When a candidate's
-primary-capital report is identical to the baseline's, check this before
+primary-capital report is economically identical to the baseline's (as
+defined above — `orders_below_min` may differ), check this before
 recording it as rejected, and say so in the report rather than filing a
 verdict the data cannot support.
 
@@ -520,9 +540,14 @@ cp /tmp/baseline-50000.json /tmp/baseline.json   # primary: decides promotion
 ```
 
 Sanity-check the primary run before continuing: if its report is
-byte-identical to a previous day's despite a changed config, re-read the
+*economically* identical to a previous day's despite a changed config —
+equal `total_trades`, `total_fees_jpy`, `sharpe_ratio` and
+`max_drawdown_pct`, with `orders_below_min` free to differ — re-read the
 lot-size warning in "Evaluation capital" — at 50,000 JPY an
-`allocation_threshold` under ~0.245 cannot move anything.
+`allocation_threshold` under ~0.245 cannot move anything. Do not use a
+byte comparison for this: `orders_below_min` responds to a threshold
+change that has no economic effect whatsoever, so byte-inequality does
+not establish that a config change did anything.
 
 ### 2. Filter out already-tried hypotheses
 

@@ -320,5 +320,29 @@
     "sharpe_absolute_delta": -18.366375290520644,
     "report_path": "experiments/reports/2026-09-15.md",
     "note": "GENUINELY REFUTED and the most informative result of the run. Sharpe -5.494 -> -23.861 (-18.366), max drawdown 5.16% -> 14.81% (+9.64pp), return -3.59% -> -14.11%; trade count PASSED at 867% (208 vs 24). First test of the trend family's SIGN rather than its gain -- trend-weighted-subsignals, trend-weight-half and mean-reversion-weighted-subsignals all varied a non-negative weight and none could have detected a sign error. Literature-motivated (arXiv:2608.21888, crypto short-horizon dynamics measured as reversal-dominant, 'the signal lives in signs, not magnitudes'). The predicted mechanism was CONFIRMED and the outcome still refuted the idea: inverting the trend family makes all five sub-signals agree instead of oppose, and the composite band widened 1.66x ([0.3359,0.6548] -> [0.2410,0.7712], sd 0.0736 -> 0.1201), with turnover rising 24 -> 208 at 50k and 789 -> 1439 at 500k. THE STANDING CONCLUSION THIS SUPPORTS: taken with ta-weight-085-signal-amplitude (2026-09-13, amplified the composite, Sharpe -14.034), the composite now has negative edge in BOTH signs, so band width itself is the damage mechanism -- whichever way it points, a wider band means more exposure swing, more turnover and more fee drag against a series the signal cannot time. Both the gain and the sign of the trend family have now been tested; what has never been tested is whether the composite should drive exposure AT ALL versus a damped or static allocation. compute_btc_target's BODY was modified (signature unchanged); cargo test 251 passed. One fixture outside engine.rs was adapted and is flagged rather than buried: simulator.rs::run_with_drawdown_limit used a RISING price series to build a BTC position before its crash, which reads bearish under the inversion, so it was flipped to a falling series -- all three assertions (circuit_breaker_trips >= 1, orders_rejected >= 1, the 0.99-limit inert case) unchanged. Discarded outright: worktree and branch deleted."
+  },
+  {
+    "name": "damped-composite-exposure",
+    "content_hash": "463e9151c4647d9f9b728f3f7d6cf45dc0f1fe0a293289b69e7321aca628d5fc",
+    "tried_at": "2026-09-16T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-09-16.md"
+  },
+  {
+    "name": "binding-allocation-threshold-030",
+    "content_hash": "e50a61b9219765a6943926dd6035b04b5b12e91e4c3ce37b954fc48478ce1370",
+    "tried_at": "2026-09-16T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-09-16.md"
+  },
+  {
+    "name": "h6-block-held-signal",
+    "content_hash": "699784779b1fc80ff826f124a8d10d0279b8fbfdb1c7559f39cb137fdda18450",
+    "tried_at": "2026-09-16T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-09-16.md"
   }
 ]

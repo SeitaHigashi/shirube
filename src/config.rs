@@ -63,9 +63,30 @@ pub struct TradingConfig {
     /// 現在配分 vs 目標配分を確認する。デフォルト: 60秒。
     #[serde(default = "default_rebalance_interval")]
     pub rebalance_interval_secs: u64,
+
+    /// 合成シグナル（compute_btc_target の戻り値）を UTC 整列ブロック単位で
+    /// 量子化する際のブロック長（秒）。
+    ///
+    /// 0 = ブロッキング無効（毎バー再計算する＝従来どおりの挙動）。
+    /// 正の値のときは、タイムスタンプが属するブロックが切り替わったときだけ
+    /// compute_btc_target を呼び、同一ブロック内では直前の合成値を保持する。
+    /// リバランス間隔・しきい値・ゾーン写像・各インジケータ周期は一切変更しない
+    /// ため、保持された目標に対するドリフト補正の売買は従来どおり毎バー発生する。
+    ///
+    /// NOTE: hypothesis `h1-block-held-signal` (arXiv:2602.11708). これは
+    /// 「どれだけ頻繁にシグナルを取り直すか」だけを変えるノブであり、
+    /// 「どれだけ頻繁に行動してよいか」を絞る rebalance_interval_secs とは
+    /// 別の機構である。既存DBに保存された設定JSONにはこのフィールドが無いため、
+    /// `serde(default)` で 0（＝完全な現行互換）にフォールバックする。
+    #[serde(default = "default_signal_block_secs")]
+    pub signal_block_secs: u64,
 }
 
 fn default_rebalance_interval() -> u64 { 60 }
+/// シグナルブロッキングのデフォルトは 0（無効）。
+/// 0 のときブロッキングは完全な no-op であり、このフィールドを持たない
+/// 設定JSONは変更前とバイト単位で同一の結果を生む。
+fn default_signal_block_secs() -> u64 { 0 }
 fn default_circuit_breaker_enabled() -> bool { true }
 fn default_max_daily_drawdown() -> f64 { 0.05 }
 
@@ -87,6 +108,8 @@ impl Default for TradingConfig {
             sentiment_weight: 0.3,
             zone: ZoneConfig::default(),
             rebalance_interval_secs: 60,
+            // 0 = シグナルブロッキング無効。デフォルトは現行挙動と完全に同一。
+            signal_block_secs: 0,
         }
     }
 }
@@ -131,6 +154,11 @@ impl TradingConfig {
         }
         if self.zone.hold_jpy_below >= self.zone.hold_btc_above {
             return Err("zone.hold_jpy_below < zone.hold_btc_above を満たす必要があります".into());
+        }
+        // BASE_RESOLUTION = 60 秒（1バー）より短いブロックは意味を持たないため、
+        // 0（無効）か 60 の正の倍数のみを許可する。
+        if self.signal_block_secs != 0 && self.signal_block_secs % 60 != 0 {
+            return Err("signal_block_secs は 0 または 60 の正の倍数で指定してください".into());
         }
         Ok(())
     }
@@ -209,5 +237,43 @@ mod tests {
         let loaded: TradingConfig = serde_json::from_value(json).unwrap();
         assert!(loaded.circuit_breaker_enabled);
         assert_eq!(loaded.max_daily_drawdown, 0.05);
+    }
+
+    #[test]
+    fn missing_signal_block_secs_deserialises_to_zero() {
+        // A stored config (or a hypothesis file) written before
+        // `signal_block_secs` existed must still deserialize, and must default
+        // to 0 = blocking disabled, i.e. exactly the pre-change behaviour.
+        let cfg = TradingConfig::default();
+        let mut json: serde_json::Value = serde_json::to_value(&cfg).unwrap();
+        json.as_object_mut().unwrap().remove("signal_block_secs");
+        assert!(json.get("signal_block_secs").is_none());
+        let loaded: TradingConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(loaded.signal_block_secs, 0);
+    }
+
+    #[test]
+    fn default_signal_block_secs_is_zero() {
+        assert_eq!(TradingConfig::default().signal_block_secs, 0);
+    }
+
+    #[test]
+    fn validate_accepts_zero_and_minute_multiples_for_signal_block_secs() {
+        let mut cfg = TradingConfig::default();
+        for secs in [0u64, 60, 900, 3600, 21600] {
+            cfg.signal_block_secs = secs;
+            assert!(cfg.validate().is_ok(), "signal_block_secs={secs} should validate");
+        }
+    }
+
+    #[test]
+    fn validate_rejects_sub_bar_signal_block_secs() {
+        // Anything that is not a multiple of BASE_RESOLUTION = 60 would mean a
+        // block shorter than (or misaligned with) a single 1-minute bar.
+        let mut cfg = TradingConfig::default();
+        for secs in [1u64, 30, 59, 61, 3599] {
+            cfg.signal_block_secs = secs;
+            assert!(cfg.validate().is_err(), "signal_block_secs={secs} should be rejected");
+        }
     }
 }

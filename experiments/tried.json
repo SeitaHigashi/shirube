@@ -344,5 +344,29 @@
     "verdict": "rejected",
     "sharpe_improvement_pct": null,
     "report_path": "experiments/reports/2026-09-16.md"
+  },
+  {
+    "name": "flat-zone-slope-damping",
+    "content_hash": "3739651a735210178db01eb0922402bc268c0c4f0f7870da3d6a1ed542e1d096",
+    "tried_at": "2026-09-17T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-09-17.md"
+  },
+  {
+    "name": "conviction-gated-rebalance",
+    "content_hash": "2b50cfe50df63ddcf07c9dc83f766fa516c9f252ce161921fe3b394276ebdf1c",
+    "tried_at": "2026-09-17T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-09-17.md"
+  },
+  {
+    "name": "h1-block-held-signal",
+    "content_hash": "65a8dbbff340d35059245207a35dbac32e116a4331db9201fdc03d1f8485cef0",
+    "tried_at": "2026-09-17T19:00:00Z",
+    "verdict": "promoted",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-09-17.md"
   }
 ]

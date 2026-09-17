@@ -1,0 +1,24 @@
+{
+  "name": "flat-zone-slope-damping",
+  "kind": "parameter",
+  "rationale": "This is the 2026-09-16 report's lead #2 — 'rerun the damping at a gentler factor' — expressed as a PURE PARAMETER change that needs no source edit at all. Yesterday's `damped-composite-exposure` compressed the composite toward neutral by 0.75 via a new `signal_damping_factor` field and produced the largest strategy-metric gain this pipeline has measured at the capitals where the exchange lot floor is inert (Sharpe -29.692 -> -19.498 at 500,000 JPY, -23.282 -> -15.134 at 5,000,000 JPY, drawdown down 5.10pp and 4.23pp, `promoted: true` at BOTH diagnostic capitals), but it collapsed to exactly 1 trade at the 50,000 JPY promotion capital and was refused on `MIN_TRADE_COUNT_RATIO` alone. The key observation this hypothesis rests on is algebraic: with the baseline zone (`hold_jpy_below: 0.1`, `hold_btc_above: 0.9`) the zone mapping is `allocation = (raw - 0.1) / 0.8`, a slope of 1.25 about the neutral point raw = 0.5; with `hold_jpy_below: 0.0` and `hold_btc_above: 1.0` it becomes `allocation = raw`, a slope of exactly 1.0. Over the baseline's measured composite band [0.335850, 0.654840] (2026-09-14, independently reproduced 2026-09-15) neither zone ever saturates, so within the realised range this config IS damping by a factor of 1.0/1.25 = 0.8 about the same neutral centre — strictly gentler than the 0.75 that degenerated, and therefore the point on the band-width curve most likely to stay above the trade-count floor at the promotion capital. It costs no code, no new config field, and no live-path risk: if promoted it ships as a two-number edit to `experiments/baseline-config.json` plus a `PUT /api/config`. It also satisfies this run's mandatory cost-targeting clause (the baseline's `sharpe_minus_static_mix` has now been negative for four consecutive runs): narrowing the band is a turnover mechanism, so score it on `total_fees_jpy` and `traded_volume_jpy` per the doc's cost caveat, never on trade count. Honest risk: five points on the band-width curve so far are four widenings that all lost Sharpe plus one narrowing that gained it at 500k but died on the lot floor at 50k; 0.8 may still fall below the floor's 38-trade requirement, in which case the run still adds the point that lets the curve be fitted rather than sampled.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.0,
+      "hold_btc_above": 1.0
+    },
+    "rebalance_interval_secs": 60
+  }
+}

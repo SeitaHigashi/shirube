@@ -15,5 +15,5 @@
     "hold_jpy_below": 0.1,
     "hold_btc_above": 0.9
   },
-  "rebalance_interval_secs": 60
+  "rebalance_interval_secs": 3600
 }

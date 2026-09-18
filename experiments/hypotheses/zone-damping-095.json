@@ -1,0 +1,24 @@
+{
+  "name": "zone-damping-095",
+  "kind": "parameter",
+  "rationale": "Second of the two interpolation points 2026-09-17's lead #1 asked for, and the conservative end of the pair. Same algebra as `zone-damping-090`: band 0.0789474/0.9210526 is slope 1.0/0.842105 = 1.1875 = x0.95 of the baseline's 1.25, i.e. a 5% amplitude reduction about neutral with no code change. The bracket measured so far (x1.00 -> 76 trades, x0.80 -> 10, x0.75 -> 1) shows the trade count collapsing far faster than the Sharpe gain accumulates, so the plausible promotable dose sits much closer to x1.00 than the midpoint; x0.95 is the point that most likely clears MIN_TRADE_COUNT_RATIO's 33-trade floor against today's 66-trade baseline while still cutting turnover. Running x0.90 and x0.95 in the same cycle turns a single sample into two more points on a curve that already has three, which is what makes the shape fittable rather than guessable. Score the cost effect on total_fees_jpy, not on trade count.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.0789474,
+      "hold_btc_above": 0.9210526
+    },
+    "rebalance_interval_secs": 60
+  }
+}

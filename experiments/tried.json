@@ -368,5 +368,29 @@
     "verdict": "promoted",
     "sharpe_improvement_pct": null,
     "report_path": "experiments/reports/2026-09-17.md"
+  },
+  {
+    "name": "zone-damping-090",
+    "content_hash": "6ecdc41fb87a5960103d1eb68ecfc56d0f19cb2b584e3473da0f0fe288a51de2",
+    "tried_at": "2026-09-18T19:00:00Z",
+    "verdict": "promoted",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-09-18.md"
+  },
+  {
+    "name": "zone-damping-095",
+    "content_hash": "c7fa8a3504c6d313cdfe51f89e4324aab6067631abce2a7efe72c948724c7c25",
+    "tried_at": "2026-09-18T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-09-18.md"
+  },
+  {
+    "name": "hourly-rebalance-spacing",
+    "content_hash": "782fa94fb0a408481ccccfff188024726843bd1866bd074bff2527d23ad1d404",
+    "tried_at": "2026-09-18T19:00:00Z",
+    "verdict": "promoted",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-09-18.md"
   }
 ]

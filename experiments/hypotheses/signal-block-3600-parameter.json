@@ -1,0 +1,25 @@
+{
+  "name": "signal-block-3600-parameter",
+  "kind": "parameter",
+  "rationale": "2026-09-18's lead #4. h1-block-held-signal was promoted on 2026-09-17 as a kind:algorithm hypothesis that added the signal_block_secs field, and its PR #26 has since merged into dev — so the identical mechanism is now reachable as a pure configuration value with no source change at all, and can be measured on the same window and against the same baseline as the other candidates in this run. That comparison has never been made: signal_block_secs: 3600 was scored on the 2026-09-03..09-17 window while rebalance_interval_secs: 3600 was scored on 2026-09-04..09-18, so the two overlapping hourly throttles have never shared a window and a reviewer holding both PRs cannot tell which to prefer. 2026-09-18 established that they are mechanically different (blocking freezes the composite for the whole block, so an evaluation may act on a value up to 59 minutes stale, and its blocks are UTC-aligned, whereas spacing keeps the composite fresh and drifts off the grid: only 20 of 334 evaluations landed on :00). This run also re-measures the spacing config as a coordinator-side diagnostic on the identical window, so the head-to-head is complete. It is a cost-targeting hypothesis as the doc's warning rule requires: at its promotion it cut trades 76 to 40.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 60,
+    "signal_block_secs": 3600
+  }
+}

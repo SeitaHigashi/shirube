@@ -1,0 +1,33 @@
+{
+  "name": "hourly-spacing-zone-damping-090-combined",
+  "kind": "parameter",
+  "rationale": "2026-09-18's lead #2, verbatim: the two changes promoted that run — rebalance_interval_secs 60 to 3600 (PR #28) and the x0.90 zone damping 0.1/0.9 to 0.0555556/0.9444444 (PR #27) — were measured independently and never in combination, and both PR descriptions say so explicitly, so merging both today would ship a configuration this pipeline has never backtested. This hypothesis measures exactly that joint configuration on the current holdout, so a human chooses between three measured options rather than two. The two mechanisms are known to be distinct rather than redundant (2026-09-18 measured that spacing gates only the allocation-delta evaluation while the composite stays fresh, whereas damping compresses the target amplitude on every candle), so their combination is not predictable from either result: spacing cut trades 66 to 33 and fees 46.6%, damping cut trades 66 to 44 and fees 31.7%, and whether the stacked throttle keeps enough trades to clear MIN_TRADE_COUNT_RATIO (>= 33 trades against today's baseline) is the open question and the most likely way it fails. Per the doc's sublinearity caveat it must be scored on total_fees_jpy rather than on trade count, and per 2026-09-18's stability finding the sign of the effect should be checked at 500,000 JPY before the primary-capital verdict is trusted.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.0555556,
+      "hold_btc_above": 0.9444444
+    },
+    "rebalance_interval_secs": 3600
+  },
+  "paper_reference": {
+    "title": "Machine Learning-Based Bitcoin Trading Under Transaction Costs: Evidence From Walk-Forward Forecasting",
+    "authors": "(arXiv preprint, authors as listed on the preprint page)",
+    "venue_year": "arXiv:2606.00060, 2026",
+    "url": "https://arxiv.org/html/2606.00060v1",
+    "key_claim": "On 8 years of hourly BTC/USDT with an all-in 10bp cost per position change, a naive sign-based strategy earning 73.5% annualized gross collapses to -64.0% net; adding a cost-proportional magnitude filter (trade only when the forecast exceeds lambda*c, lambda=2) cuts trades from 10,619 to 251 (a 97.6% reduction) and restores 65.4% annualized at Sharpe 1.09.",
+    "pros": "Same asset class, a comparable bar frequency, and an all-in cost assumption (10bp) close to shirube's measured effective_fee_pct at the primary capital (12.9bp on 2026-09-18). It is the closest published measurement of shirube's actual predicament — a strategy whose gross signal is destroyed by turnover — and its central quantitative claim is that the turnover cut which restores profitability is an order of magnitude larger than anything this pipeline has yet promoted (97.6% versus the 46.6% and 33% of PR #28 and PR #27 individually). That is a direct argument for testing the two throttles stacked rather than one at a time, which is what this hypothesis does.",
+    "cons": "Its strategy class is not shirube's: an XGBoost return forecast with an explicit expected-move magnitude, against which a cost-proportional threshold is a well-defined comparison. shirube's composite is an allocation level with no units of expected return, so there is no quantity here to compare with lambda*c and the paper supplies no dose shirube can copy — only a direction. The paper also does not beat buy-and-hold at any conventional significance level after bootstrap correction, which is exactly the bar shirube's own static-mix benchmark has never cleared, and its lambda was selected on validation folds inside the walk-forward rather than held out. Its market (Binance USDT perpetual futures) has different microstructure and no 0.001 BTC lot floor, which on shirube's 50,000 JPY promotion capital is the dominant discretiser. Promotion here stays gated entirely on shirube's own holdout backtest."
+  }
+}

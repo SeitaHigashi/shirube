@@ -99,6 +99,22 @@ impl Simulator {
         // candles are never traded on and are outside the reported window.
         let mut risk_events = RiskEventCounts::default();
 
+        // Signal-blocking state (hypothesis `h1-block-held-signal`), mirroring
+        // the identical pair of fields on `TradingEngine`: the index of the
+        // UTC-aligned block whose composite is currently held, and that held
+        // composite. Both stay unused while `signal_block_secs == 0`, where
+        // `TradingEngine::block_start` returns None and the composite is
+        // recomputed on every candle exactly as before.
+        //
+        // NOTE: this is deliberately NOT the same mechanism as
+        // `rebalance_interval_secs` below. That one spaces how often the engine
+        // may ACT; this one spaces how often the SIGNAL is resampled, leaving
+        // the rebalance cadence, threshold and zone mapping untouched, so
+        // drift-correcting trades against a held target still occur every
+        // candle.
+        let mut last_block: Option<i64> = None;
+        let mut held_composite: Option<f64> = None;
+
         // Simulated-time clock for rebalance spacing: the timestamp of the
         // candle on which the allocation delta was last *evaluated*.
         //
@@ -152,7 +168,33 @@ impl Simulator {
 
             // 本番と同一の compute_btc_target を呼び出す（NOTE: この関数の
             // 内部ロジックは手動管理対象 — trading/engine.rs のコメント参照）
-            if let Some(normalized) = TradingEngine::compute_btc_target(point, &[], &trading_config) {
+            //
+            // Signal blocking: the composite is resampled only on the first
+            // evaluated candle of each UTC-aligned block and held for the rest
+            // of it, using the candle's own `open_time` (an absolute UTC
+            // timestamp, never a bar count) so the boundary means the same
+            // thing here as it does on the live path.
+            let composite =
+                match TradingEngine::block_start(candle.open_time, trading_config.signal_block_secs)
+                {
+                    // Blocking disabled: recompute every candle, propagating a
+                    // `None` (warmup) exactly as the pre-change code did.
+                    None => TradingEngine::compute_btc_target(point, &[], &trading_config),
+                    Some(block) => {
+                        if last_block != Some(block) {
+                            last_block = Some(block);
+                            // A `None` at a block boundary leaves the held
+                            // value untouched rather than clearing it.
+                            if let Some(c) =
+                                TradingEngine::compute_btc_target(point, &[], &trading_config)
+                            {
+                                held_composite = Some(c);
+                            }
+                        }
+                        held_composite
+                    }
+                };
+            if let Some(normalized) = composite {
                 let raw = normalized * trading_config.zone.range_max;
                 sticky_target = Some(apply_zone(raw, &trading_config.zone));
             }

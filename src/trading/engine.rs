@@ -53,6 +53,14 @@ pub struct TradingEngine {
     /// Latest news sentiment scores from the news analysis task.
     /// Used to incorporate news into the BTC allocation target calculation.
     news_cache: Arc<RwLock<Vec<SentimentScore>>>,
+    /// Index of the UTC-aligned signal block whose composite is currently held
+    /// (see `block_start`). `None` until the first output is processed, and
+    /// always `None` while `signal_block_secs == 0` (blocking disabled).
+    last_block: Option<i64>,
+    /// The composite value (`compute_btc_target`'s return) sampled at the start
+    /// of `last_block` and reused for every output inside that block.
+    /// Only read when blocking is enabled.
+    held_composite: Option<f64>,
 }
 
 impl TradingEngine {
@@ -74,6 +82,8 @@ impl TradingEngine {
                 order_repo: None,
                 sticky_target: None,
                 news_cache: Arc::new(RwLock::new(vec![])),
+                last_block: None,
+                held_composite: None,
             },
             signal_tx,
         )
@@ -369,6 +379,47 @@ impl TradingEngine {
         Some(combined.clamp(0.0, 1.0))
     }
 
+    /// Index of the fixed, UTC-aligned signal block that `ts` falls in.
+    ///
+    /// # Formula
+    ///   block_index = floor(unix_seconds(ts) / block_secs)
+    /// implemented as `ts.timestamp().div_euclid(block_secs)` so the flooring
+    /// is correct for pre-epoch (negative) timestamps too. The value is an
+    /// index, not a timestamp; only equality between consecutive calls matters.
+    ///
+    /// Returns `None` when `block_secs == 0`, which means "no blocking —
+    /// recompute the composite on every bar", i.e. exactly the behaviour
+    /// before this knob existed. Callers treat `None` as "always recompute".
+    ///
+    /// # Alignment guarantee
+    /// Because the index is taken off the absolute Unix timestamp, block
+    /// boundaries are anchored to the Unix epoch, which is itself UTC
+    /// midnight. Any `block_secs` that divides 86400 therefore yields blocks
+    /// that start at UTC midnight and repeat exactly through the day — for
+    /// `block_secs = 3600` that is the top of every UTC hour. This alignment
+    /// is the whole point of deriving the boundary from an absolute timestamp:
+    /// a bar count or a count of received signals would mean something ~240x
+    /// different on the live path (`SignalEngine::run` republishes every
+    /// 250 ms) than in the backtest (one evaluation per 60 s bar), so the two
+    /// would silently measure different strategies.
+    ///
+    /// NOTE: hypothesis `h1-block-held-signal` (arXiv:2602.11708 — that paper
+    /// reports Sharpe 2.41 at 6-hour sampling against 1.54 at 1-hour sampling
+    /// on a cross-sectional crypto momentum book, and is used here only as a
+    /// dose-response prediction; shirube's own backtest decides). This helper
+    /// changes only HOW OFTEN `compute_btc_target` is consulted — the
+    /// composite formula, the rebalance cadence, the allocation threshold and
+    /// the zone mapping are all untouched.
+    pub(crate) fn block_start(
+        ts: chrono::DateTime<chrono::Utc>,
+        block_secs: u64,
+    ) -> Option<i64> {
+        if block_secs == 0 {
+            return None;
+        }
+        Some(ts.timestamp().div_euclid(block_secs as i64))
+    }
+
     /// Process a single IndicatorOutput: compute BTC target from raw indicator values,
     /// update sticky target, broadcast SignalDetail for API consumers and place orders.
     ///
@@ -382,9 +433,45 @@ impl TradingEngine {
         // Compute combined TA + news normalized value [0.0, 1.0], then apply zone mapping.
         // Returns None when all indicators are in warmup or both TA and news are neutral.
         let (maybe_target, agg_normalized) = {
-            let cfg = self.config.read().await;
-            let news_scores = self.news_cache.read().await.clone();
-            let combined = Self::compute_btc_target(&output.raw, &news_scores, &cfg);
+            // NOTE: the config is cloned into a snapshot rather than held as a
+            // read guard, because the block-held composite state below is
+            // mutated on `self` while this value is in scope. One snapshot per
+            // output also keeps the block decision and the zone mapping
+            // consistent with each other under a live config update.
+            let cfg = self.config.read().await.clone();
+
+            // Signal blocking (hypothesis `h1-block-held-signal`): consult
+            // `compute_btc_target` only when this output falls in a new
+            // UTC-aligned block, and reuse the held composite for the rest of
+            // the block. `block_start` returns None when the knob is 0, which
+            // reproduces the pre-change path exactly — including propagating a
+            // `None` composite as-is during warmup.
+            let combined = match Self::block_start(output.calculated_at, cfg.signal_block_secs) {
+                None => {
+                    let news_scores = self.news_cache.read().await.clone();
+                    Self::compute_btc_target(&output.raw, &news_scores, &cfg)
+                }
+                Some(block) => {
+                    if self.last_block != Some(block) {
+                        // First output of a new block: resample the composite.
+                        // The block is marked as sampled even if the composite
+                        // came back None (still warming up), so a warmup block
+                        // is not resampled on every output inside it.
+                        self.last_block = Some(block);
+                        let news_scores = self.news_cache.read().await.clone();
+                        // A None at a block boundary must leave the previously
+                        // held value untouched rather than clearing it — the
+                        // sticky-target semantics below then behave exactly as
+                        // they do for a freshly computed composite.
+                        if let Some(c) =
+                            Self::compute_btc_target(&output.raw, &news_scores, &cfg)
+                        {
+                            self.held_composite = Some(c);
+                        }
+                    }
+                    self.held_composite
+                }
+            };
             let agg_norm = combined.unwrap_or(0.5);
             let target = combined.map(|normalized| {
                 // Scale normalized value by range_max, then map through zone boundaries
@@ -1112,5 +1199,66 @@ mod tests {
 
         engine.run().await;
         assert!(mock_exchange.placed_orders().is_empty());
+    }
+
+    // ---- block_start: UTC-aligned signal blocking (h1-block-held-signal) ----
+
+    /// Parse an RFC3339 UTC instant for the `block_start` tests.
+    fn ts(s: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(s)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn block_start_returns_none_when_blocking_disabled() {
+        // block_secs = 0 is the default and means "recompute every bar";
+        // callers treat None as "always recompute", so this is the no-op path.
+        assert_eq!(TradingEngine::block_start(ts("2026-09-10T04:37:12Z"), 0), None);
+        assert_eq!(TradingEngine::block_start(ts("1970-01-01T00:00:00Z"), 0), None);
+    }
+
+    #[test]
+    fn block_start_groups_timestamps_inside_one_hour_block() {
+        // Two instants 5 minutes apart, both inside the 04:00 UTC hour.
+        let a = TradingEngine::block_start(ts("2026-09-10T04:05:00Z"), 3600);
+        let b = TradingEngine::block_start(ts("2026-09-10T04:10:00Z"), 3600);
+        assert!(a.is_some());
+        assert_eq!(a, b, "same hour must share a block index");
+    }
+
+    #[test]
+    fn block_start_separates_timestamps_straddling_an_hour_boundary() {
+        // 59 seconds apart, but on opposite sides of the top of the hour.
+        let before = TradingEngine::block_start(ts("2026-09-10T04:59:30Z"), 3600);
+        let after = TradingEngine::block_start(ts("2026-09-10T05:00:29Z"), 3600);
+        assert_ne!(before, after, "an hour boundary must start a new block");
+        assert_eq!(
+            after.unwrap() - before.unwrap(),
+            1,
+            "consecutive hours are adjacent blocks"
+        );
+    }
+
+    #[test]
+    fn block_start_aligns_3600s_blocks_to_the_top_of_each_utc_hour() {
+        // The boundary is anchored to the Unix epoch (UTC midnight), so for any
+        // block_secs dividing 86400 the block starts on a whole UTC hour.
+        let top = TradingEngine::block_start(ts("2026-09-10T05:00:00Z"), 3600).unwrap();
+        for inside in ["2026-09-10T05:00:00Z", "2026-09-10T05:00:01Z", "2026-09-10T05:59:59Z"] {
+            assert_eq!(
+                TradingEngine::block_start(ts(inside), 3600).unwrap(),
+                top,
+                "{inside} must fall in the 05:00 UTC block"
+            );
+        }
+        assert_eq!(
+            TradingEngine::block_start(ts("2026-09-10T06:00:00Z"), 3600).unwrap(),
+            top + 1
+        );
+        // UTC midnight is itself a block start: its index is a whole multiple
+        // of the blocks-per-day count (24 for 3600s blocks).
+        let midnight = TradingEngine::block_start(ts("2026-09-10T00:00:00Z"), 3600).unwrap();
+        assert_eq!(midnight % 24, 0, "1-hour blocks must align to UTC midnight");
     }
 }

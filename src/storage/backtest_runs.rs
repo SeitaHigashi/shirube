@@ -241,6 +241,13 @@ impl BacktestRunRepository {
                     static_mix_max_drawdown_pct,
                     excess_return_vs_static_mix_pct,
                     sharpe_minus_static_mix,
+                    // NOTE: warmup accounting is an input to the run rather
+                    // than a property of the measured window, and the
+                    // backtest_runs table does not store it, so a report read
+                    // back from the DB reports zero for both. See the
+                    // `warmup_candles: 0` note on the config above.
+                    warmup_candles_requested: 0,
+                    warmup_candles_actual: 0,
                 },
             });
         }
@@ -295,6 +302,8 @@ mod tests {
             static_mix_max_drawdown_pct: 4.6,
             excess_return_vs_static_mix_pct: 0.07,
             sharpe_minus_static_mix: 0.86,
+            warmup_candles_requested: 0,
+            warmup_candles_actual: 0,
         }
     }
 

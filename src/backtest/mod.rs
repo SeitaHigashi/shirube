@@ -177,6 +177,28 @@ pub struct BacktestReport {
     /// only; it does not affect the promotion rule in `compare()`.
     #[serde(default)]
     pub sharpe_minus_static_mix: f64,
+    /// How many warmup candles the caller asked for (`--warmup-candles`).
+    ///
+    /// NOTE: added 2026-09-20. The shortfall this pairs with
+    /// `warmup_candles_actual` to expose used to appear only as a line on
+    /// stderr, so nothing downstream — not `compare-backtest`, not the
+    /// self-improvement loop's report generator — could tell that a run's
+    /// indicators had been under-seeded. A run whose `sma_period` exceeds
+    /// `warmup_candles_actual` starts its window on a `None` SMA, which is
+    /// a materially different strategy from the one the config describes.
+    /// `#[serde(default)]` so report JSON written before this field
+    /// existed still parses.
+    #[serde(default)]
+    pub warmup_candles_requested: usize,
+    /// How many warmup candles were actually available and used.
+    ///
+    /// Equal to `warmup_candles_requested` on a healthy run. A smaller
+    /// value means the DB did not hold enough history before `from`; see
+    /// `warmup_candles_requested`. Compare it against the binding
+    /// indicator period in the run's `TradingConfig` before trusting the
+    /// leading portion of the window.
+    #[serde(default)]
+    pub warmup_candles_actual: usize,
 }
 
 /// Risk-gate activity observed during a backtest run.

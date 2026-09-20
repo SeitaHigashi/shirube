@@ -392,5 +392,32 @@
     "verdict": "promoted",
     "sharpe_improvement_pct": null,
     "report_path": "experiments/reports/2026-09-18.md"
+  },
+  {
+    "name": "hourly-spacing-zone-damping-090-combined",
+    "content_hash": "329e872ad01a37ed0e330946c1d2bd292861577ef2cc7e0cd2d5de0c01a41e16",
+    "tried_at": "2026-09-20T19:10:42Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 9.957628398825332,
+    "report_path": "experiments/reports/2026-09-20.md"
+  },
+  {
+    "name": "signal-block-3600-parameter",
+    "content_hash": "a9a0e163ab2349eb56db3ef241b4350b619ae4ebed45d9309e9bac6a49f36f5a",
+    "tried_at": "2026-09-20T19:10:42Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 7.956882571097158,
+    "report_path": "experiments/reports/2026-09-20.md"
+  },
+  {
+    "name": "zone-damping-085",
+    "content_hash": "2743b5d3822a2949a3df40b09aac1855fbcf0039326b5b5a2956497c472ba0ca",
+    "tried_at": "2026-09-20T19:10:42Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 9.958054551229136,
+    "report_path": "experiments/reports/2026-09-20.md"
   }
 ]

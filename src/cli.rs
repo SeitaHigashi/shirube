@@ -143,6 +143,27 @@ async fn run_backtest_variant(args: &[String]) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("failed to read --config {config_path}: {e}"))?;
     let trading_config: TradingConfig = serde_json::from_str(&trading_config_json)
         .map_err(|e| anyhow::anyhow!("failed to parse {config_path} as TradingConfig: {e}"))?;
+
+    // Reject a config carrying keys `TradingConfig` does not have. serde drops
+    // unknown fields silently, which in this pipeline is worse than a crash: a
+    // hypothesis whose field was never implemented (or whose name was typo'd)
+    // would run the *baseline* config, report "no measurable effect", and be
+    // recorded in experiments/tried.json as rejected — a false verdict that the
+    // registry then prevents anyone from ever re-testing. This check is
+    // deliberately confined to the backtest CLI; `ConfigRepository`'s live load
+    // path must stay permissive so an older persisted config still boots.
+    let unknown = unknown_config_fields(&trading_config_json)?;
+    if !unknown.is_empty() {
+        anyhow::bail!(
+            "{config_path} has {} field(s) TradingConfig does not define: {}. \
+             For a kind:\"algorithm\" hypothesis this means the code change has not been \
+             implemented yet — implement it before running the backtest, or the run will \
+             silently measure the baseline config instead.",
+            unknown.len(),
+            unknown.join(", ")
+        );
+    }
+
     trading_config
         .validate()
         .map_err(|e| anyhow::anyhow!("invalid trading config in {config_path}: {e}"))?;
@@ -192,6 +213,51 @@ async fn run_backtest_variant(args: &[String]) -> anyhow::Result<()> {
     let report = simulator.run(candles, trading_config).await?;
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())
+}
+
+/// Names of every key in `config_json` that `TradingConfig` does not define,
+/// as dotted paths (e.g. `zone.hold_jpy_bellow`).
+///
+/// Compares the parsed JSON against a serialized `TradingConfig::default()`
+/// rather than a hardcoded list, so the check tracks the struct automatically
+/// whenever a field is added or removed. Recurses into nested objects so a
+/// typo inside `zone` is caught too.
+///
+/// NOTE (2026-09-20): added after a run observed that `TradingConfig` has no
+/// `#[serde(deny_unknown_fields)]`, so a stale or misspelled key in a
+/// hypothesis file is dropped without a word. See the call site in
+/// `run_backtest_variant` for why a silent drop is especially damaging here.
+fn unknown_config_fields(config_json: &str) -> anyhow::Result<Vec<String>> {
+    let actual: serde_json::Value = serde_json::from_str(config_json)?;
+    let reference = serde_json::to_value(TradingConfig::default())?;
+    let mut out = Vec::new();
+    collect_unknown_fields(&actual, &reference, "", &mut out);
+    out.sort();
+    Ok(out)
+}
+
+/// Recursive worker for `unknown_config_fields`.
+fn collect_unknown_fields(
+    actual: &serde_json::Value,
+    reference: &serde_json::Value,
+    prefix: &str,
+    out: &mut Vec<String>,
+) {
+    let (Some(actual_map), Some(reference_map)) = (actual.as_object(), reference.as_object())
+    else {
+        return;
+    };
+    for (key, value) in actual_map {
+        let path = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}.{key}")
+        };
+        match reference_map.get(key) {
+            None => out.push(path),
+            Some(reference_value) => collect_unknown_fields(value, reference_value, &path, out),
+        }
+    }
 }
 
 fn run_compare_backtest(args: &[String]) -> anyhow::Result<()> {
@@ -831,5 +897,40 @@ mod tests {
         let b: serde_json::Value =
             serde_json::from_str(r#"{"kind":"parameter","trading_config":{"a":2}}"#).unwrap();
         assert_ne!(hypothesis_content_hash(&a), hypothesis_content_hash(&b));
+    }
+
+    /// A config matching `TradingConfig` exactly has no unknown fields.
+    #[test]
+    fn unknown_config_fields_accepts_the_default_config() {
+        let json = serde_json::to_string(&TradingConfig::default()).unwrap();
+        assert!(unknown_config_fields(&json).unwrap().is_empty());
+    }
+
+    /// Regression test for the 2026-09-20 finding: `TradingConfig` has no
+    /// `deny_unknown_fields`, so a hypothesis naming a field that was never
+    /// implemented would otherwise run the baseline config and be recorded
+    /// as "rejected, no effect".
+    #[test]
+    fn unknown_config_fields_flags_an_unimplemented_field() {
+        let mut v = serde_json::to_value(TradingConfig::default()).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .insert("signal_damping_factor".into(), serde_json::json!(0.85));
+        let found = unknown_config_fields(&v.to_string()).unwrap();
+        assert_eq!(found, vec!["signal_damping_factor".to_string()]);
+    }
+
+    /// A typo nested inside `zone` is caught with its dotted path, not
+    /// silently accepted because the top-level key `zone` exists.
+    #[test]
+    fn unknown_config_fields_recurses_into_nested_objects() {
+        let mut v = serde_json::to_value(TradingConfig::default()).unwrap();
+        v.get_mut("zone")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("hold_jpy_bellow".into(), serde_json::json!(0.1));
+        let found = unknown_config_fields(&v.to_string()).unwrap();
+        assert_eq!(found, vec!["zone.hold_jpy_bellow".to_string()]);
     }
 }

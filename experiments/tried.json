@@ -419,5 +419,32 @@
     "sharpe_improvement_pct": null,
     "sharpe_absolute_delta": 9.958054551229136,
     "report_path": "experiments/reports/2026-09-20.md"
+  },
+  {
+    "name": "contrarian-composite-inversion",
+    "content_hash": "b6b0a0fe91ce98a09f3f9ffd4b498e4bcb5edaaa17ba99e1522129f40e77656c",
+    "tried_at": "2026-09-21T19:13:01Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -97.16709,
+    "sharpe_absolute_delta": -6.79076,
+    "report_path": "experiments/reports/2026-09-21.md"
+  },
+  {
+    "name": "quarter-hour-block-held-signal",
+    "content_hash": "4f41cb966c8dbc111f3cd58c8c66ea4279bc6749f7f3d5c274d6b86a82943e02",
+    "tried_at": "2026-09-21T19:13:01Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -75.017089,
+    "sharpe_absolute_delta": -5.242754,
+    "report_path": "experiments/reports/2026-09-21.md"
+  },
+  {
+    "name": "half-hour-block-held-signal",
+    "content_hash": "d7e9a35d57043ddac19a7936719490b18a8efe5a257187efb27c7bed9f27232d",
+    "tried_at": "2026-09-21T19:13:01Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -21.114389,
+    "sharpe_absolute_delta": -1.475631,
+    "report_path": "experiments/reports/2026-09-21.md"
   }
 ]

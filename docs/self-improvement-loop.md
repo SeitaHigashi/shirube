@@ -294,6 +294,42 @@ primary-capital report is identical to the baseline's, check this before
 recording it as rejected, and say so in the report rather than filing a
 verdict the data cannot support.
 
+**Inertness is the mild failure mode. The floor can also reverse a
+parameter's sign.** Measured 2026-09-21 on `signal_block_secs`, a pure
+turnover throttle that holds the composite constant inside a UTC-aligned
+block. At the two diagnostic capitals it throttles as intended — the 1800s
+dose cut trades 65% (812 → 285) and fees 40% (29,861 → 17,785 JPY) at
+500,000 JPY. At 50,000 JPY the same config did the **opposite**: trades
+rose 31% (16 → 21) and fees 34% (312 → 418 JPY), and the 900s dose raised
+trades 4.25x (16 → 68) and nearly quadrupled fees. The mechanism is the
+floor, not a defect (the implementation was audited against both the live
+and simulator paths). Freezing the target while price keeps moving lets
+`target - current_alloc` accumulate across the block instead of being
+chased away bar by bar, so deltas that the 0.001 BTC minimum would have
+refused individually grow large enough to clear it. The floor converts
+refusals into orders.
+
+So a throttle is not merely weaker at the promotion capital — it can be
+**anti-throttling** there while being strongly beneficial at the capital
+the operator is heading for. Do not assume a mechanism's direction
+transfers across capitals, and state the direction at each capital in the
+report rather than describing a hypothesis by its intended mechanism.
+
+**The floor also moves with the BTC price, which makes the trade-count
+criterion partly a price measurement.** The floor is
+`min_order_size * price / total_value`, so at 50,000 JPY it rose from
+**24.46% to 27.04%** of the portfolio across the 2026-09-21 window as BTC
+went from ¥12,231,346 to ¥13,520,000. Between the 2026-09-20 and
+2026-09-21 windows the unchanged baseline config went from **88 executed
+trades to 16** — a 5.5x collapse with no config change at all, while the
+500,000 JPY baseline held steady (803 → 812). `MIN_TRADE_COUNT_RATIO` is
+computed against that baseline, so on a small account the promotion rule's
+trade-count criterion is substantially a function of where BTC is trading,
+not of the hypothesis. This is the most likely explanation for promotions
+that fail to reproduce a few days later (PR #27: 67% of baseline on
+2026-09-18, 19% on 2026-09-21) and it is an argument for widening the
+holdout window rather than for adjusting the ratio.
+
 Because the lot-size floor also throttles turnover, the three levels do
 not even share a break-even fee: 50,000 JPY turns over ~91x equity per 30
 days against a ~0.114% break-even, while 500,000 JPY and above turn over

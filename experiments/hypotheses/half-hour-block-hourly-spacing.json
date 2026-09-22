@@ -1,0 +1,28 @@
+{
+  "name": "half-hour-block-hourly-spacing",
+  "kind": "parameter",
+  "rationale": "This is the run's mandatory cost-targeting hypothesis (docs/self-improvement-loop.md's warning rule: the baseline's sharpe_minus_static_mix has now been negative for seven consecutive reported runs, so at least one newly generated hypothesis must target trading cost rather than signal quality), and 2026-09-21 supplied both the mechanism it must address and the reason every previous cost hypothesis failed to address it. That run established that at the 50,000 JPY promotion capital, signal blocking does the OPPOSITE of throttling: signal_block_secs 900 took the baseline from 16 trades and 312 JPY of fees to 68 trades and 1,225 JPY, and 1800 took it to 21 trades and 418 JPY, while at 500,000 JPY the same settings cut trades from 812 to 376 and 285 and Sharpe from -18.14 to -8.83 and -5.62. The explanation, reached independently by two worktree agents, is that blocking spaces how often the SIGNAL is resampled but not how often the engine may ACT: with the target frozen for the block, price drift lets |target - current_allocation| accumulate across the whole block instead of being chased away bar by bar, so deltas the 0.001 BTC lot floor would have refused individually grow large enough to clear it. The floor converts refusals into orders. That diagnosis has a direct implication nobody has tested: blocking's sign inversion at the primary capital should be CANCELLED by pairing it with a rebalance interval of the same order, because rebalance_interval_secs limits how often the engine may act on the held target at all, which is exactly the free variable blocking leaves open. This hypothesis is the smallest test of that prediction -- signal_block_secs 1800 with rebalance_interval_secs 3600 -- and it is worth a slot because it is falsifiable in a useful direction either way: if the combination lands near baseline turnover at 50,000 JPY it confirms the mechanism and makes blocking usable at the operator's actual account size, and if it does not, the 'floor converts refusals into orders' story is incomplete and that is itself worth knowing before more cost hypotheses are built on it. Neither component is a new idea on its own -- signal_block_secs 1800 is the rejected half-hour-block-held-signal (2026-09-21) and rebalance_interval_secs 3600 is hourly-rebalance-spacing (promoted 2026-09-18, PR #28 still open and no longer reproducing) -- but the pair has never been run, and the 2026-09-21 report's own lead #4 diagnostic measured only the 3600/3600 pair, at 500,000 JPY, as an unregistered side measurement. The 1800/3600 asymmetry is deliberate: the half-hour block is the shortest dose that measurably cut fees at the diagnostic capitals (40% lower at 500,000 JPY) and the hourly interval is the coarser of the two, so the engine gets at most one action per held target rather than several. Scored on total_fees_jpy and on the promotion rule, per the doc's instruction never to score a cost hypothesis on trade count. Standing caveat, which must be carried into any PR: both constituent settings are known to be unstable across windows at this capital -- PR #28 has now failed two different criteria on two different re-measurements -- so a promotion here is weak evidence about the pair and stronger evidence about the mechanism."
+  ,
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 3600,
+    "signal_block_secs": 1800
+  }
+}

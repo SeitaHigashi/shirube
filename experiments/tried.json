@@ -446,5 +446,29 @@
     "sharpe_improvement_pct": -21.114389,
     "sharpe_absolute_delta": -1.475631,
     "report_path": "experiments/reports/2026-09-21.md"
+  },
+  {
+    "name": "close-location-subsignal",
+    "content_hash": "90324cd6efad56b40f95b82ff5e965baa84d8f21643865662c63666a88d65f4a",
+    "tried_at": "2026-09-22T19:20:21Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -82.80035762761649,
+    "report_path": "experiments/reports/2026-09-22.md"
+  },
+  {
+    "name": "relative-volume-damped-exposure",
+    "content_hash": "430f46af6e0014d1610cf871ae2f30ddf6ae2acf40fce7e6a80f7621e4b6041c",
+    "tried_at": "2026-09-22T19:20:21Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 5.129214906850129,
+    "report_path": "experiments/reports/2026-09-22.md"
+  },
+  {
+    "name": "half-hour-block-hourly-spacing",
+    "content_hash": "631ee26c675b95eea9651b7eb8d2824fd3e421664ffa3e8160e2a676acf2ad60",
+    "tried_at": "2026-09-22T19:20:21Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -31.21398909803898,
+    "report_path": "experiments/reports/2026-09-22.md"
   }
 ]

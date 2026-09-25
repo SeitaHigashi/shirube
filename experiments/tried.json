@@ -470,5 +470,29 @@
     "verdict": "rejected",
     "sharpe_improvement_pct": -31.21398909803898,
     "report_path": "experiments/reports/2026-09-22.md"
+  },
+  {
+    "name": "two-hour-block-two-hour-spacing",
+    "content_hash": "82531edd3be4fd04f658887364040c57e7924b0ebd5ccffb572c8bd3ca6980a0",
+    "tried_at": "2026-09-25T19:21:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 93029.52046372897,
+    "report_path": "experiments/reports/2026-09-25.md"
+  },
+  {
+    "name": "longer-reversion-horizons",
+    "content_hash": "03324a98441cd8d37f30b902c6c785e0f91d9ac80613eb04de78dcc9169b22f9",
+    "tried_at": "2026-09-25T19:21:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 109878.013692536,
+    "report_path": "experiments/reports/2026-09-25.md"
+  },
+  {
+    "name": "typical-price-rsi-bollinger-inputs",
+    "content_hash": "481d6a67e518fa2cc4a6bfa727c5fa7b932a73a2548877cdaf272253fb70a142",
+    "tried_at": "2026-09-25T19:21:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -8368.79043078536,
+    "report_path": "experiments/reports/2026-09-25.md"
   }
 ]

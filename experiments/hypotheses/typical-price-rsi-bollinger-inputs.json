@@ -1,0 +1,40 @@
+{
+  "name": "typical-price-rsi-bollinger-inputs",
+  "kind": "algorithm",
+  "rationale": "2026-09-22's close-location-subsignal was the first test of a genuinely orthogonal observable (the bar's intra-bar high/low) and it moved the strategy more than any reweighting ever had -- but in the wrong direction, because consumed bar-by-bar at 60s the quantity is near-binary (60.4% of bars at exactly 0.0 or 1.0) and injected pure churn (trades 31 -> 83, Sharpe -82.8%). That report's lead #4 was to keep the information and drop the noise by smoothing. The cheapest smoother already exists: feed the high/low into the two mean-reverting indicators (weight 1.0 each, the dominant family) as the typical price (H+L+C)/3 instead of the close, so the range information is averaged over rsi_period (42) and bollinger_period (60) bars by the indicators themselves rather than consumed raw. It also avoids both design problems that report found: it cannot defeat the warmup guard (the indicators still need their full period), and it needs no change to compute_btc_target, whose %B sub-signal keeps comparing the raw close to bands now centred on typical price -- which is itself a smoothed close-location reading. Only testable since the bitFlyer tape replaced CoinGecko's open == high == low == close rows on 2026-09-09.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 60,
+    "signal_block_secs": 0
+  },
+  "code_change_summary": "In src/signal/indicators/rsi.rs and src/signal/indicators/bollinger.rs, change update(&mut self, candle: &Candle) so the price pushed into the indicator's internal state is the candle's typical price (candle.high + candle.low + candle.close) / 3 instead of candle.close, computed with the same numeric type/conversion path the file already uses for close. Add a doc comment on each update() stating the formula, that it equals close exactly when high == low == close, and a NOTE explaining why (smoothing intra-bar range information through the indicator window rather than consuming it bar-by-bar, per the 2026-09-22 close-location-subsignal result). Nothing else: do not change Sma/Ema/Macd, min_periods, reset, IndicatorPoint, compute_indicators, SignalEngine, or compute_btc_target. Add unit tests in each indicator file: (a) a candle series with high == low == close produces values identical to the pre-change close-only computation; (b) a series with high/low differing from close produces the typical-price result (assert against a hand-computed expected value). Also instrument and REPORT (scratch harness or stderr ONLY -- do NOT add a field to BacktestReport) the mean absolute difference between the new and old RSI value and between the new and old %B over the evaluated window, so the coordinator can tell an inert change apart from an ineffective one.",
+  "constraints": [
+    "This hypothesis MUST NOT modify TradingEngine::compute_btc_target at all -- neither its SIGNATURE nor its body. The change lives entirely inside the RSI and Bollinger indicator implementations. If you find the change cannot be made without touching compute_btc_target, stop and report that instead of editing it.",
+    "The change is made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main. A promoted change becomes its own PR against dev and is never merged automatically.",
+    "MUST apply identically on the live path and the backtest path: both SignalEngine (src/signal/engine.rs, which calls Indicator::update on trait objects) and compute_indicators() (src/signal/mod.rs) must see the same indicator behaviour. Implementing the change inside Rsi::update and Bollinger::update themselves satisfies this automatically and is the preferred approach.",
+    "MUST NOT change Sma, Ema or Macd, any indicator's period semantics, min_periods, warmup behaviour or reset(), IndicatorPoint's shape, or the `close` field fed to compute_btc_target (the %B sub-signal must keep comparing the raw close to the bands).",
+    "MUST NOT touch apply_zone, sticky_target, block_start, allocation_delta_to_order, the lot-size check, the orders_below_min counting arm, the RiskManager call sequence, or the fee logic.",
+    "MUST NOT introduce a tunable constant or a new TradingConfig field. The typical price is exactly (high + low + close) / 3.",
+    "MUST NOT fit anything on the holdout window, or on any window at all.",
+    "MUST pass `cargo test`. Update an existing indicator test's expected value only where typical-price input legitimately changes it (a test using candles with high == low == close must be unchanged), and do not weaken or delete a test just to make it pass. Add a regression test per indicator showing a candle with high/low different from close yields a different value than close-only input, and one showing high == low == close yields the identical value.",
+    "MUST NOT change src/signal/engine.rs's broadcast cadence or anything about live scheduling.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or the order-submission mechanics themselves."
+  ]
+}

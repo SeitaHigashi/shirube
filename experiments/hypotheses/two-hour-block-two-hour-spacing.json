@@ -1,0 +1,36 @@
+{
+  "name": "two-hour-block-two-hour-spacing",
+  "kind": "parameter",
+  "rationale": "Mandatory cost-targeting hypothesis under the warning rule: the baseline's sharpe_minus_static_mix was negative for the ninth consecutive run on 2026-09-25 (-8.60 at 50,000 JPY, -25.31 at 500,000 JPY, fee_drag_pct 2.68 against a total_return_pct of -0.15 at the primary capital, so the run is measuring cost, not signal). The 2026-09-22 report measured a clean dose-response at the diagnostic capitals: baseline -> block 1800 only -> spacing 3600 only -> both (1800/3600) took 500,000 JPY Sharpe from -16.38 to -3.62, -0.27 and +1.51 and fees from 30,710 to 12,300 JPY -- the best diagnostic-capital config the pipeline has measured, and the first with a positive return at both 500,000 and 5,000,000 JPY. Every step toward a slower action cadence has helped there, and nothing has yet located where that stops. This doubles both knobs to 7200s (signal held for two hours, at most one rebalance per two hours) to test whether the curve is still rising. At 50,000 JPY the same report found 3600s spacing RAISED trades (31 -> 40) because longer holds let deltas accumulate past the 0.001 BTC lot floor, so the direction at the primary capital is genuinely uncertain and must be reported per capital. Score on total_fees_jpy and the promotion rule, never on trade count.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 7200,
+    "signal_block_secs": 7200
+  },
+  "paper_reference": {
+    "title": "Optimal Rebalancing Frequencies for Multidimensional Portfolios",
+    "authors": "Ibrahim Ekren, Ren Liu, Johannes Muhle-Karbe",
+    "venue_year": "arXiv:1510.05097, 2015 (rev. 2017)",
+    "url": "https://arxiv.org/abs/1510.05097",
+    "key_claim": "Under small proportional transaction costs, rebalancing on an optimized fixed schedule (rather than continuously tracking a target) has explicit, computable welfare loss, and the optimal interval lengthens as costs rise relative to the benefit of tracking the target.",
+    "pros": "shirube is exactly a target-tracking allocation model paying proportional costs, and rebalance_interval_secs is literally a fixed rebalancing frequency; the paper's framework says the right interval is set by cost versus tracking benefit, and 2026-09-21's contrarian-inversion result showed the tracking benefit of this composite is close to zero, which pushes the optimal interval long.",
+    "cons": "A continuous-diffusion model with a known optimal target and no lot-size minimum; shirube's target is a noisy TA composite with no demonstrated edge, and at 50,000 JPY the 0.001 BTC lot floor (24-27% of the portfolio) dominates cost behaviour in a way the model has no term for. No empirical crypto sample. Used only to motivate testing a longer interval, not to pick its value."
+  }
+}

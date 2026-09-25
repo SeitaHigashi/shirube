@@ -186,6 +186,11 @@ pub(crate) fn compute_report(
         static_mix_max_drawdown_pct,
         excess_return_vs_static_mix_pct: total_return_pct - static_mix_return_pct,
         sharpe_minus_static_mix: sharpe_ratio - static_mix_sharpe_ratio,
+        // Warmup accounting is known to the caller that fetched the candle
+        // series, not to this pure aggregation step, so it is filled in by
+        // `run_backtest_variant` after the simulator returns.
+        warmup_candles_requested: 0,
+        warmup_candles_actual: 0,
     }
 }
 
@@ -504,6 +509,8 @@ mod tests {
             static_mix_max_drawdown_pct: 4.6,
             excess_return_vs_static_mix_pct: 1.5,
             sharpe_minus_static_mix: 0.86,
+            warmup_candles_requested: 0,
+            warmup_candles_actual: 0,
         };
         let s = format_report(&report);
         assert!(s.contains("12.34"));
@@ -577,6 +584,8 @@ mod tests {
             static_mix_max_drawdown_pct: 0.0,
             excess_return_vs_static_mix_pct: 0.0,
             sharpe_minus_static_mix: 0.0,
+            warmup_candles_requested: 0,
+            warmup_candles_actual: 0,
         }
     }
 

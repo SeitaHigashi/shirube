@@ -419,5 +419,56 @@
     "sharpe_improvement_pct": null,
     "sharpe_absolute_delta": 9.958054551229136,
     "report_path": "experiments/reports/2026-09-20.md"
+  },
+  {
+    "name": "contrarian-composite-inversion",
+    "content_hash": "b6b0a0fe91ce98a09f3f9ffd4b498e4bcb5edaaa17ba99e1522129f40e77656c",
+    "tried_at": "2026-09-21T19:13:01Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -97.16709,
+    "sharpe_absolute_delta": -6.79076,
+    "report_path": "experiments/reports/2026-09-21.md"
+  },
+  {
+    "name": "quarter-hour-block-held-signal",
+    "content_hash": "4f41cb966c8dbc111f3cd58c8c66ea4279bc6749f7f3d5c274d6b86a82943e02",
+    "tried_at": "2026-09-21T19:13:01Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -75.017089,
+    "sharpe_absolute_delta": -5.242754,
+    "report_path": "experiments/reports/2026-09-21.md"
+  },
+  {
+    "name": "half-hour-block-held-signal",
+    "content_hash": "d7e9a35d57043ddac19a7936719490b18a8efe5a257187efb27c7bed9f27232d",
+    "tried_at": "2026-09-21T19:13:01Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -21.114389,
+    "sharpe_absolute_delta": -1.475631,
+    "report_path": "experiments/reports/2026-09-21.md"
+  },
+  {
+    "name": "close-location-subsignal",
+    "content_hash": "90324cd6efad56b40f95b82ff5e965baa84d8f21643865662c63666a88d65f4a",
+    "tried_at": "2026-09-22T19:20:21Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -82.80035762761649,
+    "report_path": "experiments/reports/2026-09-22.md"
+  },
+  {
+    "name": "relative-volume-damped-exposure",
+    "content_hash": "430f46af6e0014d1610cf871ae2f30ddf6ae2acf40fce7e6a80f7621e4b6041c",
+    "tried_at": "2026-09-22T19:20:21Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 5.129214906850129,
+    "report_path": "experiments/reports/2026-09-22.md"
+  },
+  {
+    "name": "half-hour-block-hourly-spacing",
+    "content_hash": "631ee26c675b95eea9651b7eb8d2824fd3e421664ffa3e8160e2a676acf2ad60",
+    "tried_at": "2026-09-22T19:20:21Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -31.21398909803898,
+    "report_path": "experiments/reports/2026-09-22.md"
   }
 ]

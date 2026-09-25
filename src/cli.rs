@@ -178,16 +178,8 @@ async fn run_backtest_variant(args: &[String]) -> anyhow::Result<()> {
         .parse()?;
 
     let db = Database::open(&db_path).await?;
-    // Widen the fetch window backwards by the requested warmup, then count how
-    // many returned candles actually precede `from`. Counting (rather than
-    // trusting the request) keeps the split correct when the extra history is
-    // sparse or entirely absent.
-    let fetch_from = from - chrono::Duration::seconds(warmup_candles as i64 * resolution_secs as i64);
-    let candles = db
-        .tickers()
-        .get_aggregated(&product_code, resolution_secs, fetch_from, to, None)
-        .await?;
-    let actual_warmup = candles.iter().filter(|c| c.open_time < from).count();
+    let (candles, actual_warmup) =
+        fetch_with_warmup(&db, &product_code, resolution_secs, from, to, warmup_candles).await?;
     if candles.len() == actual_warmup {
         anyhow::bail!("no candles found for {product_code} in [{from}, {to}] (resolution_secs={resolution_secs})");
     }
@@ -197,6 +189,13 @@ async fn run_backtest_variant(args: &[String]) -> anyhow::Result<()> {
              evaluating {} candles in-window",
             candles.len() - actual_warmup
         );
+        if actual_warmup < warmup_candles {
+            eprintln!(
+                "warmup: WARNING only {actual_warmup} of {warmup_candles} warmup candles were \
+                 available — indicators with a period above {actual_warmup} start the window \
+                 unseeded. See warmup_candles_actual in the report JSON."
+            );
+        }
     }
 
     let bt_config = BacktestConfig {
@@ -210,7 +209,12 @@ async fn run_backtest_variant(args: &[String]) -> anyhow::Result<()> {
         warmup_candles: actual_warmup,
     };
     let simulator = Simulator::new(bt_config, db);
-    let report = simulator.run(candles, trading_config).await?;
+    let mut report = simulator.run(candles, trading_config).await?;
+    // Surface the warmup accounting in the report itself, not only on stderr,
+    // so `compare-backtest` and the self-improvement loop can see when a run's
+    // indicators were under-seeded.
+    report.warmup_candles_requested = warmup_candles;
+    report.warmup_candles_actual = actual_warmup;
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())
 }
@@ -258,6 +262,71 @@ fn collect_unknown_fields(
             Some(reference_value) => collect_unknown_fields(value, reference_value, &path, out),
         }
     }
+}
+
+/// Fetch `[from, to]` plus exactly `warmup_candles` bars preceding `from`.
+///
+/// Returns the full series (warmup bars first, then the in-window bars) and
+/// how many leading bars actually precede `from`.
+///
+/// NOTE (2026-09-20): this used to widen the fetch window by a fixed
+/// `warmup_candles * resolution_secs` of wall-clock time and take whatever
+/// came back. That silently under-delivers, because a 1-minute bar exists
+/// only for minutes that actually traded — on BTC_JPY roughly 57-80% of
+/// minutes do. Measured on the accumulated backtest DB, `--warmup-candles
+/// 300` yielded **165** bars, so the baseline config's `sma_period: 200` was
+/// never seeded and every run began its window on a `None` SMA, despite
+/// 30,421 bars of history sitting in the DB before the window start. The
+/// lookback is therefore widened geometrically until enough *bars* (not
+/// seconds) precede `from`, and then trimmed back to exactly the requested
+/// count so the result does not depend on how many doublings it took.
+async fn fetch_with_warmup(
+    db: &Database,
+    product_code: &str,
+    resolution_secs: u32,
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
+    warmup_candles: usize,
+) -> anyhow::Result<(Vec<crate::types::market::Candle>, usize)> {
+    // Bound the search so a DB with no pre-window history terminates promptly
+    // rather than widening forever. 12 doublings is a 4096x lookback, far past
+    // any plausible bar sparsity.
+    const MAX_WIDENINGS: u32 = 12;
+
+    let mut lookback_secs = warmup_candles as i64 * resolution_secs as i64;
+    let mut best: Vec<crate::types::market::Candle> = Vec::new();
+    let mut best_warmup = 0usize;
+
+    for attempt in 0..=MAX_WIDENINGS {
+        let fetch_from = from - chrono::Duration::seconds(lookback_secs);
+        let candles = db
+            .tickers()
+            .get_aggregated(product_code, resolution_secs, fetch_from, to, None)
+            .await?;
+        let actual_warmup = candles.iter().filter(|c| c.open_time < from).count();
+
+        // A widening that returned no additional history means the DB is
+        // exhausted; keep what we have rather than spinning to the cap.
+        let exhausted = attempt > 0 && candles.len() == best.len();
+        best = candles;
+        best_warmup = actual_warmup;
+
+        if warmup_candles == 0 || best_warmup >= warmup_candles || exhausted {
+            break;
+        }
+        lookback_secs = lookback_secs.saturating_mul(2);
+    }
+
+    // Trim any surplus so the series is exactly `warmup_candles` bars of
+    // history plus the window. Without this the indicator state at the first
+    // evaluated candle would depend on the widening path, making runs
+    // irreproducible across DBs with different bar density.
+    if best_warmup > warmup_candles {
+        best.drain(0..(best_warmup - warmup_candles));
+        best_warmup = warmup_candles;
+    }
+
+    Ok((best, best_warmup))
 }
 
 fn run_compare_backtest(args: &[String]) -> anyhow::Result<()> {
@@ -932,5 +1001,120 @@ mod tests {
             .insert("hold_jpy_bellow".into(), serde_json::json!(0.1));
         let found = unknown_config_fields(&v.to_string()).unwrap();
         assert_eq!(found, vec!["zone.hold_jpy_bellow".to_string()]);
+    }
+
+    /// Regression test for the 2026-09-20 warmup defect.
+    ///
+    /// A 1-minute bar exists only for minutes that actually traded, so a
+    /// warmup lookback expressed as `warmup_candles * resolution_secs` of
+    /// wall-clock time under-delivers on a sparse tape. Here only every
+    /// third minute trades, so the old fixed-span fetch would have returned
+    /// roughly a third of the requested warmup; `fetch_with_warmup` must
+    /// return exactly the number of bars asked for by widening until it
+    /// has them.
+    #[tokio::test]
+    async fn fetch_with_warmup_delivers_requested_bar_count_on_a_sparse_tape() {
+        use crate::types::market::Ticker;
+        use rust_decimal_macros::dec;
+
+        let db = crate::storage::db::Database::open_in_memory().await.unwrap();
+        let from = Utc.with_ymd_and_hms(2026, 9, 6, 12, 0, 0).unwrap();
+
+        // 600 minutes of history before `from`, but only every third minute
+        // actually trades -> 200 bars of real pre-window history.
+        // Plus 30 in-window minutes, likewise sparse.
+        for i in -600i64..30 {
+            if i.rem_euclid(3) != 0 {
+                continue;
+            }
+            let ts = from + chrono::Duration::minutes(i);
+            db.tickers()
+                .insert(&Ticker {
+                    product_code: "BTC_JPY".into(),
+                    timestamp: ts,
+                    best_bid: dec!(12_000_000),
+                    best_ask: dec!(12_000_001),
+                    best_bid_size: dec!(1),
+                    best_ask_size: dec!(1),
+                    ltp: dec!(12_000_000),
+                    volume: dec!(1),
+                    volume_by_product: dec!(1),
+                })
+                .await
+                .unwrap();
+        }
+
+        let to = from + chrono::Duration::minutes(30);
+
+        // The naive fixed-span fetch: 150 minutes back for 150 candles. Only
+        // one minute in three traded, so it can never see more than ~50.
+        let naive = db
+            .tickers()
+            .get_aggregated(
+                "BTC_JPY",
+                60,
+                from - chrono::Duration::seconds(150 * 60),
+                to,
+                None,
+            )
+            .await
+            .unwrap();
+        let naive_warmup = naive.iter().filter(|c| c.open_time < from).count();
+        assert!(
+            naive_warmup < 150,
+            "precondition: the fixed-span fetch must under-deliver, got {naive_warmup}"
+        );
+
+        // The fix: widen until 150 real bars precede `from`.
+        let (candles, warmup) = fetch_with_warmup(&db, "BTC_JPY", 60, from, to, 150)
+            .await
+            .unwrap();
+        assert_eq!(warmup, 150, "warmup must be satisfied by bar count");
+        assert_eq!(
+            candles.iter().filter(|c| c.open_time < from).count(),
+            150,
+            "exactly the requested warmup must precede `from`"
+        );
+        assert!(
+            candles.len() > 150,
+            "the in-window candles must still be present"
+        );
+    }
+
+    /// When the DB genuinely lacks enough history, `fetch_with_warmup`
+    /// returns what exists rather than widening to the cap or hanging, and
+    /// reports the true (short) count so the caller can warn on it.
+    #[tokio::test]
+    async fn fetch_with_warmup_reports_shortfall_when_history_is_absent() {
+        use crate::types::market::Ticker;
+        use rust_decimal_macros::dec;
+
+        let db = crate::storage::db::Database::open_in_memory().await.unwrap();
+        let from = Utc.with_ymd_and_hms(2026, 9, 6, 12, 0, 0).unwrap();
+
+        // Only 5 bars of pre-window history exist, against a request for 150.
+        for i in -5i64..20 {
+            let ts = from + chrono::Duration::minutes(i);
+            db.tickers()
+                .insert(&Ticker {
+                    product_code: "BTC_JPY".into(),
+                    timestamp: ts,
+                    best_bid: dec!(12_000_000),
+                    best_ask: dec!(12_000_001),
+                    best_bid_size: dec!(1),
+                    best_ask_size: dec!(1),
+                    ltp: dec!(12_000_000),
+                    volume: dec!(1),
+                    volume_by_product: dec!(1),
+                })
+                .await
+                .unwrap();
+        }
+
+        let to = from + chrono::Duration::minutes(20);
+        let (_candles, warmup) = fetch_with_warmup(&db, "BTC_JPY", 60, from, to, 150)
+            .await
+            .unwrap();
+        assert_eq!(warmup, 5, "a real shortfall must be reported, not padded");
     }
 }

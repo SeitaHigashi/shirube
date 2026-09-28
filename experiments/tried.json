@@ -494,5 +494,29 @@
     "verdict": "rejected",
     "sharpe_improvement_pct": -8368.79043078536,
     "report_path": "experiments/reports/2026-09-25.md"
+  },
+  {
+    "name": "two-hour-block-hourly-spacing",
+    "content_hash": "65b37e594e2658c06ad88d59dc0425841d0dd17fcfe7ae361c419e2fb390e6b1",
+    "tried_at": "2026-09-28T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 0.0,
+    "report_path": "experiments/reports/2026-09-28.md"
+  },
+  {
+    "name": "intermediate-reversion-horizons",
+    "content_hash": "1d8349fc4a586f22abe45b218d3a51a0a76462422212ae6095ac811a07184ee3",
+    "tried_at": "2026-09-28T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -0.1470181962143912,
+    "report_path": "experiments/reports/2026-09-28.md"
+  },
+  {
+    "name": "trend-family-beyond-5h-horizons",
+    "content_hash": "2bf13bb96fc7d60734df505876dfca541304ab5838476ea62f686b9cffd69be6",
+    "tried_at": "2026-09-28T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -121.45377455306267,
+    "report_path": "experiments/reports/2026-09-28.md"
   }
 ]

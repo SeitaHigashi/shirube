@@ -1,0 +1,27 @@
+{
+  "name": "two-hour-block-hourly-spacing",
+  "kind": "parameter",
+  "rationale": "Mandatory cost-targeting hypothesis under the warning rule (baseline sharpe_minus_static_mix negative for the ninth consecutive run on 2026-09-25: -8.60 at 50,000 JPY, fee_drag_pct 2.68 vs total_return_pct -0.15). On 2026-09-25 `two-hour-block-two-hour-spacing` (7200/7200) was the best result the pipeline has measured at every capital (50,000 JPY Sharpe 0.008 -> 7.30, fees 1,342 -> 231 JPY; +1.69% at 500,000 JPY) but was rejected solely on trade count (11 / 81 = 14%). 2026-09-22 found that at 50,000 JPY hourly spacing alone RAISED trades (31 -> 40) because longer holds let deltas accumulate past the 0.001 BTC lot floor. This keeps the two-hour signal hold (the component that cuts signal churn) but halves the action spacing to 3600s, testing whether the hold's cost benefit survives with enough rebalances to clear the 50% trade-count bar. Direction at each capital is genuinely uncertain and must be reported per capital; score on total_fees_jpy and the promotion rule, never on trade count.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 3600,
+    "signal_block_secs": 7200
+  }
+}

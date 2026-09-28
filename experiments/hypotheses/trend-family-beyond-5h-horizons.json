@@ -1,0 +1,36 @@
+{
+  "name": "trend-family-beyond-5h-horizons",
+  "kind": "parameter",
+  "rationale": "Literature-motivated. The composite's trend family (SMA cross, EMA cross, MACD histogram, weight 0.25 each vs 1.0 for RSI/Bollinger) currently runs at 1-minute horizons of 200 / 100 / 12-26-9 bars, i.e. 3.3h / 1.7h / 12-26 minutes -- all inside the sub-5h regime where Tang et al. measure Bitcoin as subdiffusive (mean-reverting). A trend signal measured there is fighting the reversion family and adding churn: 2026-09-21's `contrarian-composite-inversion` and 2026-09-22's `contrarian-trend-subsignals`/`trend-weight-half` results show the trend terms at current horizons carry no edge. This moves every trend-family period beyond the ~5h crossover into the superdiffusive (trending) regime: SMA 1440 (24h), EMA 720 (12h), MACD 360/780/270 (6h/13h/4.5h). Reversion-family periods and all weights are unchanged. Note: run with --warmup-candles 1500 (SMA 1440 needs >= 1440 warmup bars; MACD slow+signal = 1050); warmup is excluded from the report so the evaluated window is identical to the baseline's.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 1440,
+    "ema_period": 720,
+    "rsi_period": 42,
+    "macd_fast": 360,
+    "macd_slow": 780,
+    "macd_signal": 270,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 60,
+    "signal_block_secs": 0
+  },
+  "paper_reference": {
+    "title": "Stylized Facts of High-Frequency Bitcoin Time Series",
+    "authors": "Yaoyue Tang, Karina Arias-Calluari, Mohammad-Reza Najafi, Michael S. Harré, Fernando Alonso-Marroquin",
+    "venue_year": "arXiv:2402.11930, 2024",
+    "url": "https://arxiv.org/abs/2402.11930",
+    "key_claim": "In 2021-2022 BTC/USD 10-minute data, price diffusion is subdiffusive (H = 0.478, mean-reverting) at short intervals and weakly superdiffusive (H = 0.646, trending) beyond roughly 5 hours.",
+    "pros": "Directly states the horizon at which trend-following should start to work on BTC, which maps one-to-one onto shirube's trend-family period parameters, and is consistent with this pipeline's own finding that short-horizon reversion dominates.",
+    "cons": "BTC/USD aggregate data, not bitFlyer BTC/JPY; ends May 2022, before the ETF-era liquidity regime; a descriptive Hurst-exponent study with no trading rule, fees or out-of-sample test; the ~5h crossover is regime-dependent (their earlier period differs). Used only to pick which side of 5h to test, not to predict a Sharpe."
+  }
+}

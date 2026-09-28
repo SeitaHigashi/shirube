@@ -1,0 +1,27 @@
+{
+  "name": "intermediate-reversion-horizons",
+  "kind": "parameter",
+  "rationale": "Nearby-value probe between two measured points of the dominant mean-reversion family's horizon. Baseline (rsi 42 / bollinger 60) had Sharpe +0.008 at 50,000 JPY on 2026-09-25; `longer-reversion-horizons` (rsi 90 / bollinger 120) lifted it to 8.63 and cut 500,000 JPY trades 833 -> 365 (Sharpe -16.69 -> -3.19), but made only 1 trade at 50,000 JPY -- effectively the static mix, so it was rejected on trade count and was not evidence about the signal. The shorter direction (`reversion-horizon-15m`) was clearly worse. rsi 60 / bollinger 90 (1.4-1.5x baseline) tests whether part of the slower-reversion benefit is available while the composite still swings far enough to clear the 0.001 BTC lot floor (~27% of a 50,000 JPY portfolio) often enough to keep >= 50% of baseline trades. Trend-family periods are left unchanged so the effect is attributable to the reversion horizon alone.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 60,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 90,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 60,
+    "signal_block_secs": 0
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "one-hour-block-hourly-spacing",
+  "kind": "parameter",
+  "rationale": "Mandatory cost-targeting hypothesis under the warning rule (baseline sharpe_minus_static_mix negative for the tenth consecutive run on 2026-09-28: -0.0029 at 50,000 JPY where the baseline degenerated to 1 trade, -23.88 at 500,000 JPY with fee_drag_pct 5.85 vs total_return_pct -10.67). The block/spacing grid measured so far is 1800/3600 (2026-09-22, +1.51 Sharpe @500k), 7200/3600 (2026-09-28, +2.44 @500k) and 7200/7200 (2026-09-25, +3.00 @500k; best measured at 50,000 JPY but rejected on trade count 11/81). The diagonal point 3600/3600 is the only untested cell between them: a one-hour signal hold matched to hourly action spacing, which should keep more rebalances than 7200/7200 (to clear the 50% trade-count bar at 50,000 JPY) while still cutting signal churn. Direction at 50,000 JPY is uncertain because of the lot-floor accumulation effect documented on 2026-09-21; report per capital and score on total_fees_jpy plus the promotion rule, never on trade count.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 3600,
+    "signal_block_secs": 3600
+  }
+}

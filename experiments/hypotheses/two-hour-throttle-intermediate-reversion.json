@@ -1,0 +1,36 @@
+{
+  "name": "two-hour-throttle-intermediate-reversion",
+  "kind": "parameter",
+  "rationale": "Combines the two parameter changes that each independently improved both diagnostic capitals: two-hour block + two-hour spacing (7200/7200; 2026-09-25: 500,000 JPY Sharpe -16.69 -> +3.00) and the intermediate reversion horizons rsi 60 / bollinger 90 (2026-09-28: 500,000 JPY Sharpe -17.36 -> -7.46 with a monotone dose-response across 42/60 -> 60/90 -> 90/120). Literature (arXiv:2608.21888) finds short-horizon crypto reversion is real but its gross edge (~1.3bp) is far below round-trip cost (~5bp), which argues for keeping the reversion-dominated signal while trading it much less often and on a slightly slower horizon -- exactly this combination. Never tested jointly; the risk is that the two throttles compound into too few trades at 50,000 JPY, which must be reported rather than read as evidence against the signal.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 60,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 90,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 7200,
+    "signal_block_secs": 7200
+  },
+  "paper_reference": {
+    "title": "Short-horizon mean reversion in cryptocurrency markets: a matched cross-market measurement",
+    "authors": "Nadav A. Kitron, Jonathan M. Wengrowicz",
+    "venue_year": "arXiv:2608.21888, 2026",
+    "url": "https://arxiv.org/abs/2608.21888",
+    "key_claim": "At a 15-minute horizon, 90% of 183 Binance pairs show significant directional reversal (vs 2.7% of US stocks), concentrated after taker-driven moves, but the gross edge (~1.3bp per trade) is too small to clear ~5bp round-trip spot costs.",
+    "pros": "Independently corroborates shirube's own finding that the mean-reversion family is the only sub-signal family with any value at 1-minute resolution, and its cost conclusion matches shirube's measured fee/slippage domination (fee_drag_pct exceeding total_return_pct at every capital that trades).",
+    "cons": "Binance pairs, not bitFlyer BTC/JPY; contrarian bet on the prior candle rather than an RSI/Bollinger composite; no lot-size minimum; descriptive measurement, not an allocation rule. Used only to motivate throttling action while keeping the reversion signal, not to pick parameter values."
+  }
+}

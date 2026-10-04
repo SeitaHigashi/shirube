@@ -1,0 +1,36 @@
+{
+  "name": "eight-hour-block-eight-hour-spacing",
+  "kind": "parameter",
+  "rationale": "The block/spacing dose-response has risen monotonically at the diagnostic capitals through 1h/1h (500,000 JPY Sharpe +1.88), 2h/2h (+3.00, 2026-09-25) and 4h/4h (+8.05, 2026-10-01), and 2026-10-01 noted the curve has not yet peaked. Ekren/Liu/Muhle-Karbe show that a fixed-frequency rebalancing rule under proportional costs has an interior optimum interval (scaling as cost^(2/3)), so the curve must eventually turn over; doubling to 8h/8h locates where. Rebalancing three times a day is close to static, so the expected outcome is a further narrowing of the static-mix deficit with very few trades, which the trade-count criterion will refuse; the value is in mapping the curve for the pending human decision on that criterion.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 60,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 90,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 28800,
+    "signal_block_secs": 28800
+  },
+  "paper_reference": {
+    "title": "Optimal Rebalancing Frequencies for Multidimensional Portfolios",
+    "authors": "Ibrahim Ekren, Ren Liu, Johannes Muhle-Karbe",
+    "venue_year": "Mathematics and Financial Economics, 2017 (arXiv:1510.05097)",
+    "url": "https://arxiv.org/abs/1510.05097",
+    "key_claim": "Under small proportional transaction costs epsilon, the asymptotically optimal fixed rebalancing interval scales as epsilon^(2/3) and is longer when costs are high or volatility is low; its welfare loss is of the same order as the optimal no-trade-region strategy.",
+    "pros": "shirube's rebalance_interval_secs + signal_block_secs pair is exactly a fixed-frequency rebalancing rule, and its measured cost (fee + slippage ~0.2% one-way at 50,000 JPY) is large relative to edge, which is the regime where the paper predicts long intervals; it also predicts an interior optimum, which the monotone curve observed so far has not yet reached.",
+    "cons": "Continuous-time diffusion model with a known Merton-style target and small epsilon, not a noisy TA-driven target on 1-minute BTC/JPY bars with a 0.001 BTC lot minimum and tiered fees; gives a scaling law, not a value in hours, so it motivates extending the curve rather than choosing 8h specifically."
+  }
+}

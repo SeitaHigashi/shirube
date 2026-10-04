@@ -1,0 +1,27 @@
+{
+  "name": "four-hour-throttle-intermediate-reversion",
+  "kind": "parameter",
+  "rationale": "2026-10-01 lead 3: the two strongest diagnostic-capital results were four-hour block + four-hour spacing (14400/14400; 500,000 JPY Sharpe -15.02 -> +8.05, static-mix deficit narrowed to -1.37) and the 7200/7200 throttle combined with rsi 60 / bollinger 90 (the first variant ahead of its static mix at 50,000 JPY, +2.95 Sharpe over static). Neither combination has been tried at four hours. This tests whether the slower reversion horizons add value on top of the four-hour throttle, scored on total_fees_jpy and sharpe_minus_static_mix rather than trade count. Expected to fail the 50% trade-count criterion at 50,000 JPY (4h/4h made 5 trades there); recorded as a cost hypothesis under the three-consecutive-negative-runs rule.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 60,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 90,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 14400,
+    "signal_block_secs": 14400
+  }
+}

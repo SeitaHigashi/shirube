@@ -1,0 +1,27 @@
+{
+  "name": "daily-block-daily-spacing-intermediate-reversion",
+  "kind": "parameter",
+  "rationale": "Mandatory cost hypothesis (13th consecutive negative benchmark run). On 2026-10-04 the block/spacing curve at 500,000 JPY was still improving at 8h/8h (Sharpe +4.48, sharpe_minus_static_mix -0.58, fees 1,873 JPY vs 28,874 baseline), after 4h/4h + rsi60/bb90 (+3.70) and 2h/2h + rsi60/bb90 (+5.99 on 2026-10-01's window). The Ekren/Liu/Muhle-Karbe result cited on 2026-10-04 predicts an interior optimum; one rebalance per UTC day is the natural next dose and tests whether the curve turns over or crosses static. Expect very few trades, so the trade-count criterion will likely refuse it; the value is in locating the optimum for the pending human decision on that criterion.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 60,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 90,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 86400,
+    "signal_block_secs": 86400
+  }
+}

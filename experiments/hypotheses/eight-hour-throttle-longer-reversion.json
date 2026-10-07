@@ -1,0 +1,27 @@
+{
+  "name": "eight-hour-throttle-longer-reversion",
+  "kind": "parameter",
+  "rationale": "Under the 8h/8h throttle (best 500,000 JPY static-mix deficit to date, -0.58 on 2026-10-04) the composite is sampled once per 8h block but its reversion family still measures 1-1.5h horizons (rsi60/bb90), so each held value is a snapshot of noise much shorter than the holding period. Lengthening RSI to 2h and Bollinger to 4h lines the signal horizon up with the hold. Unthrottled, longer-reversion-horizons (rsi90/bb120, 2026-09-25) was rejected, but that test paid full turnover cost; this isolates the horizon effect under a throttle where cost is already small. Bollinger 240 fits inside the 300-candle warmup.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 120,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 240,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 28800,
+    "signal_block_secs": 28800
+  }
+}

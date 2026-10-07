@@ -566,5 +566,29 @@
     "verdict": "rejected",
     "sharpe_improvement_pct": 0.14107078389942765,
     "report_path": "experiments/reports/2026-10-04.md"
+  },
+  {
+    "name": "daily-block-daily-spacing-intermediate-reversion",
+    "content_hash": "3d39ff9759a9d4b275e52b1bf24c5b7a0f109d2c0a54407918ee2fc22c323024",
+    "tried_at": "2026-10-07T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-10-07.md"
+  },
+  {
+    "name": "eight-hour-block-hourly-spacing-intermediate-reversion",
+    "content_hash": "b5b66974318a7f7963d0d6689a6305ff0c2773c238254678123c7060bb7962d8",
+    "tried_at": "2026-10-07T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-10-07.md"
+  },
+  {
+    "name": "eight-hour-throttle-longer-reversion",
+    "content_hash": "6cc65e706b879bcacd72403266005a9d11203fbd292c41dedafd585a30c647c4",
+    "tried_at": "2026-10-07T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-10-07.md"
   }
 ]

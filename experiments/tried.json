@@ -590,5 +590,29 @@
     "verdict": "rejected",
     "sharpe_improvement_pct": null,
     "report_path": "experiments/reports/2026-10-07.md"
+  },
+  {
+    "name": "four-hour-block-hourly-spacing-intermediate-reversion",
+    "content_hash": "c8ac4e0764229e9b7df39fde6ea2ec59b062fb319d7cf7b756e52cc922ca59f6",
+    "tried_at": "2026-10-10T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-10-10.md"
+  },
+  {
+    "name": "twelve-hour-block-hourly-spacing-intermediate-reversion",
+    "content_hash": "6b21e39b60bdda54370f9f5f9a30c12354bf436d7c3c815d3484875f19bf2ce4",
+    "tried_at": "2026-10-10T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-10-10.md"
+  },
+  {
+    "name": "eight-hour-block-hourly-spacing-cost-band-004",
+    "content_hash": "1cedd43144d0b77450197f40ee0c142900fc9f6ef100d5a11647891c4381bef6",
+    "tried_at": "2026-10-10T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-10-10.md"
   }
 ]

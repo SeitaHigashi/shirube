@@ -1,0 +1,27 @@
+{
+  "name": "six-hour-block-hourly-spacing-intermediate-reversion",
+  "kind": "parameter",
+  "rationale": "Cost hypothesis refining the block-length optimum. With 1h spacing, band 0.1 and rsi60/bb90 held fixed, 2026-10-10 measured the static-mix deficit @500k at 4h -1.64, 8h -0.35, 12h -1.00 (and 2026-10-07: 8h -0.25). The curve is steep between 4h and 8h, so 6h tests whether the peak sits below 8h or whether 8h is the sharp optimum (and whether 8h is an artefact of a UTC-aligned 00/08/16 boundary).",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 60,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 90,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 3600,
+    "signal_block_secs": 21600
+  }
+}

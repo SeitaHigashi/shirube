@@ -1,0 +1,27 @@
+{
+  "name": "eight-hour-block-hourly-spacing-band-020",
+  "kind": "parameter",
+  "rationale": "Mandatory trading-cost hypothesis, second dose point for the 2026-10-10 lead #3. If 0.04 < 0.1 on Sharpe under the 8h/1h throttle, a 0.2 band (still below the ~0.25 lot floor at 50,000 JPY, so inert at the primary capital) maps the upper side of the band curve at 500,000 / 5,000,000 JPY and tells whether the optimum is a band so wide that only block-boundary target changes trade.",
+  "trading_config": {
+    "allocation_threshold": 0.2,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 60,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 90,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 3600,
+    "signal_block_secs": 28800
+  }
+}

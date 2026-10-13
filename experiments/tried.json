@@ -614,5 +614,29 @@
     "verdict": "rejected",
     "sharpe_improvement_pct": null,
     "report_path": "experiments/reports/2026-10-10.md"
+  },
+  {
+    "name": "eight-hour-block-hourly-spacing-band-015",
+    "content_hash": "1c351c55db0e3f93f7e9c0b7f3edc4ea69487340dedaad8fd7e3853cefde88f2",
+    "tried_at": "2026-10-13T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-10-13.md"
+  },
+  {
+    "name": "eight-hour-block-hourly-spacing-band-020",
+    "content_hash": "7a0440a1875ac6122572ffddf0426b82a32c58720fbced66a45a8cd721811b9e",
+    "tried_at": "2026-10-13T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-10-13.md"
+  },
+  {
+    "name": "six-hour-block-hourly-spacing-intermediate-reversion",
+    "content_hash": "2e52f35da11a39e43c64cec4d1d15ea0791538fef6bd33c1aad66701eacfa102",
+    "tried_at": "2026-10-13T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-10-13.md"
   }
 ]

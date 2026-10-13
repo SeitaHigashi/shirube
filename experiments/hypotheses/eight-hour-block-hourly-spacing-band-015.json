@@ -1,0 +1,27 @@
+{
+  "name": "eight-hour-block-hourly-spacing-band-015",
+  "kind": "parameter",
+  "rationale": "Mandatory trading-cost hypothesis (15th consecutive negative static-mix run). 2026-10-10 found that narrowing allocation_threshold from 0.1 to 0.04 under the 8h-block / 1h-spacing throttle added 15 drift-correction trades @500k and worsened the static-mix deficit (-0.72 vs -0.35), i.e. intra-block drift corrections cost more than they earn. Lead #3 of that report: widen the band to 0.15 to test whether the remaining drift corrections are also net costly. At 50,000 JPY any band below ~0.25 is inert, so the primary verdict is not evidence about the band; the diagnostic capitals are.",
+  "trading_config": {
+    "allocation_threshold": 0.15,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 60,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 90,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 3600,
+    "signal_block_secs": 28800
+  }
+}

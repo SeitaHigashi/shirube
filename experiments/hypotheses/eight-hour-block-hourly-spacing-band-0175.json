@@ -1,0 +1,27 @@
+{
+  "name": "eight-hour-block-hourly-spacing-band-0175",
+  "kind": "parameter",
+  "rationale": "Mandatory trading-cost hypothesis (16th consecutive negative static-mix run). 2026-10-13 lead #3: band 0.15 -> 0.20 cut only 5 trades @500k (14 -> 9) yet lost 0.9 of Sharpe, which suggested path dependence in which block-boundary target changes clear the band. 0.175 is the upper-side dose point between them; together with 0.125 it shows whether the 0.15 optimum is a stable peak. Diagnostic capitals carry the evidence; the band is inert below ~0.25 at 50,000 JPY.",
+  "trading_config": {
+    "allocation_threshold": 0.175,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 60,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 90,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 3600,
+    "signal_block_secs": 28800
+  }
+}

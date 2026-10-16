@@ -638,5 +638,35 @@
     "verdict": "rejected",
     "sharpe_improvement_pct": null,
     "report_path": "experiments/reports/2026-10-13.md"
+  },
+  {
+    "name": "eight-hour-block-hourly-spacing-band-0125",
+    "content_hash": "d7674be025312ea725597a5e599534ffb376d1ad8177182ad1f7002015691eab",
+    "tried_at": "2026-10-16T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 0.005033078986204309,
+    "report_path": "experiments/reports/2026-10-16.md",
+    "note": "UNTESTABLE at the 50,000 JPY promotion capital: the baseline itself made only the opening buy on this window (orders_below_min 5942), as did every variant, so the primary comparison is a static mix against a static mix at a slightly different exposure (0.555 vs 0.585). The verdict is a lot-floor artifact, not evidence. See the report's diagnostic table for the 500k/5M results."
+  },
+  {
+    "name": "eight-hour-block-hourly-spacing-band-0175",
+    "content_hash": "430e52cdb636b6b0cccbfab3310ee467db37bd1740d87c1344995f22d5fd92f3",
+    "tried_at": "2026-10-16T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 0.005033078986204309,
+    "report_path": "experiments/reports/2026-10-16.md",
+    "note": "UNTESTABLE at the 50,000 JPY promotion capital: the baseline itself made only the opening buy on this window (orders_below_min 5942), as did every variant, so the primary comparison is a static mix against a static mix at a slightly different exposure (0.555 vs 0.585). The verdict is a lot-floor artifact, not evidence. See the report's diagnostic table for the 500k/5M results."
+  },
+  {
+    "name": "eight-hour-block-two-hour-spacing-band-015",
+    "content_hash": "31c6b72a0b7e82d42da7995dcfc3048df00ef67fae9eb98b2eb7c4f3fc90aebf",
+    "tried_at": "2026-10-16T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 0.005033078986204309,
+    "report_path": "experiments/reports/2026-10-16.md",
+    "note": "UNTESTABLE at the 50,000 JPY promotion capital: the baseline itself made only the opening buy on this window (orders_below_min 5942), as did every variant, so the primary comparison is a static mix against a static mix at a slightly different exposure (0.555 vs 0.585). The verdict is a lot-floor artifact, not evidence. See the report's diagnostic table for the 500k/5M results."
   }
 ]

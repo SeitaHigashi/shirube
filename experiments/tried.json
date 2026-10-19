@@ -668,5 +668,255 @@
     "sharpe_absolute_delta": 0.005033078986204309,
     "report_path": "experiments/reports/2026-10-16.md",
     "note": "UNTESTABLE at the 50,000 JPY promotion capital: the baseline itself made only the opening buy on this window (orders_below_min 5942), as did every variant, so the primary comparison is a static mix against a static mix at a slightly different exposure (0.555 vs 0.585). The verdict is a lot-floor artifact, not evidence. See the report's diagnostic table for the 500k/5M results."
+  },
+  {
+    "name": "code-default-allocation-threshold",
+    "content_hash": "6c19ca281a4727f645a06da0a9b47cf904d73657c2b2dbcedcd3623575c11f46",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -3.130848609681017,
+    "report_path": "experiments/reports/2026-10-19.md",
+    "note": "Economically identical at 50k (83 trades, Sharpe -15.525) to every other zone-0.2/0.8 + MACD 52/104/18 config regardless of allocation_threshold (0.05..0.25): at 50k the lot floor makes the threshold inert, so this verdict is about zone 0.2/0.8, not the threshold. Differs at 500k/5M."
+  },
+  {
+    "name": "continuous-crossover-subsignals",
+    "content_hash": "bda9e0f7e8a29e28c1efeb7ad3e37c483c55c633aa5dcf80d8a38cf439cc2369",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -14.760617340531752,
+    "report_path": "experiments/reports/2026-10-19.md"
+  },
+  {
+    "name": "cost-aware-rebalance-filter",
+    "content_hash": "7ca069272bdc9e7d2cd00aa2bfab33e47e3b1a3c74bf780f7613689942717555",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 12.39370687929862,
+    "report_path": "experiments/reports/2026-10-19.md",
+    "note": "Gate as specified rejects every trade above allocation_threshold 0.1 (max expected_move 0.000455 < 0.005*|delta| for |delta|>=0.091): 0 trades at all capitals. Failed trade-count criterion (0/66)."
+  },
+  {
+    "name": "damped-crossover-lower-threshold",
+    "content_hash": "122e8980a0f7ad2942c4a09406d9f05f546daa20d20ba29588bf44bc11c7f4f7",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -3.130848609681017,
+    "report_path": "experiments/reports/2026-10-19.md",
+    "note": "Economically identical at 50k (83 trades, Sharpe -15.525) to every other zone-0.2/0.8 + MACD 52/104/18 config regardless of allocation_threshold (0.05..0.25): at 50k the lot floor makes the threshold inert, so this verdict is about zone 0.2/0.8, not the threshold. Differs at 500k/5M. Code change already on dev; run as config-only."
+  },
+  {
+    "name": "damped-crossover-subsignals",
+    "content_hash": "4a8b90bfe8d75735cd1679de94e11f0d70462077bfb0d2e43f156f16649e7f78",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -3.130848609681017,
+    "report_path": "experiments/reports/2026-10-19.md",
+    "note": "Economically identical at 50k (83 trades, Sharpe -15.525) to every other zone-0.2/0.8 + MACD 52/104/18 config regardless of allocation_threshold (0.05..0.25): at 50k the lot floor makes the threshold inert, so this verdict is about zone 0.2/0.8, not the threshold. Differs at 500k/5M. Code change already on dev; run as config-only."
+  },
+  {
+    "name": "add-volume-weighted-ma-indicator",
+    "content_hash": "dc3ac79176c69fc348ea9ffb7b366de94788b8acedbe37f6c92fe612496ef7b4",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "skipped",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-10-19.md",
+    "note": "Re-eligible after the 2026-10-19 purge but not run: template hypothesis whose VWMA is explicitly NOT wired into compute_btc_target, so any backtest delta would come only from its stale trading_config. Needs a wiring hypothesis to be testable."
+  },
+  {
+    "name": "wider-bollinger-band-2.5std",
+    "content_hash": "fb8d38af7260bcfdf02ba508d959e6fe792b50a5a460b78ab604c5b6b36ef7a7",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -3.9312884025884784,
+    "report_path": "experiments/reports/2026-10-19.md",
+    "note": "Retest after the 2026-10-19 purge (wider Bollinger 2.5 std)."
+  },
+  {
+    "name": "fee-tier-aware-allocation-threshold",
+    "content_hash": "e79038afa2e9bfdd9682aaf0b4b4a164e499bc33e264e08a2b5976dd4c2d8f4a",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -3.176965205945356,
+    "report_path": "experiments/reports/2026-10-19.md"
+  },
+  {
+    "name": "full-ta-weight-no-sentiment",
+    "content_hash": "c950ae016e815f35112e3e9e4da2a4540df904c788596c033175e3d4a735ecdb",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -24.860012470412094,
+    "report_path": "experiments/reports/2026-10-19.md"
+  },
+  {
+    "name": "higher-allocation-threshold",
+    "content_hash": "f7edc79da1fd68811a5964bd377c294d24a634f812cedc20736cd068e6831985",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -3.130848609681017,
+    "report_path": "experiments/reports/2026-10-19.md",
+    "note": "Economically identical at 50k (83 trades, Sharpe -15.525) to every other zone-0.2/0.8 + MACD 52/104/18 config regardless of allocation_threshold (0.05..0.25): at 50k the lot floor makes the threshold inert, so this verdict is about zone 0.2/0.8, not the threshold. Differs at 500k/5M."
+  },
+  {
+    "name": "lower-allocation-threshold",
+    "content_hash": "e37da478edf2b034ddb8543664ff3246ca79e4215ca1e0c531a92e0941c10c98",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -3.130848609681017,
+    "report_path": "experiments/reports/2026-10-19.md",
+    "note": "Economically identical at 50k (83 trades, Sharpe -15.525) to every other zone-0.2/0.8 + MACD 52/104/18 config regardless of allocation_threshold (0.05..0.25): at 50k the lot floor makes the threshold inert, so this verdict is about zone 0.2/0.8, not the threshold. Differs at 500k/5M."
+  },
+  {
+    "name": "mean-reversion-weighted-subsignals",
+    "content_hash": "37779570b229e7a568cb1c0b595757748d1324f4ddf7ecad208491a273b2e022",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -3.130848609681017,
+    "report_path": "experiments/reports/2026-10-19.md",
+    "note": "Economically identical at 50k (83 trades, Sharpe -15.525) to every other zone-0.2/0.8 + MACD 52/104/18 config regardless of allocation_threshold (0.05..0.25): at 50k the lot floor makes the threshold inert, so this verdict is about zone 0.2/0.8, not the threshold. Differs at 500k/5M. Code change already on dev; run as config-only."
+  },
+  {
+    "name": "medium-hourly-indicator-periods",
+    "content_hash": "6aeb81facff609b846d8c58ed47a4d2442327b492946ce1aa4b92291c1bf2f9b",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -32.60089044436887,
+    "report_path": "experiments/reports/2026-10-19.md"
+  },
+  {
+    "name": "min-notional-aware-rebalance",
+    "content_hash": "c6560399ebf14c54ac145aaf3d556c7bf34a5268fb0734daa516088711f178a9",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -90.42198179440263,
+    "report_path": "experiments/reports/2026-10-19.md",
+    "note": "Round-up to min lot overshoots target by more than allocation_threshold at 50k, causing churn (1045 trades, 14 circuit-breaker trips). Change is inert at 500k/5M."
+  },
+  {
+    "name": "narrow-zone-band",
+    "content_hash": "67656691b4857ec4a0bf897431f59fea5e5fe959949ba0e830e3256a61ce3ec7",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -50.32651619680642,
+    "report_path": "experiments/reports/2026-10-19.md"
+  },
+  {
+    "name": "realized-vol-scaled-exposure",
+    "content_hash": "97c82753019fd573cdaa8f7bcb162a5b1bab84efe61b5e38de5515843688a23a",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -30.88021677737786,
+    "report_path": "experiments/reports/2026-10-19.md",
+    "note": "Calibration mismatch on 1m bars: 24-bar window is 24 minutes and 1m vol is always below the 0.42% hourly reference, so k pinned at the 1.5 cap on 100% of bars. Not a fair test of vol scaling."
+  },
+  {
+    "name": "rebalance-spacing-15m",
+    "content_hash": "42d117fdbb4d9a9f6153bf40fbf7e5f00033350a917944fdf3419b2155378baf",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 2.326087459170088,
+    "report_path": "experiments/reports/2026-10-19.md",
+    "note": "Near-miss: Sharpe +2.33 but max DD +0.48pp. Strongly better at 500k (Sharpe -21.2 vs -31.4) and 5M (-16.7 vs -24.6). rebalance_interval_secs is now a pure config field on dev."
+  },
+  {
+    "name": "reversion-horizon-15m",
+    "content_hash": "b95d16536890426797414b1eb3d330315a9c2cfaf07342d273eb4d6439fc7e17",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -62.08397432524414,
+    "report_path": "experiments/reports/2026-10-19.md"
+  },
+  {
+    "name": "rolling-vol-scaled-exposure",
+    "content_hash": "149338ee1ac992818ca357cf0e9132bd4fa9f38265ef469ff42f71ce0bb9211f",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -17.02223642087806,
+    "report_path": "experiments/reports/2026-10-19.md",
+    "note": "Live SignalEngine path does not populate the vol fields (k=1 live), so live/backtest would diverge if promoted."
+  },
+  {
+    "name": "shorter-hourly-indicator-periods",
+    "content_hash": "6014c84d00dc6d81336a6f2e118df286a1ff3477aa30a2504622ff82eeef854c",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -57.5340685825397,
+    "report_path": "experiments/reports/2026-10-19.md"
+  },
+  {
+    "name": "sma-regime-gate",
+    "content_hash": "fc56f29dd85ea7bd2d0c22d390bc23ae3dcbe294d103120c4960ab90751c13cb",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -2.4164607901932342,
+    "report_path": "experiments/reports/2026-10-19.md"
+  },
+  {
+    "name": "tighter-daily-drawdown-breaker",
+    "content_hash": "b52f63df180db6df73e638849e109e4b4263b9e4bc8b6f80e06375ee7f0fba0c",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -1.8937634125129303,
+    "report_path": "experiments/reports/2026-10-19.md"
+  },
+  {
+    "name": "trend-weight-half",
+    "content_hash": "0f082986e1844027d628fcf5ddd3319d704ec4fa5989fffdc3fbf7c4e6237775",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 2.297522412016079,
+    "report_path": "experiments/reports/2026-10-19.md",
+    "note": "Near-miss: Sharpe +2.30 but max DD +0.91pp. Config also differs from baseline (zone 0.2/0.8, MACD 52/104/18); vs its own config control it improves 50k Sharpe -15.53 -> -10.10 and 500k -47.6 -> -28.4."
+  },
+  {
+    "name": "trend-weighted-subsignals",
+    "content_hash": "354b05ead3b828dbd7f626a302f6f8843f79d45f987f932980961ceacdcb30b0",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -1.2788221705629361,
+    "report_path": "experiments/reports/2026-10-19.md",
+    "note": "Rejected at 50k, but best of the run at 500k (-9.35% / Sharpe -17.8 vs baseline -16.41% / -31.4) and 5M (-7.52% vs -13.05%)."
+  },
+  {
+    "name": "volatility-scaled-zone-width",
+    "content_hash": "1c7d380e540c87e88e7777e028a685d0a3769ee2236118f307246ef391dbb9b0",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -24.40845169395004,
+    "report_path": "experiments/reports/2026-10-19.md",
+    "note": "1-10% bandwidth mapping is scaled for hourly bars; on 1m bars it acts as a permanently narrower band."
+  },
+  {
+    "name": "wide-zone-band",
+    "content_hash": "fab2a98affec3fe9e6379fef0335dff590a5b540cdc31f142271f4d8d56f191c",
+    "tried_at": "2026-10-19T19:00:00Z",
+    "verdict": "promoted",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 0.5093302756298392,
+    "report_path": "experiments/reports/2026-10-19.md",
+    "note": "PROMOTED (PR #34). Retest after the 2026-10-19 registry purge. Zone 0.1/0.9 is already the baseline, so the only economic difference is MACD 52/104/18 vs 12/26/9 (reverts classic-macd-periods). Slightly worse at 500k/5M (sign flips across capitals)."
   }
 ]

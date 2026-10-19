@@ -27,8 +27,9 @@ impl Default for ZoneConfig {
 /// リスク管理パラメータ（ポジション上限・ドローダウン）は RiskParams で別管理。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradingConfig {
-    /// 配分変更の最小しきい値。|delta| がこれ未満なら注文しない（取引所最小取引量の目安）。
-    /// デフォルト 0.15 (15%)
+    /// 配分変更の最小しきい値。|delta| がこれ未満なら注文しない。
+    /// デフォルト 0.0（追加の回数制限なし）。dust 注文は bitFlyer の最小取引量
+    /// (0.001 BTC, `min_order_size`) で別途弾かれるため、取引所条件が実質的な下限になる。
     pub allocation_threshold: f64,
 
     /// サーキットブレーカーを有効化するか。デフォルト true。
@@ -93,7 +94,9 @@ fn default_max_daily_drawdown() -> f64 { 0.05 }
 impl Default for TradingConfig {
     fn default() -> Self {
         Self {
-            allocation_threshold: 0.15,
+            // NOTE: threshold 0.0 defers entirely to the exchange minimum lot
+            // (`min_order_size`); 0.15 previously throttled trades well above it.
+            allocation_threshold: 0.0,
             circuit_breaker_enabled: true,
             max_daily_drawdown: 0.05,
             sma_period: 200,
@@ -171,7 +174,7 @@ mod tests {
     #[test]
     fn default_values_are_correct() {
         let cfg = TradingConfig::default();
-        assert_eq!(cfg.allocation_threshold, 0.15);
+        assert_eq!(cfg.allocation_threshold, 0.0);
         assert_eq!(cfg.sma_period, 200);
         assert_eq!(cfg.ta_weight, 0.7);
     }

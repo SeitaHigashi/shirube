@@ -85,7 +85,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(v["allocation_threshold"], 0.15);
+        assert_eq!(v["allocation_threshold"], 0.0);
         assert_eq!(v["sma_period"], 200);
     }
 

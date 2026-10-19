@@ -553,6 +553,21 @@ serialization by hand and got hashes that didn't reproduce on the next
 run, forcing the registry to be matched by hypothesis *name* — exactly
 the bypass `content_hash` exists to prevent.
 
+### Registry purges
+
+An entry may be removed from `experiments/tried.json` when a later code
+change invalidates the measurement behind its verdict, so the hypothesis
+becomes eligible for re-testing. The history stays in git.
+
+- **2026-10-19:** removed 26 entries (every run up to 2026-09-11, plus
+  `rebalance-spacing-15m`). They were measured on CoinGecko 1h data, with
+  the `sqrt(60)` Sharpe annualization error and slippage charged as a price
+  shift rather than a round-trip cost, or before the simulator honoured
+  `rebalance_interval_secs`. Their hypothesis files still exist and are
+  picked up as `CANDIDATES` again. Runs from 2026-09-21 on were kept: their
+  weakness is the lot-size floor at the 50,000 JPY promotion capital, which a
+  re-run would not fix.
+
 ## Daily procedure
 
 Let `HOLDOUT_START = now - 14d`, `NOW = now` (UTC, ISO 8601).

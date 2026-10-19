@@ -1,22 +1,36 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde::{de::DeserializeOwned, Serialize};
 use tracing::debug;
 
 use super::auth::build_auth_headers;
 use super::models::{
-    ApiErrorBody, CancelAllOrdersRequest, CancelOrderRequest, RawBalance, RawMyExecution,
-    RawOrder, RawPosition, RawTicker, RawTradingCommission, SendOrderRequest, SendOrderResponse,
+    ApiErrorBody, CancelAllOrdersRequest, CancelOrderRequest, RawBalance, RawExecution,
+    RawMyExecution, RawOrder, RawPosition, RawTicker, RawTradingCommission, SendOrderRequest,
+    SendOrderResponse,
 };
 use crate::error::{Error, Result};
 use crate::exchange::rate_limiter::RateLimiter;
 use crate::exchange::ExchangeClient;
 use crate::types::{
     balance::{Balance, Position},
-    market::{MyExecution, Ticker},
+    market::{MyExecution, Ticker, Trade},
     order::{Order, OrderRequest, OrderSide, OrderType},
 };
 
-const DEFAULT_BASE_URL: &str = "https://api.bitflyer.com";
+pub const DEFAULT_BASE_URL: &str = "https://api.bitflyer.com";
+
+/// bitFlyer's error status for `/v1/getexecutions` requests that reach past
+/// its retention window ("Execution history is limited to the most recent 31
+/// days."). A caller paging backwards through history should treat this as
+/// end-of-data rather than a failure — see `backtest::backfill`.
+pub const ERR_EXECUTION_HISTORY_LIMIT: i32 = -156;
+
+/// Maximum rows `/v1/getexecutions` returns per call. Larger `count` values
+/// are silently clamped to this by the server (verified 2026-09-09: `count=1000`
+/// returns 500 rows).
+pub const MAX_EXECUTIONS_PER_REQUEST: u32 = 500;
 
 /// HTTP client for the bitFlyer REST API.
 ///
@@ -29,9 +43,19 @@ pub struct BitFlyerRestClient {
     base_url: String,
     api_key: String,
     api_secret: String,
-    /// Shared across all HTTP methods; enforces 200 req/min rate limit
-    rate_limiter: RateLimiter,
+    /// Shared across all HTTP methods; enforces 200 req/min rate limit.
+    ///
+    /// `Arc` so that a composite client (`PublicBitFlyerClient`) can hand the
+    /// *same* budget to the mock half it delegates to. bitFlyer's limit applies
+    /// per account/IP, not per client object, so two independent buckets would
+    /// model twice the real allowance — see `PublicBitFlyerClient`.
+    rate_limiter: Arc<RateLimiter>,
 }
+
+/// bitFlyer's published request ceiling, shared by public and authenticated
+/// endpoints. `RateLimiter::new` takes the ceiling itself; a caller wanting
+/// headroom passes something smaller.
+pub const BITFLYER_MAX_REQ_PER_MIN: u32 = 200;
 
 impl BitFlyerRestClient {
     pub fn new(api_key: String, api_secret: String) -> Self {
@@ -39,18 +63,31 @@ impl BitFlyerRestClient {
     }
 
     pub fn new_with_base_url(api_key: String, api_secret: String, base_url: String) -> Self {
-        let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .expect("Failed to build HTTP client");
-        Self {
-            http,
-            base_url,
+        Self::new_with_limiter(
             api_key,
             api_secret,
-            // bitFlyer: 200 req/min (公開・認証共通)
-            rate_limiter: RateLimiter::new(200),
-        }
+            base_url,
+            Arc::new(RateLimiter::new(BITFLYER_MAX_REQ_PER_MIN)),
+        )
+    }
+
+    /// Build a client that draws on an externally owned rate-limit budget.
+    ///
+    /// Used by `PublicBitFlyerClient` so that its real-ticker half and its
+    /// mock order/balance half consume one shared bucket.
+    pub fn new_with_limiter(
+        api_key: String,
+        api_secret: String,
+        base_url: String,
+        rate_limiter: Arc<RateLimiter>,
+    ) -> Self {
+        let http = crate::http::client_with_timeout(std::time::Duration::from_secs(10));
+        Self { http, base_url, api_key, api_secret, rate_limiter }
+    }
+
+    /// The budget this client draws on, for observability.
+    pub fn rate_limiter(&self) -> &Arc<RateLimiter> {
+        &self.rate_limiter
     }
 
     async fn get_public<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
@@ -206,6 +243,39 @@ impl BitFlyerRestClient {
             code: status_code,
             message: text,
         })
+    }
+
+    /// Fetch the **public** execution (trade) tape for `product_code`,
+    /// newest first (`GET /v1/getexecutions`).
+    ///
+    /// Distinct from `ExchangeClient::get_executions`, which returns *this
+    /// account's* fills from the authenticated `/v1/me/getexecutions`. The
+    /// names must stay different: an inherent method with the trait method's
+    /// name would shadow it at every call site on a concrete client.
+    ///
+    /// `before` pages backwards: only executions with an `id` strictly
+    /// smaller than `before` are returned, so a caller walks history by
+    /// feeding back the smallest id of the previous page. `count` is
+    /// clamped by the server to `MAX_EXECUTIONS_PER_REQUEST` (500).
+    ///
+    /// NOTE: bitFlyer retains only the most recent **31 days** of public
+    /// execution history. A request reaching past that returns HTTP 400
+    /// with status `ERR_EXECUTION_HISTORY_LIMIT` (-156), surfaced here as
+    /// `Error::ApiError { code: -156, .. }`. Backwards-paging callers must
+    /// treat that specific code as end-of-history, not as a failure.
+    pub async fn get_public_executions(
+        &self,
+        product_code: &str,
+        count: u32,
+        before: Option<i64>,
+    ) -> Result<Vec<Trade>> {
+        let count = count.min(MAX_EXECUTIONS_PER_REQUEST);
+        let mut path = format!("/v1/getexecutions?product_code={product_code}&count={count}");
+        if let Some(before) = before {
+            path.push_str(&format!("&before={before}"));
+        }
+        let raw: Vec<RawExecution> = self.get_public(&path).await?;
+        Ok(raw.into_iter().map(Trade::from).collect())
     }
 }
 

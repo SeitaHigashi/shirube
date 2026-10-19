@@ -2,9 +2,12 @@ pub mod bitflyer;
 pub mod mock;
 pub mod rate_limiter;
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 
 use crate::error::Result;
+use crate::exchange::rate_limiter::RateLimiter;
 use crate::storage::mock_state::MockStateRepository;
 use crate::types::{
     balance::{Balance, Position},
@@ -47,21 +50,57 @@ pub trait ExchangeClient: Send + Sync + 'static {
 pub struct PublicBitFlyerClient {
     rest: bitflyer::rest::BitFlyerRestClient,
     mock: mock::MockExchangeClient,
+    /// The single rate-limit budget both halves draw on. Held here so callers
+    /// can read `granted()` / `waited()` to see how saturated paper trading is.
+    rate_limiter: Arc<RateLimiter>,
 }
 
 impl PublicBitFlyerClient {
-    pub fn new() -> Self {
+    /// Build the composite client with one shared rate-limit budget.
+    ///
+    /// NOTE: added 2026-09-13. Both halves previously had independent limiters
+    /// — and `MockExchangeClient` in fact had none at all — so paper trading
+    /// charged only `get_ticker` against a budget while `get_balance`,
+    /// `get_positions` and `send_order` were free. Since `handle_indicator`
+    /// issues all three on every evaluation, paper trading consumed one token
+    /// where production consumes three, understating production's API load by
+    /// 3x and making rate-limit saturation invisible in paper trading. bitFlyer
+    /// applies its limit per account/IP rather than per client object, so a
+    /// single shared bucket is the faithful model.
+    fn build(rest_base_url: String, mock: mock::MockExchangeClient) -> Self {
+        let rate_limiter = Arc::new(RateLimiter::new(
+            bitflyer::rest::BITFLYER_MAX_REQ_PER_MIN,
+        ));
+        let rest = bitflyer::rest::BitFlyerRestClient::new_with_limiter(
+            String::new(),
+            String::new(),
+            rest_base_url,
+            Arc::clone(&rate_limiter),
+        );
         Self {
-            rest: bitflyer::rest::BitFlyerRestClient::new(String::new(), String::new()),
-            mock: mock::MockExchangeClient::new(),
+            rest,
+            mock: mock.with_rate_limiter(Arc::clone(&rate_limiter)),
+            rate_limiter,
         }
     }
 
+    pub fn new() -> Self {
+        Self::build(
+            bitflyer::rest::DEFAULT_BASE_URL.to_string(),
+            mock::MockExchangeClient::new(),
+        )
+    }
+
     pub async fn new_with_db(repo: MockStateRepository) -> Result<Self> {
-        Ok(Self {
-            rest: bitflyer::rest::BitFlyerRestClient::new(String::new(), String::new()),
-            mock: mock::MockExchangeClient::new_with_db(repo).await?,
-        })
+        Ok(Self::build(
+            bitflyer::rest::DEFAULT_BASE_URL.to_string(),
+            mock::MockExchangeClient::new_with_db(repo).await?,
+        ))
+    }
+
+    /// The shared rate-limit budget, for observability.
+    pub fn rate_limiter(&self) -> &Arc<RateLimiter> {
+        &self.rate_limiter
     }
 }
 
@@ -123,5 +162,34 @@ impl ExchangeClient for PublicBitFlyerClient {
 
     fn fee_pct(&self) -> f64 {
         self.mock.fee_pct()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `PublicBitFlyerClient` must charge its mock-delegated calls against the
+    /// same budget its REST half uses. Until 2026-09-13 the mock half had no
+    /// limiter at all, so paper trading consumed one token per
+    /// `handle_indicator` cycle where production consumes three — it could not
+    /// reproduce production's rate-limit saturation.
+    ///
+    /// Only the mock-backed methods are exercised here so the test needs no
+    /// network; `get_ticker` is the REST half and already charged the same
+    /// `Arc<RateLimiter>` by construction.
+    #[tokio::test]
+    async fn public_client_charges_mock_delegated_calls_to_the_shared_budget() {
+        let client = PublicBitFlyerClient::new();
+        assert_eq!(client.rate_limiter().granted(), 0);
+
+        client.get_balance().await.unwrap();
+        client.get_positions("BTC_JPY").await.unwrap();
+
+        assert_eq!(
+            client.rate_limiter().granted(),
+            2,
+            "mock-delegated calls must consume the shared rate-limit budget"
+        );
     }
 }

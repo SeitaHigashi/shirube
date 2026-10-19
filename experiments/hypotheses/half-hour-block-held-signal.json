@@ -1,0 +1,27 @@
+{
+  "name": "half-hour-block-held-signal",
+  "kind": "parameter",
+  "rationale": "The second of the two interior doses on the signal_block_secs curve this run measures, and the companion to quarter-hour-block-held-signal. The curve currently has data only at its ends: 0 (baseline, recompute the composite every bar), 3600 (26 trades against an 88-trade baseline on 2026-09-20 -- rejected on MIN_TRADE_COUNT_RATIO alone while clearing both the Sharpe and drawdown criteria) and 21600 (h6-block-held-signal, rejected 2026-09-16). Testing 900 and 1800 together turns a bracket into a four-point dose-response curve in one run, which is exactly the pattern that produced this pipeline's most recent promotion: the zone-band family's x0.90 and x0.95 doses were generated as a pair on 2026-09-18 after every end-of-range dose had died on trade count, and x0.90 was promoted (PR #27). 1800 is the upper interior dose, so if 900 proves too mild to change anything and 3600 too severe to keep half the baseline's trades, this is the value most likely to sit between them. It carries no independent literature motivation -- it is interpolation on shirube's own measurements, and it is proposed as such rather than dressed up with a citation. It targets trading cost, which the doc's warning rule requires of at least one hypothesis this run (today is the seventh consecutive run with a negative sharpe_minus_static_mix: -1.5346 at the promotion capital, -26.67 at 500,000 JPY), and per the sublinearity caveat it must be scored on total_fees_jpy rather than on trade count. The reason to spend a slot on an interior dose now rather than later is that today's primary-capital baseline makes only 16 trades, so MIN_TRADE_COUNT_RATIO needs just 8 -- the criterion that has rejected every recent turnover hypothesis is unusually easy to clear this run, and a throttle finally gets a test that can distinguish 'bad idea' from 'blocked by the floor'.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 60,
+    "signal_block_secs": 1800
+  }
+}

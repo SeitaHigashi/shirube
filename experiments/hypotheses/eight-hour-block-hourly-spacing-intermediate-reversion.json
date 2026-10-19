@@ -1,0 +1,36 @@
+{
+  "name": "eight-hour-block-hourly-spacing-intermediate-reversion",
+  "kind": "parameter",
+  "rationale": "8h/8h (2026-10-04) had the smallest static-mix deficit at 500,000 JPY yet (-0.58 Sharpe) but only 16 trades, which no trade-count ratio will accept. Holding the composite for 8h while rebalancing hourly turns each block into a constant-mix allocation: with the target frozen, the only trades are those that restore the target weight after price drift, i.e. sell-after-rise / buy-after-fall. Willenbrock attributes the diversification (rebalancing) return entirely to such periodic rebalancing, and 2026-10-01's Kitron/Wengrowicz citation measured short-horizon reversal in crypto, which is the condition under which that rebalancing earns rather than costs. This should raise trade count well above 8h/8h while keeping the slow signal; 2h-block/1h-spacing (2026-09-28) is the nearest tried neighbour and used the shorter rsi42/bb60 horizons.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 60,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 90,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 3600,
+    "signal_block_secs": 28800
+  },
+  "paper_reference": {
+    "title": "Diversification Return, Portfolio Rebalancing, and the Commodity Return Puzzle",
+    "authors": "Scott Willenbrock",
+    "venue_year": "Financial Analysts Journal, 2011 (SSRN 1898864)",
+    "url": "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=1898864",
+    "key_claim": "A buy-and-hold portfolio earns no diversification return; the diversification return arises from periodic rebalancing to fixed weights, which mechanically sells relative winners and buys relative losers. Quantpedia (Hanicova, 2021) reports a significant rebalancing premium for daily-rebalanced crypto portfolios 2018-2021.",
+    "pros": "shirube's benchmark problem is precisely that a static (drifting) mix beats it; a held target with periodic rebalancing is the textbook mechanism by which a rebalanced mix can beat a drifting one, and it maps onto existing signal_block_secs/rebalance_interval_secs knobs with no code change.",
+    "cons": "The premium is a multi-asset, low-frequency effect measured gross of costs (the crypto study does not model fees); here the second asset is JPY cash, the horizon is hourly, and at 50,000 JPY the 0.001 BTC lot floor (~25-27% of the portfolio) will refuse most hourly drift corrections, so the mechanism may only be visible at the diagnostic capitals."
+  }
+}

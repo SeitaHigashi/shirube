@@ -1,0 +1,27 @@
+{
+  "name": "eight-hour-block-two-hour-spacing-band-015",
+  "kind": "parameter",
+  "rationale": "Trading-cost hypothesis (16th consecutive negative static-mix run). The best measured config so far is 8h block / 1h spacing / band 0.15 / rsi60/bb90 (2026-10-13: -0.20 Sharpe vs static @500k, +0.004 @5M). The block-length curve has been mapped at 1h spacing (peak 8h on three windows) and 8h/8h was tried on 2026-10-04, but the spacing dimension has never been varied at the new band. 2h spacing halves the number of opportunities for intra-block drift corrections, which 2026-10-10 found to be net costly (band 0.04 worse than 0.10), while still letting a block-boundary target change act within two hours.",
+  "trading_config": {
+    "allocation_threshold": 0.15,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 60,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 90,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 7200,
+    "signal_block_secs": 28800
+  }
+}

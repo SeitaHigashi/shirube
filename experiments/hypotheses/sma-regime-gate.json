@@ -1,0 +1,36 @@
+{
+  "name": "sma-regime-gate",
+  "kind": "algorithm",
+  "rationale": "Every holdout window this pipeline has measured has been a loss (-3.29%, -4.11%, -3.47% on the three most recent baselines) with win rates of 12-18%, and the composite signal has no notion of market regime: RSI and Bollinger %B keep buying dips at the same weight in a sustained decline as they do in a range. The 2026-09-08 Run 3 report explicitly recorded this lead and did not act on it -- a second literature query surfaced a regime-filter idea ('lean trend-following above the 200d SMA, mean-reverting below') that was 'worth revisiting as an internal hypothesis but was not adopted as a literature citation'. This hypothesis is the minimal, testable version of it: when the close is below the SMA (the longest-horizon reference the config already computes, 200 periods = ~8.3 days at 1h resolution), cap ta_normalized at 0.5 so the strategy cannot take a bullish tilt in a confirmed downtrend, while leaving it free to de-risk. At the baseline's ta_weight=0.7 that caps the combined signal at 0.5 and the resulting BTC target at ~50%, rather than forcing an all-JPY exit -- a brake, not a stop. It is deliberately one-sided: no change at all is made above the SMA, so any measured difference is attributable solely to downtrend behavior. It also directly tests whether the last three runs' losses come from signal quality or from unconditional long exposure into declines. Risk to watch: the cap can only reduce turnover, and the baseline is already at 25 trades / 14 days (1.79/day), so a candidate that clips too often may fall under the promotion rule's 50%-of-baseline trade-count floor.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  },
+  "code_change_summary": "In TradingEngine::compute_btc_target (src/trading/engine.rs), after ta_normalized is computed as the mean of the sub-signals and BEFORE it is combined with sentiment_normalized, apply a one-sided regime gate: if both raw.close and raw.sma are Some and sma > 0.0 and close < sma, replace ta_normalized with ta_normalized.min(BEARISH_REGIME_CAP) where BEARISH_REGIME_CAP is a named private constant equal to 0.5. When close >= sma, or when either value is None (warmup) or sma <= 0.0, leave ta_normalized exactly as it is -- the gate must be a no-op in every case other than a confirmed close-below-SMA point, so that any measured difference is attributable solely to downtrend behavior. Do not change any individual sub-signal formula, the damped_cross helper, the CROSS_SATURATION constant, the sub-signal set, the empty-sub_signals warmup guard returning None, or the final ta_weight/sentiment_weight combination and its clamp. Document the constant with a comment stating the mechanism (no bullish tilt while price is below its long-horizon reference line) and that the cap is a brake rather than a forced exit, and update the function's doc comment accordingly. Add unit tests in the same module: (a) a point with close < sma whose ungated ta_normalized would exceed 0.5, asserting the returned value equals 0.5*ta_weight + sentiment term; (b) a point with close > sma, asserting the result is byte-identical to the pre-change formula; (c) a point with close < sma whose ungated ta_normalized is already below 0.5, asserting the gate does not raise it; (d) a warmup point with sma == None and close < everything, asserting the gate is inert. Update any existing compute_btc_target_* test whose expected value legitimately changes -- do not weaken or delete a test to make it pass.",
+  "constraints": [
+    "This hypothesis modifies the body of TradingEngine::compute_btc_target. This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST NOT change TradingEngine::compute_btc_target's signature (its parameter list or return type) -- only its body.",
+    "MUST NOT change any individual sub-signal's own formula; only a post-aggregation cap on ta_normalized is added.",
+    "The gate MUST be one-sided and inert outside a confirmed close-below-SMA point: no behavior change when close >= sma, when sma or close is None (warmup), or when sma <= 0.0.",
+    "MUST pass `cargo test`, including the compute_btc_target_* unit tests in src/trading/engine.rs -- update their expected values if the new formula legitimately changes them (do not weaken or delete a test just to make it pass). Add the four new unit tests described in code_change_summary.",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff touches compute_btc_target's body, so the reviewer gives it the scrutiny an allocation-formula change deserves.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or anything on the live order-submission path."
+  ]
+}

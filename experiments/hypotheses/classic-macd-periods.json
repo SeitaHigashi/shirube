@@ -1,0 +1,26 @@
+{
+  "name": "classic-macd-periods",
+  "kind": "parameter",
+  "rationale": "Every indicator period in experiments/baseline-config.json was chosen while this pipeline believed it was running at 1h resolution. The doc's 'Resolution must match live' section records that correction (2026-09-09): TradingConfig periods are counts of 1-MINUTE bars, and running the backtest at 3600s had silently reinterpreted every one of them as hours. Since that fix exactly one part of the config has been re-examined at the correct 60s resolution -- the mean-reverting pair, by reversion-horizon-15m -- and the MACD triple has not been touched at all. At 60s the inherited values mean a 52-minute fast EMA, a 104-minute slow EMA and an 18-minute signal line; the canonical 12/26/9 means 12/26/9 minutes. The two prior period hypotheses that included 12/26/9 (shorter-hourly-indicator-periods, medium-hourly-indicator-periods, both rejected 2026-09-08) are not evidence against it here for two independent reasons: both were measured BEFORE the resolution fix, so per the doc they scored a materially different strategy from the one shipped, and both changed all seven periods at once, so neither could attribute anything to the MACD triple. This hypothesis changes ONLY macd_fast, macd_slow and macd_signal and leaves sma 200, ema 100, rsi 42, bollinger 60, both weights, the zone and the threshold exactly at baseline, making it a clean isolation of the one indicator whose horizon has never been tested at the resolution it trades at. Two couplings to declare. First, the MACD histogram is one of the three trend-family sub-signals and is scaled by bb_middle before the damped_cross mapping, so a faster histogram saturates the +/-0.5% band more often and the trend family's contribution becomes livelier -- at TREND_SUBSIGNAL_WEIGHT 0.25 that is a modest effect on the composite by construction, which is the point: it is a small, well-isolated test rather than a redesign. Second, expected direction on turnover is upward (a faster MACD crosses more often), which keeps it clear of the promotion rule's 50%-of-baseline trade-count floor -- the criterion that rejected both of 2026-09-14's improving variants and that a suppression-shaped hypothesis cannot survive. Caveat to report honestly: at the 50,000 JPY promotion capital today's baseline discards 6,109 intended rebalances at the 0.001 BTC lot floor against 24 executed, so a sub-signal that only becomes livelier may be almost entirely absorbed by that floor and read as a near-null result. Check the 500,000 JPY diagnostic before concluding the MACD horizon does not matter.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 60
+  }
+}

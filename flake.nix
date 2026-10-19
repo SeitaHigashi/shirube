@@ -21,6 +21,56 @@
         };
       in
       {
+        # `nix build` でメインバイナリをビルドする
+        packages.default = pkgs.rustPlatform.buildRustPackage {
+          pname = "shirube";
+          version = "0.1.0";
+          src = ./.;
+          # NOTE: cargoLock.lockFile (importCargoLock) fetches each crate individually
+          # from crates.io's download API, which has been sporadically returning
+          # 403 Forbidden on shared CI IPs (GitHub Actions). cargoHash uses
+          # fetchCargoVendor (a single `cargo vendor` FOD via cargo's own HTTP
+          # client) instead, which does not hit this issue.
+          cargoHash = "sha256-cOIoAiz/vy6Ty+H3SP5a2NRCOhUN19099FILX9t0NCk=";
+
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = [ pkgs.openssl ];
+
+          # ネットワーク・Ollama・bitFlyer を要求するテストは sandbox 内では実行不可
+          doCheck = false;
+
+          meta = {
+            description = "導 (shirube) - bitFlyer BTC/JPY Automated Trading Bot";
+            mainProgram = "shirube";
+          };
+        };
+
+        # `nix flake check` でユニットテストを実行する
+        # NOTE: sandbox 内はネットワーク遮断のため buildRustPackage でベンダー依存を解決する
+        checks.tests = pkgs.rustPlatform.buildRustPackage {
+          pname = "shirube-tests";
+          version = "0.1.0";
+          src = ./.;
+          # NOTE: see packages.default for why cargoHash (fetchCargoVendor) is
+          # used instead of cargoLock.lockFile (importCargoLock).
+          cargoHash = "sha256-cOIoAiz/vy6Ty+H3SP5a2NRCOhUN19099FILX9t0NCk=";
+
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = [ pkgs.openssl ];
+
+          PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
+          OPENSSL_NO_VENDOR = "1";
+
+          doCheck = true;
+          checkPhase = ''
+            cargo test --no-fail-fast
+          '';
+          # テスト専用 derivation のためインストール成果物は不要
+          installPhase = ''
+            touch $out
+          '';
+        };
+
         devShells.default = pkgs.mkShell {
           buildInputs = [
             rustToolchain
@@ -36,6 +86,9 @@
             pkgs.cargo-nextest # 高速テストランナー
             pkgs.cargo-tarpaulin # カバレッジ計測
 
+            # Frontend tooling
+            pkgs.bun
+
             # 基本ツール
             pkgs.pkg-config
             pkgs.openssl
@@ -48,6 +101,7 @@
 
           # Ollama モデル設定
           OLLAMA_MODEL = "gemma4:latest";
+          OLLAMA_URL = "http://localhost:11434";
 
           shellHook = ''
             echo "導 (shirube) dev environment ready"

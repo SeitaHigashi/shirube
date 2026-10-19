@@ -1,0 +1,26 @@
+{
+  "name": "higher-allocation-threshold",
+  "kind": "parameter",
+  "rationale": "This is the first run measured on real bitFlyer 1-minute bars (the CoinGecko/1h data source was replaced on 2026-09-09, see docs/self-improvement-loop.md's 'Data source' section), and it inverts the turnover picture every earlier report worked from. Today's baseline over the 14-day holdout does 1285 trades = 91.8 trades/day, an order of magnitude ABOVE the 4-10/day guideline, where the old 1h baseline appeared to sit an order of magnitude below it. The shape of the result is the classic cost-dominated one the doc calls out: win_rate 0.732 with total_return_pct -6.72 and sharpe_ratio -10.57 -- many small wins outweighed by fewer large losses. Only the opposite direction has ever been tested: lower-allocation-threshold (2026-09-08) moved the threshold DOWN and was rejected (-1.96% Sharpe), which is evidence that more turnover does not help but says nothing about whether less turnover does. allocation_threshold is the single most direct control available: Simulator::run gates every rebalance on |delta| >= allocation_threshold (src/backtest/simulator.rs:138), exactly as the live engine does (src/trading/engine.rs:485, :562). Raising it 0.10 -> 0.25 forces each round-trip to move at least a quarter of the portfolio, so the same signal path produces materially fewer and larger rebalances. Note this is a conservative test of the idea: the backtest's slippage model currently charges no round-trip cost (see this run's report under 'Enabling changes'), so only exchange fees are counted and any turnover saving is understated rather than overstated.",
+  "trading_config": {
+    "allocation_threshold": 0.25,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  }
+}

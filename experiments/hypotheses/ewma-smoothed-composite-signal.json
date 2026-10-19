@@ -1,0 +1,35 @@
+{
+  "name": "ewma-smoothed-composite-signal",
+  "kind": "algorithm",
+  "rationale": "shirube maps each 1-minute candle's composite signal straight to an allocation target with no temporal filtering whatsoever: compute_btc_target returns a value built only from the current IndicatorPoint, apply_zone converts it, and the delta is acted on immediately. Every bar of indicator noise therefore becomes a candidate trade. Today's 500,000 JPY baseline shows what that costs -- 765 trades in 14 days at win_rate 0.108, buy/sell 380/385 -- and the 2026-09-12 run reached the same reading (754 trades, 0.117, 379/375). The 2026-09-12 literature review adopted Ma & Smith (arXiv:2411.07949), whose claim is specifically that a no-trade band on an UNSMOOTHED signal beats smoothing-then-thresholding; that band arm was tested as boundary-rebalance-no-trade-band and was rejected (it collapsed to 2 trades at the primary capital and became its own static mix). The smoothing arm the same paper argues against has never been measured here, so testing it settles a comparison that is currently half-done on record, and it is a mechanically different intervention from every tried variant: damped-crossover-subsignals and mean-reversion-weighted-subsignals reshaped how a SINGLE candle's sub-signals combine, while this filters the aggregate ACROSS candles and is the only tried or proposed change that gives the strategy any memory of its own recent signal.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 60
+  },
+  "code_change_summary": "Apply an exponentially weighted moving average to the composite normalized signal AFTER compute_btc_target returns it and BEFORE it is scaled by zone.range_max and passed to apply_zone. Do not touch compute_btc_target itself -- it stays a pure function of one IndicatorPoint, and the smoothing state lives in the caller. Add a small dedicated helper so both call sites share one implementation and one constant, e.g. a `pub(crate) struct SmoothedSignal { value: Option<f64> }` with `fn update(&mut self, normalized: f64) -> f64` in src/signal/mod.rs, documented with the formula and its parameter. Use EWMA_HALF_LIFE_BARS = 30 (thirty 60s bars = 30 minutes), converted to the standard smoothing factor alpha = 1 - 0.5f64.powf(1.0 / 30.0) (approximately 0.02284) in a named constant with a doc comment giving the formula, the half-life it encodes, and an explicit statement that 30 bars is an a priori round figure NOT fitted on any window. Seed the filter with the first normalized value it ever sees (so the first evaluated candle is unsmoothed rather than biased toward 0.5) and then update it on every candle where compute_btc_target returns Some, leaving it untouched (not decayed toward anything) on a warmup candle where it returns None. Wire it into BOTH paths so live and backtest cannot diverge -- a filter live in one and dead in the other makes every backtest number untransferable (the 2026-09-09 report records this trap explicitly): (a) src/backtest/simulator.rs, the `if let Some(normalized) = TradingEngine::compute_btc_target(point, &[], &trading_config)` block around line 127 -- feed `normalized` through the filter and use the smoothed output for `raw`; (b) src/trading/engine.rs, handle_indicator's `combined.map(|normalized| ...)` block, with the filter held as a field on TradingEngine. Note in a comment that the two see different cadences (the simulator one update per 60s bar, the live SignalEngine roughly one per 250ms) and that the half-life is therefore expressed in BARS and is only equivalent live if the engine's evaluation cadence is one per bar -- this is the ~4 Hz live/backtest divergence the 2026-09-12 report flagged as a suspected defect; do NOT attempt to fix that here, just record it in your report. Add unit tests covering: a constant input stream converging to that constant, a step input reaching approximately half the step after exactly 30 updates (the half-life property, asserted within a small tolerance), the first-value seeding behaviour, and that a None-returning warmup point leaves the state unchanged. Report in step 3 the mechanism's behaviour -- how far the smoothed signal's realized range shrank versus the raw one, and the trade counts at each capital -- not just the report JSON.",
+  "constraints": [
+    "MUST NOT modify the body or the signature of TradingEngine::compute_btc_target. The smoothing is applied to that function's RETURN VALUE in its callers; the allocation formula itself is out of scope for this change.",
+    "This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST apply the filter at both the live site in src/trading/engine.rs and the backtest site in src/backtest/simulator.rs, so live and backtest behaviour cannot diverge.",
+    "MUST pass `cargo test`, including the existing compute_btc_target_* and Simulator unit tests -- update expected values only where the filter legitimately changes them, and do not weaken or delete a test just to make it pass. Several Simulator tests drive a handful of synthetic candles; a 30-bar half-life will change what they produce, so re-derive their expectations honestly rather than shortening the half-life to keep them green.",
+    "MUST NOT fit EWMA_HALF_LIFE_BARS on the holdout window, or on any window at all. It is an a priori round number; if it turns out to be wrong, that is a result to report, not a value to retune mid-run.",
+    "MUST NOT change src/signal/engine.rs's broadcast cadence or anything about live scheduling. The ~4 Hz live evaluation rate is a known open question (2026-09-12 report, 'Suspected defects'); report it, do not fix it here.",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff changes the allocation target the live engine acts on, since it alters what the running instance would hold.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or the order-submission mechanics themselves."
+  ]
+}

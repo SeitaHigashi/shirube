@@ -1,0 +1,24 @@
+{
+  "name": "zone-damping-085",
+  "kind": "parameter",
+  "rationale": "2026-09-18's lead #3: extend the band-width dose-response curve with a point authored from the pre-holdout bracket rather than read off that run's holdout sweep (reading a dose off the sweep would be exactly the overfitting the holdout split exists to prevent, and the sweep's own finding was that the primary capital is chaotic for this family). The zone band maps the composite onto the allocation target with slope 1/(hold_btc_above - hold_jpy_below) about the neutral midpoint 0.5, so 0.0294118/0.9705882 is slope 1.0625 = x0.85 damping of the baseline's 1.25, placed midway between the promoted x0.90 (2026-09-18: 44 trades = 67% of baseline, Sharpe +2.107, drawdown -1.015pp, fees -31.7%) and the x0.80 dose measured 2026-09-17 (Sharpe +6.247, the largest gain ever recorded here, but 10 trades = 13% of baseline, rejected on MIN_TRADE_COUNT_RATIO alone). Everything measured on this axis says Sharpe improves monotonically as damping increases while trade count collapses, so the question this dose answers is where on that interval the trade-count floor is actually crossed — x0.90 cleared it with 11 trades of margin and x0.80 missed it by 23. It is cost-targeting as the doc's warning rule requires and must be scored on total_fees_jpy, not trade count, per the sublinearity caveat.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.0294118,
+      "hold_btc_above": 0.9705882
+    },
+    "rebalance_interval_secs": 60
+  }
+}

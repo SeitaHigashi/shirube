@@ -1,0 +1,44 @@
+{
+  "name": "realized-vol-scaled-exposure",
+  "kind": "algorithm",
+  "rationale": "The 2026-09-08 Run 4 report closed with an explicit lead: 'a regime hypothesis needs a reference the composite doesn't contain (realised volatility, a longer-horizon trend than any sub-signal uses, or drawdown state)', after sma-regime-gate turned out to be an exact null because the SMA-cross sub-signal already enforced most of the bearish brake it added. Realised return volatility is the first item on that list and appears nowhere in IndicatorPoint or compute_btc_target today. It is also distinct from the earlier rejected volatility-scaled-zone-width, which scaled the zone dead-band by Bollinger *bandwidth* (a price-envelope width derived from the same close series the composite already consumes) and left the signal itself untouched; this hypothesis leaves the zone boundaries alone and instead damps how far the composite is allowed to move away from neutral when recent realised volatility is high, which is the mechanism Moreira & Muir's volatility-managed portfolios actually describes. Grounding from data strictly older than the holdout window: over the 76-day training window (2026-06-11 -> 2026-08-26) hourly BTC/JPY return volatility averaged 0.42% (~39% annualised) while running a 12.5% peak-to-trough drawdown, so there is a real volatility range for the scaling to bite on rather than a flat series. Every holdout window this pipeline has scored has been a 3-4% loss with a 12-18% win rate, and two independent attempts to fix that by widening the signal's *range* (full-ta-weight-no-sentiment, narrow-zone-band) both failed -- reducing exposure precisely when the market is most volatile is the untested opposite of widening it.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  },
+  "code_change_summary": "Two parts. (1) Additive: add a `realized_vol: Option<f64>` field to IndicatorPoint (src/signal/mod.rs) and populate it in compute_indicators() as the population standard deviation of the last REALIZED_VOL_WINDOW = 24 close-to-close simple returns (i.e. over the trailing 24 candles = 24h at the pipeline's 1h resolution), None until at least REALIZED_VOL_WINDOW+1 closes have been seen. Compute it from the candle close series compute_indicators already iterates, keeping a small rolling buffer of the previous closes; do not add a new indicator struct under src/signal/indicators/ unless that is genuinely cleaner on dev's current structure. Every other IndicatorPoint field and all existing indicator code MUST stay byte-for-byte identical, and any struct-literal construction sites of IndicatorPoint elsewhere in the tree (including tests and src/backtest/) must be updated to set the new field. (2) In TradingEngine::compute_btc_target (src/trading/engine.rs), after ta_normalized is computed and before it is blended with sentiment, damp its deviation from neutral by a volatility factor: let k = ((REFERENCE_HOURLY_VOL / realized_vol).powi(2)).clamp(VOL_SCALE_MIN, VOL_SCALE_MAX) with REFERENCE_HOURLY_VOL = 0.0042 (the 0.42% mean hourly volatility measured on the pre-holdout training window), VOL_SCALE_MIN = 0.5 and VOL_SCALE_MAX = 1.5, all three as named private constants with a comment giving the formula, its inputs and its expected range; then ta_normalized = 0.5 + (ta_normalized - 0.5) * k. The inverse-*variance* (.powi(2)) form is deliberate: it is what Moreira & Muir scale portfolio weight by. When raw.realized_vol is None (warmup) or is not strictly positive and finite, k MUST be 1.0 so the function reduces exactly to today's behaviour -- guard explicitly rather than relying on clamp, since f64::clamp propagates NaN instead of clamping it (the same hazard the 2026-09-08 damped-crossover diff had to guard). The blend with sentiment, the [0.0,1.0] clamp on the result, and the empty-sub_signals warmup guard returning None all stay exactly as they are.",
+  "constraints": [
+    "This hypothesis modifies the body of TradingEngine::compute_btc_target. This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST NOT change TradingEngine::compute_btc_target's signature (its parameter list or return type) -- only its body.",
+    "MUST NOT change any individual sub-signal's own formula, nor the zone boundaries or apply_zone; only the post-aggregation damping of ta_normalized and the new IndicatorPoint field are added.",
+    "MUST pass `cargo test`, including the compute_btc_target_* unit tests in src/trading/engine.rs -- update their expected values if the new formula legitimately changes them (do not weaken or delete a test just to make it pass). Points with realized_vol = None must be unaffected by construction; verify that rather than assume it. Add unit tests covering: k = 1.0 exactly at REFERENCE_HOURLY_VOL, damping toward neutral at high volatility, amplification capped at VOL_SCALE_MAX at low volatility, and a None/zero/NaN realized_vol reducing to today's output.",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff touches compute_btc_target's body, so the reviewer gives it the scrutiny an allocation-formula change deserves.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or anything on the live order-submission path."
+  ],
+  "paper_reference": {
+    "title": "Volatility-Managed Portfolios",
+    "authors": "Alan Moreira, Tyler Muir",
+    "venue_year": "The Journal of Finance, Vol. 72, No. 4, 2017",
+    "url": "https://amoreira2.github.io/alan-moreira.github.io/VolPortfolios_published.pdf",
+    "key_claim": "Scaling a portfolio's weight in a risky factor by the inverse of its recent realised return variance -- taking less exposure when volatility was recently high -- raises risk-adjusted returns and produces large alphas against the unscaled factor, because volatility rises much faster than expected returns do.",
+    "pros": "It is the canonical, most-replicated statement of the exact mechanism this hypothesis implements (inverse realised *variance*, not standard deviation, hence the .powi(2) in the code change), and it is a single-asset timing rule rather than a cross-sectional portfolio construction, so it maps onto shirube's one-instrument BTC/JPY allocation almost directly. It is also the first hypothesis to use a reference the composite does not already contain, which is precisely the gap Run 4's sma-regime-gate null identified. Crypto's realised volatility is far more variable than equities', so if the effect exists at all there is more for it to work with.",
+    "cons": "The paper is US equity and bond factors from 1926-2015 at monthly rebalancing frequency -- a different asset class, a different era, and a horizon two to three orders of magnitude longer than shirube's hourly rebalance. Its result is well known to be sensitive to transaction costs and to weaken substantially out of sample and outside the US, and it has been directly contested in follow-up literature (notably on whether the alpha survives realistic implementation). Nothing in it addresses crypto microstructure, a 24/7 market, or a 14-day evaluation window. And the specific constants here -- a 24h volatility window, REFERENCE_HOURLY_VOL = 0.0042, and the [0.5, 1.5] clamp -- come from shirube's own pre-holdout training window and from judgement, not from the paper, so they are exactly the kind of untested translation that the earlier volatility-scaled-zone-width rejection punished. shirube's own backtest gate, not the paper's alphas, decides this."
+  }
+}

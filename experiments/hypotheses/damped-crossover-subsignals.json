@@ -1,0 +1,33 @@
+{
+  "name": "damped-crossover-subsignals",
+  "kind": "algorithm",
+  "rationale": "The 2026-09-08 report's continuous-crossover-subsignals hypothesis replaced the SMA/EMA-cross and MACD-histogram step functions in TradingEngine::compute_btc_target with a continuous mapping saturating at a 2% relative distance from the reference line. It produced the best Sharpe (+16.54 absolute) and an improved max drawdown (-1.33pp) of the three variants tried that day, but trade count collapsed to 27% of baseline (10 vs 37), well under the 50% floor -- the report attributes this to the wide 2% saturation band keeping ta_normalized near 0.5 (and therefore inside the zone's neutral dead-band) for most of the holdout, rarely producing a strong enough directional signal to clear allocation_threshold. This hypothesis keeps the same continuous, noise-damping idea (so single-tick crossover flips still don't fully saturate the sub-signal) but narrows the saturation band from 2% to 0.5% relative distance, so genuine trend moves saturate to 0.0/1.0 much sooner -- the goal is to retain most of the drawdown/Sharpe improvement while firing enough rebalances to clear the 50%-of-baseline trade-count floor.",
+  "trading_config": {
+    "allocation_threshold": 0.15,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  },
+  "code_change_summary": "In TradingEngine::compute_btc_target (src/trading/engine.rs), replace the SMA-cross and EMA-cross step functions with the same style of continuous, clamped mapping already used by the (rejected, no-longer-current) continuous-crossover-subsignals hypothesis, but with the saturation threshold narrowed from 0.02 (2%) to 0.005 (0.5%): sub_signal = (((close - reference) / reference) / 0.005).clamp(-1.0, 1.0) * 0.5 + 0.5, applied identically for sma and ema as the reference. Apply the same narrowed-band continuous mapping to the MACD histogram sub-signal (scaled by the histogram's magnitude relative to bb_middle, using the same 0.005 relative-saturation threshold) instead of only its sign. RSI's sub-signal and Bollinger %B's sub-signal are already continuous and must be left unchanged. Update the doc comment's '# Sub-signal mappings' section (or equivalent) to describe the new 0.5%-saturation formulas, and update the expected values in the compute_btc_target_* unit tests in src/trading/engine.rs's test module to match the new outputs (the warmup/None test and the news-only test are unaffected since they don't exercise sma/ema/histogram).",
+  "constraints": [
+    "This hypothesis modifies the body of TradingEngine::compute_btc_target. This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST pass `cargo test`, including the compute_btc_target_* unit tests in src/trading/engine.rs -- update their expected values if the new formula legitimately changes them (do not weaken or delete a test just to make it pass).",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff touches compute_btc_target's body, so the reviewer gives it the scrutiny an allocation-formula change deserves.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or anything on the live order-submission path."
+  ]
+}

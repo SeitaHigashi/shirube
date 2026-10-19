@@ -32,10 +32,7 @@ pub struct NewsFetcher {
 
 impl NewsFetcher {
     pub fn new(feed_urls: Vec<String>) -> Self {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .expect("Failed to build HTTP client");
+        let client = crate::http::client_with_timeout(std::time::Duration::from_secs(10));
         Self { feed_urls, client }
     }
 

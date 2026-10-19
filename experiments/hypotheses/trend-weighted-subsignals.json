@@ -1,0 +1,44 @@
+{
+  "name": "trend-weighted-subsignals",
+  "kind": "algorithm",
+  "rationale": "TradingEngine::compute_btc_target currently averages five sub-signals with equal weight, but they are not the same kind of signal: SMA-cross, EMA-cross and MACD-histogram are trend-following (price above the line -> bullish), while RSI and Bollinger %B are mean-reverting (price high -> bearish). In a sustained directional move the two families actively cancel, pulling ta_normalized back toward 0.5 exactly when the trend terms are most confident -- a mechanical explanation for the persistently mid-zone allocations and low turnover the 2026-09-08 report observed (baseline ~2.6 trades/day against a 4-10/day guideline), and one that no hypothesis tried so far has tested. arXiv:2608.21888 supplies an empirical reason to expect the mean-reverting half to be the weaker one at shirube's 1h backtest resolution: it measures directional mean reversion under a strictly out-of-sample walk-forward protocol and finds it strongest at 15 minutes, decaying monotonically with horizon and gone within 4 hours (58% of 183 crypto pairs still significant at 1h, versus 90% at 15m). This hypothesis therefore keeps all five sub-signals but weights them by family in the aggregation -- trend terms 1.0, mean-reverting terms 0.25 -- rather than deleting the mean-reverting ones outright, since the paper finds the 1h effect attenuated but not absent.",
+  "trading_config": {
+    "allocation_threshold": 0.15,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  },
+  "code_change_summary": "In TradingEngine::compute_btc_target (src/trading/engine.rs), change the sub-signal aggregation from an unweighted mean to a weighted mean. Keep every existing sub-signal formula byte-for-byte identical (RSI, SMA cross, EMA cross, MACD histogram, Bollinger %B) -- only how they are combined changes. Push (value, weight) pairs instead of bare values: weight 1.0 for the trend-following sub-signals (SMA cross, EMA cross, MACD histogram) and weight 0.25 for the mean-reverting ones (RSI, Bollinger %B); define these two weights as named private constants (e.g. TREND_SUBSIGNAL_WEIGHT / REVERSION_SUBSIGNAL_WEIGHT) with a comment citing arXiv:2608.21888 so a reviewer can find the justification. Compute ta_normalized = sum(value*weight) / sum(weight), which keeps the result in [0.0, 1.0] and degrades correctly during warmup when only some sub-signals are available (e.g. an RSI-only point still yields exactly the RSI sub-signal, since its weight is the only one in both sums). The existing empty-sub_signals warmup guard returning None MUST be preserved. Update the function's doc comment to describe the weighting and why, and update the expected values in the compute_btc_target_* unit tests in src/trading/engine.rs's test module where the new weighting legitimately changes them (the warmup/None test and any single-RSI-only test should be unaffected by construction -- verify rather than assume).",
+  "constraints": [
+    "This hypothesis modifies the body of TradingEngine::compute_btc_target. This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST NOT change TradingEngine::compute_btc_target's signature (its parameter list or return type) -- only its body.",
+    "MUST NOT change any individual sub-signal's own formula; only the aggregation across sub-signals changes.",
+    "MUST pass `cargo test`, including the compute_btc_target_* unit tests in src/trading/engine.rs -- update their expected values if the new formula legitimately changes them (do not weaken or delete a test just to make it pass). Add at least one new unit test covering a point where trend and mean-reverting sub-signals disagree, asserting the trend family dominates.",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff touches compute_btc_target's body, so the reviewer gives it the scrutiny an allocation-formula change deserves.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or anything on the live order-submission path."
+  ],
+  "paper_reference": {
+    "title": "Short-horizon mean reversion in cryptocurrency markets: a matched cross-market measurement",
+    "authors": "(arXiv preprint; authors as listed on the arXiv abstract page)",
+    "venue_year": "arXiv:2608.21888, 2026",
+    "url": "https://arxiv.org/html/2608.21888v1",
+    "key_claim": "Directional mean reversion in crypto is strongest at 15-minute horizons (90% of 183 Binance pairs significant, mean AUC 0.531) and decays monotonically with horizon, with only 58% of pairs still significant at 1h and the effect gone within 4 hours; the gross edge (~1.3bp/trade) also sits below a 5bp round-trip cost band.",
+    "pros": "Same asset class (crypto spot pairs), a recent 2025-2026 sample, strictly out-of-sample walk-forward protocol with FDR control across 370 assets, and transaction costs explicitly modeled -- unusually rigorous for this literature. Its horizon-decay finding maps directly onto a structural feature of shirube's own code: two of five equally-weighted sub-signals in compute_btc_target are mean-reverting and run at 1h resolution, where the paper says the effect is most attenuated. It gives a principled reason to down-weight rather than trust them equally.",
+    "cons": "The paper measures per-candle directional sign predictability (AUC) on Binance USDT pairs, not portfolio allocation on BTC/JPY, and its conclusion is that the effect is NOT economically exploitable standalone after costs -- which says nothing directly about its value as one of five inputs to a composite allocation signal, where it may still contribute as a brake rather than as an entry trigger. 58% of pairs remaining significant at 1h means attenuated, not absent, so a large down-weight could discard real information. The 0.25 weight itself appears nowhere in the paper: it is this hypothesis's own guess at translating 'attenuated' into a number, and shirube's 14-day BTC/JPY holdout backtest -- not the paper's numbers -- is what decides whether it helps."
+  }
+}

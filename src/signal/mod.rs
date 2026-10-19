@@ -2,56 +2,49 @@ pub mod engine;
 pub mod indicators;
 
 use chrono::{DateTime, Utc};
-use rust_decimal::Decimal;
 use serde::Serialize;
 
 use crate::config::TradingConfig;
 use crate::types::market::Candle;
 
-// ---- Signal ----
+// ---- Signal — TradingEngine が取引所へ送る発注指示専用 ----
 
+/// TradingEngine が取引所に送付する発注指示。
+/// インジケータの売買判断には使用しない。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum Signal {
-    Buy { price: Decimal, confidence: f64 },
-    Sell { price: Decimal, confidence: f64 },
+    Buy,
+    Sell,
     Hold,
 }
 
 // ---- IndicatorSignal — 各インジケータの個別シグナル ----
 
+/// 各インジケータの名前と計算値のペア。
+/// 売買方向の判断は含まない（TradingEngine の責務）。
 #[derive(Debug, Clone, Serialize)]
 pub struct IndicatorSignal {
     pub name: String,
-    pub signal: Option<Signal>,
     /// 現在の計算値（SMA値、RSI値、MACDヒストグラム等）。ウォームアップ中は None。
     pub value: Option<f64>,
 }
 
 // ---- AllocationSignal — 連続配分シグナル ----
 
-/// 目標BTC配分率。
-/// - raw_signal: ゾーン変換前の生シグナル値。ZoneConfig.range_max までの範囲を取る。
-/// - target_pct: ゾーン変換後の実効BTC配分率 ∈ [0.0, 1.0]（TradingEngineはこれを使う）
+/// compute_btc_target の計算結果を表す型。
+/// normalized はゾーン変換前の raw_signal 値 [0.0, 1.0]。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AllocationSignal {
-    /// 変換前の生シグナル値。デフォルトゾーンでは target_pct と同値。
-    pub raw_signal: f64,
-    pub target_pct: f64,
-    pub confidence: f64,
+    /// 正規化済みシグナル値 [0.0, 1.0]。
+    /// 強気 → 1.0、弱気 → 0.0、中立 → 0.5。
+    pub normalized: f64,
 }
 
 impl AllocationSignal {
+    /// 中立シグナル: normalized = 0.5
     pub fn neutral() -> Self {
-        Self { raw_signal: 0.5, target_pct: 0.5, confidence: 0.0 }
+        Self { normalized: 0.5 }
     }
-
-    /// レガシー互換コンストラクタ: raw_signal = target_pct として生成
-    pub fn from_effective(target_pct: f64, confidence: f64) -> Self {
-        Self { raw_signal: target_pct, target_pct, confidence }
-    }
-
-    pub fn is_bullish(&self) -> bool { self.target_pct > 0.5 }
-    pub fn is_bearish(&self) -> bool { self.target_pct < 0.5 }
 }
 
 /// raw_signal を ZoneConfig に従って実効BTC配分率 [0.0, 1.0] に変換する。
@@ -73,12 +66,30 @@ pub fn apply_zone(raw: f64, zone: &crate::config::ZoneConfig) -> f64 {
     ((raw - zone.hold_jpy_below) / span).clamp(0.0, 1.0)
 }
 
+// ---- IndicatorOutput — SignalEngine が出力する純粋な計算結果 ----
+
+/// SignalEngine がブロードキャストする計算結果。
+/// インジケータの計算値のみを含み、「何%BTCを持つか」という判断は含まない。
+/// TradingEngine はこれを受け取り compute_btc_target() で配分目標を計算する。
+#[derive(Debug, Clone)]
+pub struct IndicatorOutput {
+    pub indicators: Vec<IndicatorSignal>,
+    pub raw: IndicatorPoint,
+    pub calculated_at: DateTime<Utc>,
+}
+
 // ---- SignalDetail — API レスポンス用（集計 + 個別） ----
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SignalDetail {
     pub aggregate: AllocationSignal,
+    /// TradingEngine が compute_btc_target で算出した目標 BTC 配分率 [0.0, 1.0]。
+    /// sticky_target を反映するため、中立シグナル時も最後の有効値を保持する。
+    pub target_pct: f64,
     pub indicators: Vec<IndicatorSignal>,
+    /// 生インジケータ値（ウォームアップ中は None）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_indicators: Option<IndicatorPoint>,
     /// シグナルが計算された日時（ミリ秒精度）
     pub calculated_at: DateTime<Utc>,
     /// 計算エンジンの状態: "active" | "waiting_for_data"
@@ -89,9 +100,12 @@ pub struct SignalDetail {
 
 /// 1本のキャンドル時点における全インジケーターの計算値。
 /// ウォームアップ中のフィールドは None。
+/// close は TradingEngine が MA系指標との乖離を計算するために含む。
 #[derive(Debug, Clone, Serialize)]
 pub struct IndicatorPoint {
     pub time: DateTime<Utc>,
+    /// キャンドルの終値。TradingEngine が SMA/EMA との乖離計算に使用する。
+    pub close: Option<f64>,
     pub sma: Option<f64>,
     pub ema: Option<f64>,
     pub rsi: Option<f64>,
@@ -107,6 +121,7 @@ pub struct IndicatorPoint {
 /// シグナルエンジンと同一ロジックを使用する純粋関数。
 pub fn compute_indicators(candles: &[Candle], cfg: &TradingConfig) -> Vec<IndicatorPoint> {
     use indicators::{bollinger::Bollinger, ema::Ema, macd::Macd, rsi::Rsi, sma::Sma};
+    use rust_decimal::prelude::ToPrimitive;
 
     let mut sma = Sma::new(cfg.sma_period);
     let mut ema = Ema::new(cfg.ema_period);
@@ -115,7 +130,6 @@ pub fn compute_indicators(candles: &[Candle], cfg: &TradingConfig) -> Vec<Indica
     let mut bb = Bollinger::new(cfg.bollinger_period, cfg.bollinger_std);
 
     candles.iter().map(|c| {
-        // 各インジケーターを更新（戻り値は Signal なので無視し、value/band_values を使う）
         sma.update(c);
         ema.update(c);
         rsi.update(c);
@@ -131,6 +145,7 @@ pub fn compute_indicators(candles: &[Candle], cfg: &TradingConfig) -> Vec<Indica
 
         IndicatorPoint {
             time: c.open_time,
+            close: c.close.to_f64(),
             sma: sma.value(),
             ema: ema.value(),
             rsi: rsi.value(),
@@ -146,16 +161,39 @@ pub fn compute_indicators(candles: &[Candle], cfg: &TradingConfig) -> Vec<Indica
 
 // ---- Indicator trait ----
 
+/// インジケータが返す生値のバリアント。
+/// スカラー（SMA/EMA/RSI）と多値（MACD/Bollinger）を型安全に区別する。
+#[derive(Debug, Clone)]
+pub enum IndicatorRawValues {
+    /// スカラー値（SMA, EMA, RSI 等）。ウォームアップ中は None。
+    Scalar(Option<f64>),
+    /// MACD の 3 値セット。ウォームアップ中は全て None。
+    Macd {
+        macd_line: Option<f64>,
+        signal_line: Option<f64>,
+        histogram: Option<f64>,
+    },
+    /// ボリンジャーバンドの 3 値セット。ウォームアップ中は全て None。
+    BollingerBands {
+        upper: Option<f64>,
+        middle: Option<f64>,
+        lower: Option<f64>,
+    },
+}
+
 pub trait Indicator: Send + Sync {
     fn name(&self) -> &str;
-    /// Candle を受け取り、シグナルを返す。ウォームアップ中は None。
-    fn update(&mut self, candle: &Candle) -> Option<Signal>;
+    /// Candle を受け取り内部状態を更新する。売買判断は行わない。
+    /// 計算値は value() / snapshot() で取得する。
+    fn update(&mut self, candle: &Candle);
     /// 現在の計算値を返す（SMA値、RSI値等）。ウォームアップ中は None。
     fn value(&self) -> Option<f64>;
     /// バックテスト再利用のためのリセット
     fn reset(&mut self);
     /// シグナルを出すのに必要な最低 Candle 数
     fn min_periods(&self) -> usize;
+    /// 現在の生計算値を返す。多値インジケータ（MACD/Bollinger）はそれぞれのバリアントを返す。
+    fn snapshot(&self) -> IndicatorRawValues;
 }
 
 // ---- MockIndicator (テスト用) ----
@@ -163,19 +201,20 @@ pub trait Indicator: Send + Sync {
 #[cfg(any(test, feature = "mock"))]
 pub mod mock {
     use super::*;
-    use std::collections::VecDeque;
 
-    /// テスト用インジケータ。コンストラクト時に渡したシグナル列を順番に返す。
+    /// テスト用インジケータ。コンストラクト時に渡した value 列を順番に返す。
     pub struct MockIndicator {
         name: String,
-        signals: VecDeque<Option<Signal>>,
+        values: std::collections::VecDeque<Option<f64>>,
+        current: Option<f64>,
     }
 
     impl MockIndicator {
-        pub fn new(name: impl Into<String>, signals: Vec<Option<Signal>>) -> Self {
+        pub fn new(name: impl Into<String>, values: Vec<Option<f64>>) -> Self {
             Self {
                 name: name.into(),
-                signals: signals.into(),
+                values: values.into(),
+                current: None,
             }
         }
     }
@@ -185,20 +224,25 @@ pub mod mock {
             &self.name
         }
 
-        fn update(&mut self, _candle: &Candle) -> Option<Signal> {
-            self.signals.pop_front().flatten()
+        fn update(&mut self, _candle: &Candle) {
+            self.current = self.values.pop_front().flatten();
         }
 
         fn value(&self) -> Option<f64> {
-            None
+            self.current
         }
 
         fn reset(&mut self) {
-            self.signals.clear();
+            self.values.clear();
+            self.current = None;
         }
 
         fn min_periods(&self) -> usize {
             0
+        }
+
+        fn snapshot(&self) -> IndicatorRawValues {
+            IndicatorRawValues::Scalar(self.value())
         }
     }
 }
@@ -206,11 +250,10 @@ pub mod mock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mock::MockIndicator;
-    use rust_decimal_macros::dec;
 
     fn dummy_candle() -> Candle {
         use chrono::Utc;
+        use rust_decimal_macros::dec;
         Candle {
             product_code: "BTC_JPY".into(),
             open_time: Utc::now(),
@@ -224,33 +267,26 @@ mod tests {
     }
 
     #[test]
-    fn signal_equality() {
-        let s1 = Signal::Buy { price: dec!(9000000), confidence: 0.8 };
-        let s2 = Signal::Buy { price: dec!(9000000), confidence: 0.8 };
-        assert_eq!(s1, s2);
-        assert_ne!(Signal::Hold, Signal::Buy { price: dec!(1), confidence: 0.5 });
-    }
-
-    #[test]
-    fn mock_indicator_returns_signals_in_order() {
+    fn mock_indicator_returns_values_in_order() {
+        use mock::MockIndicator;
         let candle = dummy_candle();
-        let signals = vec![
-            Some(Signal::Buy { price: dec!(9000000), confidence: 0.8 }),
-            None,
-            Some(Signal::Hold),
-        ];
-        let mut ind = MockIndicator::new("test", signals);
+        let mut ind = MockIndicator::new("test", vec![Some(0.5), None, Some(-0.3)]);
 
-        assert!(matches!(ind.update(&candle), Some(Signal::Buy { .. })));
-        assert!(ind.update(&candle).is_none());
-        assert!(matches!(ind.update(&candle), Some(Signal::Hold)));
+        ind.update(&candle);
+        assert_eq!(ind.value(), Some(0.5));
+        ind.update(&candle);
+        assert_eq!(ind.value(), None);
+        ind.update(&candle);
+        assert_eq!(ind.value(), Some(-0.3));
     }
 
     #[test]
     fn mock_indicator_returns_none_when_exhausted() {
+        use mock::MockIndicator;
         let candle = dummy_candle();
         let mut ind = MockIndicator::new("empty", vec![]);
-        assert!(ind.update(&candle).is_none());
+        ind.update(&candle);
+        assert!(ind.value().is_none());
     }
 
     mod zone_tests {
@@ -293,15 +329,11 @@ mod tests {
 
         #[test]
         fn apply_zone_default_zones() {
-            // デフォルト: range_max=1.0, hold_jpy_below=0.2, hold_btc_above=0.8
             let zone = ZoneConfig::default();
-            // Zone A: < 0.2 → 0.0
             assert_eq!(apply_zone(0.0, &zone), 0.0);
             assert_eq!(apply_zone(0.1, &zone), 0.0);
-            // Zone B: 0.2〜0.8 → 線形補間
             let mid = apply_zone(0.5, &zone);
             assert!((mid - 0.5).abs() < 1e-9, "mid={}", mid);
-            // Zone C: > 0.8 → 1.0
             assert_eq!(apply_zone(1.0, &zone), 1.0);
             assert_eq!(apply_zone(0.9, &zone), 1.0);
         }

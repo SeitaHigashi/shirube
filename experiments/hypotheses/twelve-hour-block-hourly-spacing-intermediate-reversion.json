@@ -1,0 +1,27 @@
+{
+  "name": "twelve-hour-block-hourly-spacing-intermediate-reversion",
+  "kind": "parameter",
+  "rationale": "Mandatory trading-cost hypothesis, companion to the 4h variant. 2026-10-07 established an interior optimum between 8h (deficit -0.250 @500k with 1h spacing) and 24h (-2.03 @500k with 24h spacing), but the 24h point changed spacing too, so it confounds block length with drift-correction frequency. 12h block with the same 1h spacing and rsi60/bb90 isolates block length on the upper flank (lead #2 of the 2026-10-07 report).",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 60,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 90,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 3600,
+    "signal_block_secs": 43200
+  }
+}

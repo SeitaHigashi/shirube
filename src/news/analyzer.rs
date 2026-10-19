@@ -37,10 +37,7 @@ pub struct NewsAnalyzer {
 
 impl NewsAnalyzer {
     pub fn new(ollama_url: impl Into<String>, model: impl Into<String>) -> Self {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(300))
-            .build()
-            .expect("Failed to build HTTP client");
+        let client = crate::http::client_with_timeout(std::time::Duration::from_secs(300));
         Self { ollama_url: ollama_url.into(), model: model.into(), client }
     }
 
@@ -66,8 +63,15 @@ impl NewsAnalyzer {
         let body_section = body
             .filter(|s| !s.is_empty())
             .map(|s| {
-                // Truncate to 500 chars to avoid excessive token usage
-                let trimmed = if s.len() > 500 { &s[..500] } else { s };
+                // Truncate to 500 Unicode chars (not bytes) to avoid panicking
+                // on multi-byte characters (e.g. UTF-8 encoded quotes, CJK)
+                let truncated: String;
+                let trimmed: &str = if s.chars().count() > 500 {
+                    truncated = s.chars().take(500).collect();
+                    &truncated
+                } else {
+                    s
+                };
                 format!("\nArticle summary: {}", trimmed)
             })
             .unwrap_or_default();

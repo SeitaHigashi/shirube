@@ -1,0 +1,35 @@
+{
+  "name": "mean-reversion-weighted-subsignals",
+  "kind": "algorithm",
+  "rationale": "The 2026-09-08 Run 3 report tested one half of a two-sided question and got a clear answer for that half only. trend-weighted-subsignals weighted the three trend-following sub-signals of compute_btc_target (SMA cross, EMA cross, MACD histogram) at 1.0 and the two mean-reverting ones (RSI, Bollinger %B) at 0.25, and it was that run's worst result on every axis: Sharpe -1.237, max drawdown +1.35pp (4.76% -> 6.11%), win rate 6.7%. The report's own post-mortem was that the composite 'just made the trend-chase into reversals'. The exact mirror -- trend 0.25, mean-reverting 1.0 -- has never been run, and a clean failure of one direction is the strongest available evidence for testing the other. Independent grounding from data strictly older than the holdout window: over the 76-day training window (2026-06-11 -> 2026-08-26, i.e. everything before HOLDOUT_START) the lag-1 autocorrelation of hourly BTC/JPY returns is -0.028, mildly negative, i.e. weakly mean-reverting at exactly the 1h resolution the backtest runs at. That is the sign trend-weighted-subsignals bet against. This hypothesis keeps every individual sub-signal formula byte-for-byte identical and changes only the family weights in the aggregation, so its result is directly comparable to its mirror.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  },
+  "code_change_summary": "In TradingEngine::compute_btc_target (src/trading/engine.rs), change the sub-signal aggregation from an unweighted mean to a weighted mean, with the weights the mirror image of the rejected trend-weighted-subsignals hypothesis. Keep every existing sub-signal formula byte-for-byte identical (RSI, damped SMA cross, damped EMA cross, damped MACD histogram, Bollinger %B) -- only how they are combined changes. Push (value, weight) pairs instead of bare values: weight 1.0 for the mean-reverting sub-signals (RSI, Bollinger %B) and weight 0.25 for the trend-following ones (SMA cross, EMA cross, MACD histogram); define both as named private constants (e.g. REVERSION_SUBSIGNAL_WEIGHT / TREND_SUBSIGNAL_WEIGHT) with a comment citing this hypothesis and the measured -0.028 lag-1 autocorrelation of hourly returns on the pre-holdout training window, so a reviewer can find the justification. Compute ta_normalized = sum(value*weight) / sum(weight), which keeps the result in [0.0, 1.0] and degrades correctly during warmup when only some sub-signals are available (an RSI-only point still yields exactly the RSI sub-signal, since its weight is the only one in both sums). The existing empty-sub_signals warmup guard returning None MUST be preserved, as must the existing guards that skip the SMA/EMA sub-signals when the reference line is non-positive and the MACD fallback when bb_middle is unusable. Update the function's doc comment to describe the weighting and why, and update the expected values in the compute_btc_target_* unit tests in src/trading/engine.rs's test module wherever the new weighting legitimately changes them (verify rather than assume which tests are affected).",
+  "constraints": [
+    "This hypothesis modifies the body of TradingEngine::compute_btc_target. This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST NOT change TradingEngine::compute_btc_target's signature (its parameter list or return type) -- only its body.",
+    "MUST NOT change any individual sub-signal's own formula; only the aggregation across sub-signals changes.",
+    "MUST pass `cargo test`, including the compute_btc_target_* unit tests in src/trading/engine.rs -- update their expected values if the new formula legitimately changes them (do not weaken or delete a test just to make it pass). Add at least one new unit test covering a point where trend and mean-reverting sub-signals disagree, asserting the mean-reverting family dominates.",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff touches compute_btc_target's body, so the reviewer gives it the scrutiny an allocation-formula change deserves.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or anything on the live order-submission path."
+  ]
+}

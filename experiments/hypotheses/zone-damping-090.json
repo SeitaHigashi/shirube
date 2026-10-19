@@ -1,0 +1,33 @@
+{
+  "name": "zone-damping-090",
+  "kind": "parameter",
+  "rationale": "First of the two interpolation points 2026-09-17's lead #1 asked for on the band-width dose-response curve, which now has a bracket but no usable dose inside it. The zone band maps the composite onto the allocation target with slope 1/(hold_btc_above - hold_jpy_below) about the neutral midpoint 0.5, so the baseline's 0.1/0.9 band is slope 1.25 and any symmetric widening is exactly a damping of the target about neutral: 0.0/1.0 is slope 1.00 = x0.80 damping, and 0.0555556/0.9444444 is slope 1.125 = x0.90. Measured at the promotion capital, damping x1.00 gave 76 trades, x0.80 gave 10 and x0.75 gave 1, while Sharpe improved monotonically as damping fell (+6.247 absolute at x0.80, the largest Sharpe gain this pipeline has ever measured) — so every dose tested so far has died on MIN_TRADE_COUNT_RATIO rather than on performance, and the only open question is whether a dose exists between x1.00 and x0.80 that keeps at least half the baseline's trades. x0.90 is the midpoint of that interval and the larger of the two doses being tested this run. As with x0.80, the realised composite band (measured 2026-09-17 as [0.336, 0.655]) stays far inside both zone boundaries, so neither saturation arm is reached and the mapping is pure linear damping with no code change, no new config field and no live-path risk. This also satisfies the doc's warning-rule requirement that a cost-targeting hypothesis be generated: damping cuts turnover directly, and it must be scored on total_fees_jpy rather than on trade count, per the sublinearity caveat (at x0.80 fees fell 84.4% at 50,000 JPY while effective_fee_pct rose).",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.0555556,
+      "hold_btc_above": 0.9444444
+    },
+    "rebalance_interval_secs": 60
+  },
+  "paper_reference": {
+    "title": "On Frequency-Based Optimal Portfolio with Transaction Costs",
+    "authors": "Chung-Han Hsieh, Yi-Shan Wong",
+    "venue_year": "arXiv:2301.02754, 2023",
+    "url": "https://arxiv.org/abs/2301.02754",
+    "key_claim": "Once transaction costs are charged, the frequency-dependent log-optimal portfolio can be driven to bankruptcy, and the cost-aware solution is approximated by a two-fund result — a fixed risky allocation blended with cash — i.e. the cost-aware optimum is a shrunk version of the cost-free one rather than a differently-timed one.",
+    "pros": "It is the closest published statement of the mechanism this hypothesis tests: under costs, the right correction to an aggressive allocation rule is to shrink its amplitude toward the neutral/cash mix, which is exactly what widening the zone band does to shirube's target. shirube's own measurements are consistent with the direction — every amplitude reduction tested so far improved Sharpe at the promotion capital — and the paper supplies a reason to expect a interior optimum rather than a monotone 'damp as hard as possible' answer.",
+    "cons": "It is a theory paper about log-optimal (Kelly-type) portfolios with a proportional cost model, evaluated on equity price data, not a BTC/JPY intraday study; it offers no number shirube can use for a dose, and its empirical section is a sliding-window demonstration rather than a held-out test. Its two-fund result also assumes an estimable expected-return vector, which shirube's composite does not provide — the composite is an allocation level with no units of expected return, so the mapping to 'shrinkage' is an analogy. This hypothesis was generated from shirube's own measured dose bracket, not from the paper; the citation corroborates the mechanism and contributes nothing to the choice of x0.90, and promotion stays gated entirely on shirube's own holdout backtest."
+  }
+}

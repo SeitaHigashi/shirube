@@ -1,0 +1,35 @@
+{
+  "name": "tighter-daily-drawdown-breaker",
+  "kind": "parameter",
+  "rationale": "max_daily_drawdown has sat at its 0.05 default for every run so far, and on every holdout measured to date it has never fired: the 2026-09-08 runs recorded whole-window max drawdowns of 4.29%, 4.76% and 4.28%, all of which are multi-day figures, so the per-simulated-day drawdown that RiskManager::check_drawdown actually tests has stayed comfortably under 5%. The circuit breaker is therefore currently inert -- a risk gate that has never been exercised by any backtest in this pipeline, on windows that have all lost 3.3-4.1%. This hypothesis tightens it to 0.02 so it becomes a live constraint, halting new orders for the remainder of any simulated day in which the portfolio has already lost 2% from that day's opening value. RiskManager::observe_time re-baselines off candle.open_time, so this behaves in backtest exactly as it would live. Honest counter-argument, stated up front: the breaker only blocks order submission, it does not liquidate, so on a falling day it freezes existing BTC exposure rather than reducing it, and it blocks the signal-driven sell as readily as the buy. It is genuinely unclear which effect dominates on these windows -- which is precisely what the backtest is for. Also watch the trade-count floor: turnover is already at 25 trades / 14 days (1.79/day) and a breaker that fires often could push the candidate under 50% of baseline and be rejected on sample size alone.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.02,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  },
+  "paper_reference": {
+    "title": "Systematic Trend-Following with Adaptive Portfolio Construction: Enhancing Risk-Adjusted Alpha in Cryptocurrency Markets",
+    "authors": "Duc Bui, Thanh Nguyen",
+    "venue_year": "arXiv:2602.11708, 2026",
+    "url": "https://arxiv.org/abs/2602.11708",
+    "key_claim": "A high-frequency (6h) crypto trend-following framework with a dynamic trailing stop calibrated to intra-day volatility regimes achieves an annualized Sharpe of 2.41 and a maximum drawdown of -12.7% across 150+ pairs over a 36-month out-of-sample window (2022-2024), with transaction costs modeled; the authors attribute much of the drawdown control to the intra-day stop rather than to signal quality.",
+    "pros": "Same asset class and a comparable intraday-to-hourly cadence, an out-of-sample evaluation window, and transaction costs explicitly modeled. Its central claim -- that an intra-day loss cut-off, not better signals, is what controls drawdown -- maps onto the one risk mechanism shirube already has and has never used: a per-day drawdown circuit breaker that no backtest in this pipeline has ever tripped. It argues for making that gate binding before adding new machinery.",
+    "cons": "The paper's stop is a per-position trailing stop that exits into cash and is recalibrated to a measured volatility regime; shirube's circuit breaker is neither -- it is a fixed-percentage, portfolio-level, submission-blocking gate that does not liquidate, so the mechanism being tested here is a much cruder relative of the paper's. The paper is also long-short and multi-asset across 150+ pairs with rolling Sharpe-based selection, so its Sharpe of 2.41 is a portfolio-construction result that cannot be attributed to the stop alone, and none of it transfers to a single-instrument BTC/JPY spot allocation. The specific 0.02 threshold appears nowhere in the paper and is this hypothesis's own guess. shirube's own 14-day holdout backtest, not the paper's figures, decides."
+  }
+}

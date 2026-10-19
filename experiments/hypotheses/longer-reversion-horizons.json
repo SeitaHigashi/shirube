@@ -1,0 +1,27 @@
+{
+  "name": "longer-reversion-horizons",
+  "kind": "parameter",
+  "rationale": "The mean-reverting family (RSI, Bollinger %B) carries weight 1.0 against 0.25 for the trend family, so its horizon dominates the composite, and only one direction of that horizon has ever been tested: reversion-horizon-15m (2026-09-10) shortened rsi_period and bollinger_period to 15 bars and lost 7.9% Sharpe. The 2026-09-22 close-location-subsignal result showed the same thing from a different angle: injecting a bar-level, near-binary observable raised primary-capital trades 31 -> 83 and cut Sharpe 82.8%, i.e. the faster the information feeding the composite, the more it churns. The 2026-09-25 baseline is again churn-dominated at the diagnostic capitals (833 trades, win_rate 0.146, fee_drag_pct 6.20 at 500,000 JPY). This tests the untested direction: rsi_period 42 -> 90 and bollinger_period 60 -> 120 (roughly 1.5h and 2h at 60s bars), keeping both inside the ~4-hour horizon over which arXiv:2608.21888 (cited by reversion-horizon-15m) found short-horizon crypto reversal still carries skill. Trend periods, zones, threshold and spacing are unchanged, so it isolates the reversion horizon. Side effect to declare: bollinger_period also sets bb_middle, which compute_btc_target uses as the scale reference for the MACD histogram, so the MACD sub-signal's scaling shifts slightly.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 90,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 120,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 60,
+    "signal_block_secs": 0
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "half-hour-throttle-intermediate-reversion",
+  "kind": "parameter",
+  "rationale": "Every throttle variant since 2026-09-21 improved Sharpe and drawdown at all three capitals but failed only the >=50% trade-count criterion (1h/1h kept 17% on 2026-10-01). This is the mildest diagonal throttle not yet tried (1800s block, 1800s spacing), paired with the rsi 60 / bollinger 90 horizons that drove the 2026-10-01 static-mix-beating result, aiming to keep a promotable trade count at 50,000 JPY while still cutting turnover. Score on total_fees_jpy, not trade count; caveat that at 50,000 JPY a block throttle can be anti-throttling (2026-09-21 signal_block_secs measurement).",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 60,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 90,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 1800,
+    "signal_block_secs": 1800
+  }
+}

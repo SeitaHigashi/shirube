@@ -1,6 +1,7 @@
 use tokio_rusqlite::Connection;
 
 use super::{
+    backtest_runs::BacktestRunRepository,
     candles::CandleRepository,
     config::ConfigRepository,
     mock_state::MockStateRepository,
@@ -56,5 +57,24 @@ impl Database {
 
     pub fn tickers(&self) -> TickerRepository {
         TickerRepository::new(self.conn.clone())
+    }
+
+    pub fn backtest_runs(&self) -> BacktestRunRepository {
+        BacktestRunRepository::new(self.conn.clone())
+    }
+
+    /// Checkpoint the WAL into the main file and VACUUM, so an on-disk copy
+    /// of the DB reflects every committed write and carries no free pages.
+    /// Used by `shirube backtest-data push` before gzip-compressing the file
+    /// for upload — without this, the uploaded asset can miss recently
+    /// written bars (still sitting in `-wal`) and is larger than necessary.
+    pub async fn checkpoint_and_vacuum(&self) -> Result<()> {
+        self.conn
+            .call(|c| {
+                c.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
+                Ok(())
+            })
+            .await?;
+        Ok(())
     }
 }

@@ -1,12 +1,16 @@
 mod api;
+mod backtest;
+mod cli;
 mod config;
 mod error;
 mod exchange;
+mod http;
 mod market;
 mod news;
 mod risk;
 mod signal;
 mod storage;
+mod sync_ext;
 mod trading;
 mod types;
 mod updater;
@@ -33,6 +37,13 @@ async fn main() -> anyhow::Result<()> {
     // Print version and exit (used by the auto-updater smoke test)
     if std::env::args().any(|a| a == "--version") {
         println!("{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
+    // Headless subcommands for the automated variant-validation pipeline
+    // (see docs/self-improvement-loop.md). Handled before server startup
+    // so they stay fast and don't require TLS/tracing setup.
+    if cli::dispatch().await? {
         return Ok(());
     }
 
@@ -75,12 +86,17 @@ async fn main() -> anyhow::Result<()> {
     };
     let trading_config = Arc::new(RwLock::new(trading_config_value));
 
-    let has_api_keys =
-        std::env::var("BITFLYER_API_KEY").is_ok() && std::env::var("BITFLYER_API_SECRET").is_ok();
+    // Read both credentials once: pattern-matching on the pair avoids the
+    // is_ok()-then-unwrap() dance and keeps "present" and "usable" in sync.
+    let api_credentials = match (
+        std::env::var("BITFLYER_API_KEY"),
+        std::env::var("BITFLYER_API_SECRET"),
+    ) {
+        (Ok(key), Ok(secret)) => Some((key, secret)),
+        _ => None,
+    };
 
-    let client: Arc<dyn ExchangeClient> = if has_api_keys {
-        let key = std::env::var("BITFLYER_API_KEY").unwrap();
-        let secret = std::env::var("BITFLYER_API_SECRET").unwrap();
+    let client: Arc<dyn ExchangeClient> = if let Some((key, secret)) = api_credentials {
         info!("Using BitFlyerRestClient with real API keys");
         Arc::new(exchange::bitflyer::rest::BitFlyerRestClient::new(key, secret))
     } else {
@@ -159,9 +175,9 @@ async fn main() -> anyhow::Result<()> {
                     warmup_signals = indicators
                         .iter_mut()
                         .map(|ind| {
-                            let signal = ind.update(candle);
+                            ind.update(candle);
                             let value = ind.value();
-                            IndicatorSignal { name: ind.name().to_string(), signal, value }
+                            IndicatorSignal { name: ind.name().to_string(), value }
                         })
                         .collect();
                 }
@@ -175,17 +191,36 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // SignalEngine: Candle → Signal（config_rx 経由でライブ設定変更を受信）
-    let (signal_engine, signal_engine_tx, signal_rx) =
+    // SignalEngine: Candle → IndicatorOutput（config_rx 経由でライブ設定変更を受信）
+    let (signal_engine, _indicator_tx, indicator_rx) =
         SignalEngine::new(indicators, market_bus.candle_rx(), config_rx);
     tokio::spawn(signal_engine.run());
 
+    // News cache shared between TradingEngine and the news AI task.
+    // Declared here so TradingEngine can hold a reference before the news task starts.
+    let news_cache: Arc<RwLock<Vec<crate::news::analyzer::SentimentScore>>> =
+        Arc::new(RwLock::new(vec![]));
+
+    // TradingEngine: IndicatorOutput → aggregate_with_zone → RiskManager → send_order → SignalDetail broadcast
+    let (trading_engine, signal_detail_tx) = TradingEngine::new(
+        indicator_rx,
+        Arc::clone(&client),
+        RiskManager::new(init_risk_params),
+        "BTC_JPY".to_string(),
+    );
+    let trading_engine = trading_engine
+        .with_config(Arc::clone(&trading_config))
+        .with_order_repo(db.orders())
+        .with_news_cache(Arc::clone(&news_cache));
+    tokio::spawn(trading_engine.run());
+
     // 最新シグナルをキャッシュするタスク（API配信用）
+    // TradingEngine が SignalDetail をブロードキャストするので、そちらを subscribe する
     let latest_signal: Arc<RwLock<Option<crate::signal::SignalDetail>>> =
         Arc::new(RwLock::new(None));
     {
         let cache = Arc::clone(&latest_signal);
-        let mut rx = signal_engine_tx.subscribe();
+        let mut rx = signal_detail_tx.subscribe();
         tokio::spawn(async move {
             loop {
                 match rx.recv().await {
@@ -198,43 +233,50 @@ async fn main() -> anyhow::Result<()> {
     }
     // ウォームアップ結果でシグナルキャッシュを事前初期化（ライブCandle待ちで様子見になるのを防ぐ）
     if !warmup_signals.is_empty() {
-        use crate::signal::Signal;
-        let raw: Vec<Option<Signal>> =
-            warmup_signals.iter().map(|is| is.signal.clone()).collect();
-        let aggregated = SignalEngine::aggregate(&raw, init_cfg.signal_threshold);
+        // target_pct at warmup: no sticky_target yet, use neutral 0.5
         let detail = SignalDetail {
-            aggregate: aggregated,
+            aggregate: crate::signal::AllocationSignal { normalized: 0.5 },
+            target_pct: 0.5,
             indicators: warmup_signals,
+            raw_indicators: None,
             calculated_at: chrono::Utc::now(),
-            calculation_state: "active".to_string(),
+            calculation_state: "waiting_for_data".to_string(),
         };
         *latest_signal.write().await = Some(detail);
         info!("Pre-populated signal cache from warmup data");
     }
 
-    // TradingEngine: Signal → RiskManager → send_order
-    let trading_engine = TradingEngine::new(
-        signal_rx,
-        Arc::clone(&client),
-        RiskManager::new(init_risk_params),
-        "BTC_JPY".to_string(),
-    )
-    .with_config(Arc::clone(&trading_config))
-    .with_order_repo(db.orders());
-    tokio::spawn(trading_engine.run());
-
     // News AI タスク起動（5分ごとにRSSフィードを取得、新規記事のみOllamaでセンチメント分析）
-    let news_cache = Arc::new(RwLock::new(vec![]));
     {
         let cache = Arc::clone(&news_cache);
         let news_repo = db.news_sentiments();
+        // NOTE: Ollama is an optional dependency — NewsAnalyzer falls back to
+        // score = 0.0 when the server is unreachable, so a missing env var must
+        // never abort startup. These defaults match the documented ones in
+        // README.md / CLAUDE.md; flake.nix overrides them for real deployments.
         let ollama_url = std::env::var("OLLAMA_URL")
             .unwrap_or_else(|_| "http://localhost:11434".to_string());
-        let ollama_model = std::env::var("OLLAMA_MODEL")
-            .unwrap_or_else(|_| "qwen3.6:27b".to_string());
+        let ollama_model =
+            std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "llama3".to_string());
         let feed_urls: Vec<String> = std::env::var("NEWS_FEED_URLS")
             .unwrap_or_else(|_| {
-                "https://feeds.feedburner.com/CoinDesk,https://cointelegraph.com/rss".to_string()
+                [
+                    // North America
+                    "https://feeds.feedburner.com/CoinDesk",
+                    "https://cointelegraph.com/rss",
+                    "https://www.theblock.co/rss.xml",
+                    "https://decrypt.co/feed",
+                    // Europe
+                    "https://news.bitcoin.com/feed/",
+                    "https://cryptoslate.com/feed/",
+                    // Asia-Pacific
+                    "https://coinpost.jp/?feed=rss2",
+                    "https://forkast.news/feed/",
+                    // Global / broad coverage
+                    "https://ambcrypto.com/feed/",
+                    "https://cryptonews.com/news/feed/",
+                ]
+                .join(",")
             })
             .split(',')
             .map(|s| s.trim().to_string())
@@ -307,7 +349,7 @@ async fn main() -> anyhow::Result<()> {
         exchange: Arc::clone(&client),
         candle_tx: market_bus.candle_tx(),
         ticker_tx: market_bus.ticker_tx(),
-        signal_tx: signal_engine_tx,
+        signal_tx: signal_detail_tx,
         ws_tx: ws_tx_for_api,
         aggregator_registry: std::sync::Arc::new(tokio::sync::Mutex::new(
             std::collections::HashMap::new(),

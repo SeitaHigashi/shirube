@@ -1,0 +1,672 @@
+[
+  {
+    "name": "wider-bollinger-band-2.5std",
+    "content_hash": "fb8d38af7260bcfdf02ba508d959e6fe792b50a5a460b78ab604c5b6b36ef7a7",
+    "tried_at": "2026-09-07T11:48:28Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 0.0,
+    "report_path": null
+  },
+  {
+    "name": "add-volume-weighted-ma-indicator",
+    "content_hash": "dc3ac79176c69fc348ea9ffb7b366de94788b8acedbe37f6c92fe612496ef7b4",
+    "tried_at": "2026-09-07T11:48:28Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 0.0,
+    "report_path": null
+  },
+  {
+    "name": "shorter-hourly-indicator-periods",
+    "content_hash": "6014c84d00dc6d81336a6f2e118df286a1ff3477aa30a2504622ff82eeef854c",
+    "tried_at": "2026-09-08T00:11:53Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 14.806324475962835,
+    "report_path": "experiments/reports/2026-09-08.md"
+  },
+  {
+    "name": "lower-allocation-threshold",
+    "content_hash": "e37da478edf2b034ddb8543664ff3246ca79e4215ca1e0c531a92e0941c10c98",
+    "tried_at": "2026-09-08T00:11:53Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -1.9550552266836334,
+    "report_path": "experiments/reports/2026-09-08.md"
+  },
+  {
+    "name": "continuous-crossover-subsignals",
+    "content_hash": "bda9e0f7e8a29e28c1efeb7ad3e37c483c55c633aa5dcf80d8a38cf439cc2369",
+    "tried_at": "2026-09-08T00:11:53Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 16.54397116426815,
+    "report_path": "experiments/reports/2026-09-08.md"
+  },
+  {
+    "name": "medium-hourly-indicator-periods",
+    "content_hash": "6aeb81facff609b846d8c58ed47a4d2442327b492946ce1aa4b92291c1bf2f9b",
+    "tried_at": "2026-09-08T12:16:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 3.9377503505006004,
+    "report_path": "experiments/reports/2026-09-08.md"
+  },
+  {
+    "name": "damped-crossover-subsignals",
+    "content_hash": "4a8b90bfe8d75735cd1679de94e11f0d70462077bfb0d2e43f156f16649e7f78",
+    "tried_at": "2026-09-08T12:16:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 10.060978244302035,
+    "report_path": "experiments/reports/2026-09-08.md"
+  },
+  {
+    "name": "volatility-scaled-zone-width",
+    "content_hash": "1c7d380e540c87e88e7777e028a685d0a3769ee2236118f307246ef391dbb9b0",
+    "tried_at": "2026-09-08T12:16:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -5.188880769844879,
+    "report_path": "experiments/reports/2026-09-08.md"
+  },
+  {
+    "name": "full-ta-weight-no-sentiment",
+    "content_hash": "c950ae016e815f35112e3e9e4da2a4540df904c788596c033175e3d4a735ecdb",
+    "tried_at": "2026-09-08T16:35:50Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -0.6737796167435608,
+    "report_path": "experiments/reports/2026-09-08.md"
+  },
+  {
+    "name": "damped-crossover-lower-threshold",
+    "content_hash": "122e8980a0f7ad2942c4a09406d9f05f546daa20d20ba29588bf44bc11c7f4f7",
+    "tried_at": "2026-09-08T16:35:50Z",
+    "verdict": "promoted",
+    "sharpe_improvement_pct": 0.8484224006907981,
+    "report_path": "experiments/reports/2026-09-08.md"
+  },
+  {
+    "name": "trend-weighted-subsignals",
+    "content_hash": "354b05ead3b828dbd7f626a302f6f8843f79d45f987f932980961ceacdcb30b0",
+    "tried_at": "2026-09-08T16:35:50Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -1.2366469277633152,
+    "report_path": "experiments/reports/2026-09-08.md"
+  },
+  {
+    "name": "narrow-zone-band",
+    "content_hash": "67656691b4857ec4a0bf897431f59fea5e5fe959949ba0e830e3256a61ce3ec7",
+    "tried_at": "2026-09-08T19:36:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -0.7550657468882633,
+    "report_path": "experiments/reports/2026-09-08.md"
+  },
+  {
+    "name": "tighter-daily-drawdown-breaker",
+    "content_hash": "b52f63df180db6df73e638849e109e4b4263b9e4bc8b6f80e06375ee7f0fba0c",
+    "tried_at": "2026-09-08T19:36:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 0.0,
+    "report_path": "experiments/reports/2026-09-08.md"
+  },
+  {
+    "name": "sma-regime-gate",
+    "content_hash": "fc56f29dd85ea7bd2d0c22d390bc23ae3dcbe294d103120c4960ab90751c13cb",
+    "tried_at": "2026-09-08T19:36:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 0.0,
+    "report_path": "experiments/reports/2026-09-08.md"
+  },
+  {
+    "name": "wide-zone-band",
+    "content_hash": "fab2a98affec3fe9e6379fef0335dff590a5b540cdc31f142271f4d8d56f191c",
+    "tried_at": "2026-09-09T03:16:00Z",
+    "verdict": "promoted",
+    "sharpe_improvement_pct": 0.49095172499840967,
+    "report_path": "experiments/reports/2026-09-09.md"
+  },
+  {
+    "name": "mean-reversion-weighted-subsignals",
+    "content_hash": "37779570b229e7a568cb1c0b595757748d1324f4ddf7ecad208491a273b2e022",
+    "tried_at": "2026-09-09T03:16:00Z",
+    "verdict": "promoted",
+    "sharpe_improvement_pct": 2.2395116023459343,
+    "report_path": "experiments/reports/2026-09-09.md"
+  },
+  {
+    "name": "realized-vol-scaled-exposure",
+    "content_hash": "97c82753019fd573cdaa8f7bcb162a5b1bab84efe61b5e38de5515843688a23a",
+    "tried_at": "2026-09-09T03:16:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -0.13991387377509934,
+    "report_path": "experiments/reports/2026-09-09.md"
+  },
+  {
+    "name": "higher-allocation-threshold",
+    "content_hash": "f7edc79da1fd68811a5964bd377c294d24a634f812cedc20736cd068e6831985",
+    "tried_at": "2026-09-09T19:15:46Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 3.206527312350171,
+    "report_path": "experiments/reports/2026-09-09.md"
+  },
+  {
+    "name": "cost-aware-rebalance-filter",
+    "content_hash": "7ca069272bdc9e7d2cd00aa2bfab33e47e3b1a3c74bf780f7613689942717555",
+    "tried_at": "2026-09-09T19:15:46Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 10.56585846998212,
+    "report_path": "experiments/reports/2026-09-09.md"
+  },
+  {
+    "name": "trend-weight-half",
+    "content_hash": "0f082986e1844027d628fcf5ddd3319d704ec4fa5989fffdc3fbf7c4e6237775",
+    "tried_at": "2026-09-09T19:15:46Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 1.954207468767919,
+    "report_path": "experiments/reports/2026-09-09.md"
+  },
+  {
+    "name": "code-default-allocation-threshold",
+    "content_hash": "6c19ca281a4727f645a06da0a9b47cf904d73657c2b2dbcedcd3623575c11f46",
+    "tried_at": "2026-09-10T19:15:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 0.7730859849932461,
+    "report_path": "experiments/reports/2026-09-10.md"
+  },
+  {
+    "name": "reversion-horizon-15m",
+    "content_hash": "b95d16536890426797414b1eb3d330315a9c2cfaf07342d273eb4d6439fc7e17",
+    "tried_at": "2026-09-10T19:15:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -7.874660226799847,
+    "report_path": "experiments/reports/2026-09-10.md"
+  },
+  {
+    "name": "rolling-vol-scaled-exposure",
+    "content_hash": "149338ee1ac992818ca357cf0e9132bd4fa9f38265ef469ff42f71ce0bb9211f",
+    "tried_at": "2026-09-10T19:15:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -1.8982314641435067,
+    "report_path": "experiments/reports/2026-09-10.md"
+  },
+  {
+    "name": "fee-tier-aware-allocation-threshold",
+    "content_hash": "e79038afa2e9bfdd9682aaf0b4b4a164e499bc33e264e08a2b5976dd4c2d8f4a",
+    "tried_at": "2026-09-11T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -6.817673140530027,
+    "report_path": "experiments/reports/2026-09-11.md"
+  },
+  {
+    "name": "min-notional-aware-rebalance",
+    "content_hash": "c6560399ebf14c54ac145aaf3d556c7bf34a5268fb0734daa516088711f178a9",
+    "tried_at": "2026-09-11T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -93.13935424342688,
+    "report_path": "experiments/reports/2026-09-11.md"
+  },
+  {
+    "name": "boundary-rebalance-no-trade-band",
+    "content_hash": "22c6fdcbb5bdb11caa40dc970ab8365beaeebf26dc2b6924060a2dea57484f4c",
+    "tried_at": "2026-09-12T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 4.7823588237957315,
+    "report_path": "experiments/reports/2026-09-12.md",
+    "note": "Rejected solely on the trade-count criterion (2 vs 70 = 3% of baseline). Sharpe improved 4.782 absolute and max drawdown improved 2.18pp, and every metric improved at 500k and 5M too. The collapse to 2 trades is the 0.001 BTC lot floor at 50,000 JPY, not the mechanism: excess_return_vs_static_mix_pct went -2.98 -> +0.02, i.e. the variant essentially became its own static mix. Worth re-testing at a promotion capital where the lot floor does not bind."
+  },
+  {
+    "name": "reversal-hysteresis-multiplier",
+    "content_hash": "5ad26cce259e6e5b560d6584ac515b5366f678590a8518bfd25c619dec73bd65",
+    "tried_at": "2026-09-12T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 0.0,
+    "report_path": "experiments/reports/2026-09-12.md",
+    "note": "UNTESTABLE at the 50,000 JPY promotion capital, not disproven. The primary report is identical to the baseline in every field except orders_below_min (5960 -> 1340), so sharpe_absolute_delta is exactly 0.000 -- the same shape as the CoinGecko constant-volume VWMA, where 0.0 was arithmetic rather than evidence. The gate demonstrably fired (4,620 would-be reversals suppressed) but all of them were already being dropped by the lot floor. At 500k it cut trades 754 -> 288 (-62%), doubled win rate 0.117 -> 0.246, and improved return -16.09% -> -11.20% and Sharpe -29.57 -> -19.36."
+  },
+  {
+    "name": "rebalance-spacing-15m",
+    "content_hash": "42d117fdbb4d9a9f6153bf40fbf7e5f00033350a917944fdf3419b2155378baf",
+    "tried_at": "2026-09-12T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -3.1284353135978993,
+    "report_path": "experiments/reports/2026-09-12.md",
+    "note": "Rejected on Sharpe (-3.128) and drawdown (+1.57pp) at the primary capital. Effect sign flips between capitals: at 500k/5M spacing halved turnover as predicted (-36% volume, +4.11pp return at 500k), but at 50,000 JPY the lot floor was the real turnover brake and wider spacing lets the delta accumulate, so turnover ROSE 58%. Its prerequisite enabling fix is PR #21, whose merge is gated on a live-vs-backtest semantic question."
+  },
+  {
+    "name": "post-trade-cooldown-30m",
+    "content_hash": "264949b71d577df951c07e9c7be7d3d30d23135e78399b2c5942c226c7e5e2a7",
+    "tried_at": "2026-09-13T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 0.0,
+    "report_path": "experiments/reports/2026-09-13.md",
+    "note": "UNTESTABLE at the 50,000 JPY promotion capital, not disproven. The primary report is identical to the baseline in every field except orders_below_min (5394 -> 5392), so sharpe_absolute_delta is exactly 0.000 -- arithmetic, not evidence. The baseline itself makes only 1 trade this window, so there was no second trade for a cooldown to suppress: of the 13 candles the gate reached, 2 cleared allocation_threshold and ZERO would have produced an order above the 0.001 BTC lot floor. At 500,000 JPY the mechanism suppressed 1,984 real orders, cut trades 765 -> 416 (-46%), and improved Sharpe -30.58 -> -22.19 (+8.386), return -16.69% -> -12.39% and max drawdown 16.91% -> 12.57%; compare-backtest returns promoted:true at BOTH diagnostic capitals. Implementation preserved on origin/experiment/post-trade-cooldown-30m (cargo test 233 passed); compute_btc_target untouched."
+  },
+  {
+    "name": "ewma-smoothed-composite-signal",
+    "content_hash": "23a743e73d51fead0ad343ee365cb4f6e6a6d2c6448c667f5925f54cb080450e",
+    "tried_at": "2026-09-13T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 0.0,
+    "report_path": "experiments/reports/2026-09-13.md",
+    "note": "UNTESTABLE at the 50,000 JPY promotion capital, not disproven -- same shape as post-trade-cooldown-30m and as the CoinGecko constant-volume VWMA. The primary report is identical to the baseline in every field except orders_below_min (5394 -> 209, -96%), which proves the filter fired; it simply had no P&L consequence where the lot floor already suppressed 100% of rebalances. The filter measurably works: realized signal range shrank 48.6% (0.3190 -> 0.1641) and stddev 50.6% (0.07323 -> 0.03617) with the mean preserved to 4dp. At 500,000 JPY it is the largest improvement this pipeline has measured: Sharpe -30.58 -> -6.17, return -16.69% -> -3.73%, max drawdown 16.91% -> 4.52%, fee drag 5.75% -> 0.60%, win rate 0.108 -> 0.417, excess_return_vs_static_mix_pct -13.56 -> -0.54 -- and unlike boundary-rebalance-no-trade-band it does NOT collapse to a static mix (48 trades, 24/24 buy/sell). CAVEAT: the half-life is expressed in BARS; the live SignalEngine re-evaluates at ~4 Hz, so live the effective half-life would be ~7.5s of market time, not 30 minutes. Non-transferable to live until that cadence is resolved. Implementation preserved on origin/experiment/ewma-smoothed-composite-signal (cargo test 236 passed); compute_btc_target untouched."
+  },
+  {
+    "name": "ta-weight-085-signal-amplitude",
+    "content_hash": "85795d340edd74489b87e5d52c2fcf264b029b05a045519e1a91a627c5bd9de1",
+    "tried_at": "2026-09-13T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -14.033944046225361,
+    "report_path": "experiments/reports/2026-09-13.md",
+    "note": "GENUINELY TESTED and decisively refuted -- the only one of today's three the primary capital could score. Amplitude rose 1.2143x (= 0.85/0.70), pushing 143 rebalances through the lot floor that the baseline could not clear: trades 1 -> 144 at 50k, 765 -> 1100 at 500k. Worse on every promotion criterion at all three capitals: Sharpe -5.367 -> -19.401 (-14.034), max drawdown 4.23% -> 12.05% (+7.82pp), return -3.28% -> -11.41%, fee_drag_pct 0.08 -> 4.62. The hypothesis's factual premise was verified TRUE in all four parts (empty news slice pins sentiment_normalized at 0.5; combined spans [0.15,0.85] at ta_weight 0.7; apply_zone's saturation arms are structurally unreachable; target confined to [0.0625,0.9375]) -- but the diagnosis it implied is WRONG. The realized composite never leaves [0.3359, 0.6548], nowhere near either bound, so the zone and the constant sentiment term were never what compressed the signal; the five-sub-signal weighted mean is. Reweighting only dilates the same curve about its centre, buying turnover and cost without buying information."
+  },
+  {
+    "name": "ewma-smoothed-signal-wallclock-30m",
+    "content_hash": "1a84fb33006ebb7ef7d12f8ffd4859962ceff84cd83cd15c768d70cbc162f32a",
+    "tried_at": "2026-09-14T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 2.549876980982274,
+    "report_path": "experiments/reports/2026-09-14.md",
+    "note": "REJECTED ON THE TRADE-COUNT CRITERION ALONE, on a run where the primary capital was NOT degenerate (baseline 48 trades). Both other criteria passed decisively: Sharpe -5.849 -> -3.299 (+2.550 absolute) and max drawdown 5.67% -> 4.61% (-1.06pp). Trade count 2 vs 48 = 4%, below the 50% floor. Same shape at both diagnostic capitals: 500k Sharpe +23.572 (-29.137 -> -5.565), drawdown 16.47% -> 4.91%, trades 64 vs 771 = 8%; 5M Sharpe +17.681, drawdown 13.44% -> 4.70%, trades 8%. The wall-clock reformulation works and is cadence-invariant by construction and by test (a 0->1 step reaches 0.5 after 1800s whether delivered as 30x60s or 7200x250ms updates), so unlike the bar-indexed ewma-smoothed-composite-signal this version IS transferable to the live ~4 Hz engine. Mechanism measured: smoothed signal range -35.7% (0.318991 -> 0.205012), sd -43.7% (0.073610 -> 0.041478); bar-to-bar target moves >= allocation_threshold went 228 raw -> 0 smoothed. CAVEAT: at 50k the variant makes 2 trades, both buys, win rate 0.0, and excess_return_vs_static_mix_pct goes -1.683 -> -0.046, i.e. it again approximates its own static mix; the 500k/5M runs, with 33/31 buy/sell and ~4.6 trades/day, are the informative ones. Implementation preserved on origin/experiment/ewma-smoothed-signal-wallclock-30m (cargo test 255 passed); compute_btc_target untouched."
+  },
+  {
+    "name": "subsignal-agreement-gate",
+    "content_hash": "4f16633aaafa5710cd3d3bea4b2ac302bf5016f412a74fbbe44d1580e02a360f",
+    "tried_at": "2026-09-14T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 2.7031,
+    "report_path": "experiments/reports/2026-09-14.md",
+    "note": "REJECTED ON THE TRADE-COUNT CRITERION ALONE (1 vs 48 = 2%). Sharpe -5.849 -> -3.146 (+2.703) and max drawdown 5.67% -> 4.05% (-1.62pp) both passed. At 500k: Sharpe +18.065, drawdown 16.47% -> 7.62%, trades 199 vs 771 = 26%. THE VERDICT IS NOT THE VALUABLE PART. The instrumented run answers 2026-09-13's lead #4 decisively: over 15,286 candles the gate rejected 13,117 (85.8%), and on ALL 2,998 candles where all five sub-signals expressed an opinion they NEVER ONCE reached 4-of-5 agreement, nor were the 8,230 four-vote candles ever unanimous. Every pass came from a sparse 1-3 voter candle. The composite's narrow [0.3359, 0.6548] band is therefore GENUINE CANCELLATION between a reversion family (RSI, %B) and a trend family (SMA/EMA/MACD) that are near-mechanically opposed -- price above its moving averages is usually also high in the Bollinger band -- not a small real edge being averaged down. Gating did not widen the realized band, it narrowed it ([0.2655,0.7212] -> [0.2876,0.6975] plus an 85.8% point mass at exactly 0.5), because the most extreme points were themselves the disagreeing ones. Also recorded, not retuned: AGREEMENT_MIN_FRACTION=0.8 with majority >= 0.8*n_votes demands unanimity at n=2,3,4 (3-of-4 = 75% fails), so the gate was far stricter than '4 of 5' on sparse candles. Implementation preserved on origin/experiment/subsignal-agreement-gate (cargo test 253 passed); compute_btc_target's BODY was modified (signature unchanged)."
+  },
+  {
+    "name": "post-trade-cooldown-90m",
+    "content_hash": "ea999cf128a821f0bb7f872cb8ae6e26ff029826db79ad89f65c1f96359a084a",
+    "tried_at": "2026-09-14T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -5.7005,
+    "report_path": "experiments/reports/2026-09-14.md",
+    "note": "GENUINELY TESTED AND REFUTED at the promotion capital -- the only one of today's three whose rejection was decided by the strategy metrics rather than by the trade-count floor, and the first cooldown result this pipeline has been able to score at 50,000 JPY. Sharpe -5.849 -> -11.549 (-5.701), max drawdown 5.67% -> 8.07% (+2.40pp), return -3.76% -> -6.89%; the trade-count criterion PASSED at 175%. The counter-intuitive mechanism is measured, not inferred: a suppression-only gate RAISED the trade count at 50k (48 -> 84) because the 0.001 BTC lot floor, not the signal, sets trade size there -- suppressing rebalances lets allocation drift accumulate, so the pending delta clears the floor more often (orders_below_min 6203 -> 4376, 1,827 previously-dropped rebalances became 36 extra fills, traded volume doubled, fee_drag_pct 1.70 -> 2.83). The cooldown fired hard everywhere (465 suppressions at 50k, 5,141 at 500k, 5,140 at 5M). At the diagnostic capitals it looks strongly beneficial on Sharpe (+17.456 at 500k, +13.624 at 5M) and drawdown but fails trade count at 25%. It closes no part of the static-mix gap at any capital (sharpe_minus_static_mix -8.41 at 50k vs baseline -2.72). Discarded outright: worktree and branch deleted, nothing preserved. compute_btc_target untouched."
+  },
+  {
+    "name": "classic-macd-periods",
+    "content_hash": "0696c1a7e7d8f17d0fe25e1e6861af9e58ac0cb4ee27b5461936c86bc4fd1f98",
+    "tried_at": "2026-09-15T19:00:00Z",
+    "verdict": "promoted",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 0.16557836076430554,
+    "report_path": "experiments/reports/2026-09-15.md",
+    "note": "PROMOTED -- the first promotion since 2026-09-08 and the first three-Pro, zero-Con verdict this pipeline has produced. Sharpe -5.494 -> -5.329 (+0.166 absolute, clearing the 0.1 floor), max drawdown 5.16% -> 5.13% (-0.03pp), trade count 20 vs 24 = 83%. kind: parameter, so no source change: macd_fast 52 -> 12, macd_slow 104 -> 26, macd_signal 18 -> 9 and nothing else, isolating the one indicator horizon never re-examined since the 2026-09-09 resolution fix. PR #24 against dev; an operator must also apply the values via PUT /api/config on the running instance. THREE HONEST CAVEATS, all recorded in the PR: (1) the hypothesis's own directional prediction was WRONG at the deciding capital -- it predicted a faster MACD would raise turnover, and at 50k turnover FELL (20 vs 24 trades, 266k vs 322k JPY volume), so the trade-count floor was cleared by margin rather than by the predicted mechanism; (2) both diagnostic capitals are slightly WORSE and agree in sign (500k Sharpe -30.468 vs -30.457, return -16.67% vs -16.64%; 5M Sharpe -24.143 vs -24.123) -- unthrottled by the lot floor the faster MACD trades slightly more (792 vs 789/791) and loses slightly more; (3) it does not close the benchmark gap, sharpe_minus_static_mix -1.315 -> -1.149 but still firmly negative, and both hold (-4.97%) and the static mix (-2.75%) still beat the strategy. The improvement has the shape 'trade slightly less in a down market'. cargo test 246 passed on an unmodified tree; compute_btc_target untouched."
+  },
+  {
+    "name": "family-vote-aggregation",
+    "content_hash": "3f1d1fed7329c99be8a353d6a42e5fb0f0de0ee8979896cbcb5dc3ec027b58e8",
+    "tried_at": "2026-09-15T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -17.44715469147214,
+    "report_path": "experiments/reports/2026-09-15.md",
+    "note": "GENUINELY REFUTED, not a trade-count rejection: Sharpe -5.494 -> -22.941 (-17.447), max drawdown 5.16% -> 13.48% (+8.32pp), return -3.59% -> -12.97%; the trade-count criterion PASSED at 821% (197 vs 24). Answers 2026-09-14's lead #4 with a measurement. Collapsing the five sub-signals to two family votes (unweighted mean within each family, then the existing 1.0/0.25 family weights) makes the realised reversion:trend ratio exactly 4:1 instead of 2.67:1. Instrumented over the same 15,417 candles, emitting BOTH formulas per call: the composite band widened from [0.335850, 0.654840] to [0.334181, 0.681205] -- width +8.8%, sd +19.4% (0.0736 -> 0.0878) -- and the baseline column reproduced the 2026-09-14 figure EXACTLY, validating the harness. So the cancellation is only PARTLY a vote-counting artifact: removing the 3-vs-2 inflation does let the composite reach further, but essentially all the widening is on the bullish side (max 0.6548 -> 0.6812, min 0.3359 -> 0.3342) and a 4:1 ratio still leaves the composite inside roughly +/-0.17 of neutral. The two families really are near-mechanically opposed, as 2026-09-14 concluded. The 8.8% wider band drove 8.2x the turnover at 50k, and that extra turnover was pure damage (fee_drag_pct 0.90 -> 6.02). Both diagnostics agree (500k Sharpe -38.461, 5M -30.764). compute_btc_target's BODY was modified (signature unchanged); cargo test 250 passed, two existing tests' expected values legitimately updated, none weakened or deleted. Discarded outright: worktree and branch deleted."
+  },
+  {
+    "name": "contrarian-trend-subsignals",
+    "content_hash": "a50fb1719be975924dc07302f515660c5eb666f7b2dc598b68dca45334867f8d",
+    "tried_at": "2026-09-15T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -18.366375290520644,
+    "report_path": "experiments/reports/2026-09-15.md",
+    "note": "GENUINELY REFUTED and the most informative result of the run. Sharpe -5.494 -> -23.861 (-18.366), max drawdown 5.16% -> 14.81% (+9.64pp), return -3.59% -> -14.11%; trade count PASSED at 867% (208 vs 24). First test of the trend family's SIGN rather than its gain -- trend-weighted-subsignals, trend-weight-half and mean-reversion-weighted-subsignals all varied a non-negative weight and none could have detected a sign error. Literature-motivated (arXiv:2608.21888, crypto short-horizon dynamics measured as reversal-dominant, 'the signal lives in signs, not magnitudes'). The predicted mechanism was CONFIRMED and the outcome still refuted the idea: inverting the trend family makes all five sub-signals agree instead of oppose, and the composite band widened 1.66x ([0.3359,0.6548] -> [0.2410,0.7712], sd 0.0736 -> 0.1201), with turnover rising 24 -> 208 at 50k and 789 -> 1439 at 500k. THE STANDING CONCLUSION THIS SUPPORTS: taken with ta-weight-085-signal-amplitude (2026-09-13, amplified the composite, Sharpe -14.034), the composite now has negative edge in BOTH signs, so band width itself is the damage mechanism -- whichever way it points, a wider band means more exposure swing, more turnover and more fee drag against a series the signal cannot time. Both the gain and the sign of the trend family have now been tested; what has never been tested is whether the composite should drive exposure AT ALL versus a damped or static allocation. compute_btc_target's BODY was modified (signature unchanged); cargo test 251 passed. One fixture outside engine.rs was adapted and is flagged rather than buried: simulator.rs::run_with_drawdown_limit used a RISING price series to build a BTC position before its crash, which reads bearish under the inversion, so it was flipped to a falling series -- all three assertions (circuit_breaker_trips >= 1, orders_rejected >= 1, the 0.99-limit inert case) unchanged. Discarded outright: worktree and branch deleted."
+  },
+  {
+    "name": "damped-composite-exposure",
+    "content_hash": "463e9151c4647d9f9b728f3f7d6cf45dc0f1fe0a293289b69e7321aca628d5fc",
+    "tried_at": "2026-09-16T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-09-16.md"
+  },
+  {
+    "name": "binding-allocation-threshold-030",
+    "content_hash": "e50a61b9219765a6943926dd6035b04b5b12e91e4c3ce37b954fc48478ce1370",
+    "tried_at": "2026-09-16T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-09-16.md"
+  },
+  {
+    "name": "h6-block-held-signal",
+    "content_hash": "699784779b1fc80ff826f124a8d10d0279b8fbfdb1c7559f39cb137fdda18450",
+    "tried_at": "2026-09-16T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-09-16.md"
+  },
+  {
+    "name": "flat-zone-slope-damping",
+    "content_hash": "3739651a735210178db01eb0922402bc268c0c4f0f7870da3d6a1ed542e1d096",
+    "tried_at": "2026-09-17T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-09-17.md"
+  },
+  {
+    "name": "conviction-gated-rebalance",
+    "content_hash": "2b50cfe50df63ddcf07c9dc83f766fa516c9f252ce161921fe3b394276ebdf1c",
+    "tried_at": "2026-09-17T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-09-17.md"
+  },
+  {
+    "name": "h1-block-held-signal",
+    "content_hash": "65a8dbbff340d35059245207a35dbac32e116a4331db9201fdc03d1f8485cef0",
+    "tried_at": "2026-09-17T19:00:00Z",
+    "verdict": "promoted",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-09-17.md"
+  },
+  {
+    "name": "zone-damping-090",
+    "content_hash": "6ecdc41fb87a5960103d1eb68ecfc56d0f19cb2b584e3473da0f0fe288a51de2",
+    "tried_at": "2026-09-18T19:00:00Z",
+    "verdict": "promoted",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-09-18.md"
+  },
+  {
+    "name": "zone-damping-095",
+    "content_hash": "c7fa8a3504c6d313cdfe51f89e4324aab6067631abce2a7efe72c948724c7c25",
+    "tried_at": "2026-09-18T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-09-18.md"
+  },
+  {
+    "name": "hourly-rebalance-spacing",
+    "content_hash": "782fa94fb0a408481ccccfff188024726843bd1866bd074bff2527d23ad1d404",
+    "tried_at": "2026-09-18T19:00:00Z",
+    "verdict": "promoted",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-09-18.md"
+  },
+  {
+    "name": "hourly-spacing-zone-damping-090-combined",
+    "content_hash": "329e872ad01a37ed0e330946c1d2bd292861577ef2cc7e0cd2d5de0c01a41e16",
+    "tried_at": "2026-09-20T19:10:42Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 9.957628398825332,
+    "report_path": "experiments/reports/2026-09-20.md"
+  },
+  {
+    "name": "signal-block-3600-parameter",
+    "content_hash": "a9a0e163ab2349eb56db3ef241b4350b619ae4ebed45d9309e9bac6a49f36f5a",
+    "tried_at": "2026-09-20T19:10:42Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 7.956882571097158,
+    "report_path": "experiments/reports/2026-09-20.md"
+  },
+  {
+    "name": "zone-damping-085",
+    "content_hash": "2743b5d3822a2949a3df40b09aac1855fbcf0039326b5b5a2956497c472ba0ca",
+    "tried_at": "2026-09-20T19:10:42Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 9.958054551229136,
+    "report_path": "experiments/reports/2026-09-20.md"
+  },
+  {
+    "name": "contrarian-composite-inversion",
+    "content_hash": "b6b0a0fe91ce98a09f3f9ffd4b498e4bcb5edaaa17ba99e1522129f40e77656c",
+    "tried_at": "2026-09-21T19:13:01Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -97.16709,
+    "sharpe_absolute_delta": -6.79076,
+    "report_path": "experiments/reports/2026-09-21.md"
+  },
+  {
+    "name": "quarter-hour-block-held-signal",
+    "content_hash": "4f41cb966c8dbc111f3cd58c8c66ea4279bc6749f7f3d5c274d6b86a82943e02",
+    "tried_at": "2026-09-21T19:13:01Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -75.017089,
+    "sharpe_absolute_delta": -5.242754,
+    "report_path": "experiments/reports/2026-09-21.md"
+  },
+  {
+    "name": "half-hour-block-held-signal",
+    "content_hash": "d7e9a35d57043ddac19a7936719490b18a8efe5a257187efb27c7bed9f27232d",
+    "tried_at": "2026-09-21T19:13:01Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -21.114389,
+    "sharpe_absolute_delta": -1.475631,
+    "report_path": "experiments/reports/2026-09-21.md"
+  },
+  {
+    "name": "close-location-subsignal",
+    "content_hash": "90324cd6efad56b40f95b82ff5e965baa84d8f21643865662c63666a88d65f4a",
+    "tried_at": "2026-09-22T19:20:21Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -82.80035762761649,
+    "report_path": "experiments/reports/2026-09-22.md"
+  },
+  {
+    "name": "relative-volume-damped-exposure",
+    "content_hash": "430f46af6e0014d1610cf871ae2f30ddf6ae2acf40fce7e6a80f7621e4b6041c",
+    "tried_at": "2026-09-22T19:20:21Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 5.129214906850129,
+    "report_path": "experiments/reports/2026-09-22.md"
+  },
+  {
+    "name": "half-hour-block-hourly-spacing",
+    "content_hash": "631ee26c675b95eea9651b7eb8d2824fd3e421664ffa3e8160e2a676acf2ad60",
+    "tried_at": "2026-09-22T19:20:21Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -31.21398909803898,
+    "report_path": "experiments/reports/2026-09-22.md"
+  },
+  {
+    "name": "two-hour-block-two-hour-spacing",
+    "content_hash": "82531edd3be4fd04f658887364040c57e7924b0ebd5ccffb572c8bd3ca6980a0",
+    "tried_at": "2026-09-25T19:21:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 93029.52046372897,
+    "report_path": "experiments/reports/2026-09-25.md"
+  },
+  {
+    "name": "longer-reversion-horizons",
+    "content_hash": "03324a98441cd8d37f30b902c6c785e0f91d9ac80613eb04de78dcc9169b22f9",
+    "tried_at": "2026-09-25T19:21:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 109878.013692536,
+    "report_path": "experiments/reports/2026-09-25.md"
+  },
+  {
+    "name": "typical-price-rsi-bollinger-inputs",
+    "content_hash": "481d6a67e518fa2cc4a6bfa727c5fa7b932a73a2548877cdaf272253fb70a142",
+    "tried_at": "2026-09-25T19:21:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -8368.79043078536,
+    "report_path": "experiments/reports/2026-09-25.md"
+  },
+  {
+    "name": "two-hour-block-hourly-spacing",
+    "content_hash": "65b37e594e2658c06ad88d59dc0425841d0dd17fcfe7ae361c419e2fb390e6b1",
+    "tried_at": "2026-09-28T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 0.0,
+    "report_path": "experiments/reports/2026-09-28.md"
+  },
+  {
+    "name": "intermediate-reversion-horizons",
+    "content_hash": "1d8349fc4a586f22abe45b218d3a51a0a76462422212ae6095ac811a07184ee3",
+    "tried_at": "2026-09-28T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -0.1470181962143912,
+    "report_path": "experiments/reports/2026-09-28.md"
+  },
+  {
+    "name": "trend-family-beyond-5h-horizons",
+    "content_hash": "2bf13bb96fc7d60734df505876dfca541304ab5838476ea62f686b9cffd69be6",
+    "tried_at": "2026-09-28T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": -121.45377455306267,
+    "report_path": "experiments/reports/2026-09-28.md"
+  },
+  {
+    "name": "one-hour-block-hourly-spacing",
+    "content_hash": "ca48cf090f57614ecaa6b5e202ab1551b6dc19f3b44cc2e95e6c880d4dab62b1",
+    "tried_at": "2026-10-01T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-10-01.md"
+  },
+  {
+    "name": "four-hour-block-four-hour-spacing",
+    "content_hash": "31f8a608ea832a5614607471e5beaed7d947dd6e960b72337d40190b07f04ec7",
+    "tried_at": "2026-10-01T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-10-01.md"
+  },
+  {
+    "name": "two-hour-throttle-intermediate-reversion",
+    "content_hash": "18eb5cbcc501dcfeca89534e63ff27fc4b41a9c19f6314340ecc28f3553db0e4",
+    "tried_at": "2026-10-01T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-10-01.md"
+  },
+  {
+    "name": "four-hour-throttle-intermediate-reversion",
+    "content_hash": "c51612b5914e06d5e78ad7254b654022b60d410f361c05add3569836f7ea0159",
+    "tried_at": "2026-10-04T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 0.14107078389942765,
+    "report_path": "experiments/reports/2026-10-04.md"
+  },
+  {
+    "name": "eight-hour-block-eight-hour-spacing",
+    "content_hash": "e161763ee7b7fa381598678271381c3ba711414636623c9bd15a3fbfc216114c",
+    "tried_at": "2026-10-04T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 0.14107078389942765,
+    "report_path": "experiments/reports/2026-10-04.md"
+  },
+  {
+    "name": "half-hour-throttle-intermediate-reversion",
+    "content_hash": "8d41edd31ed5264c70efd410b638c0f2fd84b1f12466360912f47345e1d5e411",
+    "tried_at": "2026-10-04T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": 0.14107078389942765,
+    "report_path": "experiments/reports/2026-10-04.md"
+  },
+  {
+    "name": "daily-block-daily-spacing-intermediate-reversion",
+    "content_hash": "3d39ff9759a9d4b275e52b1bf24c5b7a0f109d2c0a54407918ee2fc22c323024",
+    "tried_at": "2026-10-07T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-10-07.md"
+  },
+  {
+    "name": "eight-hour-block-hourly-spacing-intermediate-reversion",
+    "content_hash": "b5b66974318a7f7963d0d6689a6305ff0c2773c238254678123c7060bb7962d8",
+    "tried_at": "2026-10-07T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-10-07.md"
+  },
+  {
+    "name": "eight-hour-throttle-longer-reversion",
+    "content_hash": "6cc65e706b879bcacd72403266005a9d11203fbd292c41dedafd585a30c647c4",
+    "tried_at": "2026-10-07T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-10-07.md"
+  },
+  {
+    "name": "four-hour-block-hourly-spacing-intermediate-reversion",
+    "content_hash": "c8ac4e0764229e9b7df39fde6ea2ec59b062fb319d7cf7b756e52cc922ca59f6",
+    "tried_at": "2026-10-10T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-10-10.md"
+  },
+  {
+    "name": "twelve-hour-block-hourly-spacing-intermediate-reversion",
+    "content_hash": "6b21e39b60bdda54370f9f5f9a30c12354bf436d7c3c815d3484875f19bf2ce4",
+    "tried_at": "2026-10-10T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-10-10.md"
+  },
+  {
+    "name": "eight-hour-block-hourly-spacing-cost-band-004",
+    "content_hash": "1cedd43144d0b77450197f40ee0c142900fc9f6ef100d5a11647891c4381bef6",
+    "tried_at": "2026-10-10T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-10-10.md"
+  },
+  {
+    "name": "eight-hour-block-hourly-spacing-band-015",
+    "content_hash": "1c351c55db0e3f93f7e9c0b7f3edc4ea69487340dedaad8fd7e3853cefde88f2",
+    "tried_at": "2026-10-13T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-10-13.md"
+  },
+  {
+    "name": "eight-hour-block-hourly-spacing-band-020",
+    "content_hash": "7a0440a1875ac6122572ffddf0426b82a32c58720fbced66a45a8cd721811b9e",
+    "tried_at": "2026-10-13T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-10-13.md"
+  },
+  {
+    "name": "six-hour-block-hourly-spacing-intermediate-reversion",
+    "content_hash": "2e52f35da11a39e43c64cec4d1d15ea0791538fef6bd33c1aad66701eacfa102",
+    "tried_at": "2026-10-13T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "report_path": "experiments/reports/2026-10-13.md"
+  },
+  {
+    "name": "eight-hour-block-hourly-spacing-band-0125",
+    "content_hash": "d7674be025312ea725597a5e599534ffb376d1ad8177182ad1f7002015691eab",
+    "tried_at": "2026-10-16T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 0.005033078986204309,
+    "report_path": "experiments/reports/2026-10-16.md",
+    "note": "UNTESTABLE at the 50,000 JPY promotion capital: the baseline itself made only the opening buy on this window (orders_below_min 5942), as did every variant, so the primary comparison is a static mix against a static mix at a slightly different exposure (0.555 vs 0.585). The verdict is a lot-floor artifact, not evidence. See the report's diagnostic table for the 500k/5M results."
+  },
+  {
+    "name": "eight-hour-block-hourly-spacing-band-0175",
+    "content_hash": "430e52cdb636b6b0cccbfab3310ee467db37bd1740d87c1344995f22d5fd92f3",
+    "tried_at": "2026-10-16T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 0.005033078986204309,
+    "report_path": "experiments/reports/2026-10-16.md",
+    "note": "UNTESTABLE at the 50,000 JPY promotion capital: the baseline itself made only the opening buy on this window (orders_below_min 5942), as did every variant, so the primary comparison is a static mix against a static mix at a slightly different exposure (0.555 vs 0.585). The verdict is a lot-floor artifact, not evidence. See the report's diagnostic table for the 500k/5M results."
+  },
+  {
+    "name": "eight-hour-block-two-hour-spacing-band-015",
+    "content_hash": "31c6b72a0b7e82d42da7995dcfc3048df00ef67fae9eb98b2eb7c4f3fc90aebf",
+    "tried_at": "2026-10-16T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 0.005033078986204309,
+    "report_path": "experiments/reports/2026-10-16.md",
+    "note": "UNTESTABLE at the 50,000 JPY promotion capital: the baseline itself made only the opening buy on this window (orders_below_min 5942), as did every variant, so the primary comparison is a static mix against a static mix at a slightly different exposure (0.555 vs 0.585). The verdict is a lot-floor artifact, not evidence. See the report's diagnostic table for the 500k/5M results."
+  }
+]

@@ -1,0 +1,37 @@
+{
+  "name": "ewma-smoothed-signal-wallclock-30m",
+  "kind": "algorithm",
+  "rationale": "Two independent reasons, both recorded in the 2026-09-13 report. (1) MEASURABILITY: `ewma-smoothed-composite-signal` (30-BAR half-life) produced the largest improvement this pipeline has ever measured -- at 500,000 JPY, Sharpe -30.58 -> -6.17, return -16.69% -> -3.73%, max drawdown 16.91% -> 4.52%, excess_return_vs_static_mix_pct -13.56 -> -0.54 -- but could not be scored, because the 50,000 JPY promotion baseline made exactly 1 trade that window and the variant's primary report was byte-identical to it. Today's primary baseline makes 48 trades (win rate 0.391, 25 buy / 23 sell) with sharpe_minus_static_mix -2.716, so for the first time in five runs the promotion capital can actually score a smoothing filter. (2) LIVE TRANSFERABILITY: that variant expressed its half-life in BARS, and the live SignalEngine re-evaluates at ~4 Hz, so live the effective half-life would have been ~7.5 seconds of market time rather than 30 minutes -- the 2026-09-13 report concluded it was 'non-transferable to live until that cadence is resolved'. Expressing the half-life in WALL-CLOCK SECONDS, decayed by the elapsed time between consecutive evaluations, makes the filter mean the same thing at 60s bars and at 4 Hz without touching live scheduling, so a promotion here could actually reach production.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 60
+  },
+  "code_change_summary": "Apply a TIME-DECAYED exponentially weighted moving average to the composite normalized signal AFTER TradingEngine::compute_btc_target returns it and BEFORE it is scaled by zone.range_max and passed to apply_zone. Do not touch compute_btc_target itself -- it stays a pure function of one IndicatorPoint and the smoothing state lives in the caller. Add one shared helper in src/signal/mod.rs so both call sites use one implementation and one constant, e.g. `pub(crate) struct TimeSmoothedSignal { value: Option<f64>, at: Option<DateTime<Utc>> }` with `fn update(&mut self, normalized: f64, now: DateTime<Utc>) -> f64`. The decay MUST be a function of elapsed wall-clock time, not of update count: with EWMA_HALF_LIFE_SECS = 1800.0 (30 minutes) and dt = (now - self.at) in seconds (clamped to >= 0.0), the weight on the previous value is `decay = 0.5f64.powf(dt / EWMA_HALF_LIFE_SECS)` and the new state is `value = decay * prev + (1.0 - decay) * normalized`. Document the formula, the half-life, and an explicit statement that 1800s is an a priori round figure NOT fitted on any window, plus a NOTE that this is the wall-clock reformulation of the bar-indexed `ewma-smoothed-composite-signal` variant and why (the ~4 Hz live cadence finding). Seed the filter with the first normalized value it ever sees (so the first evaluated candle is unsmoothed rather than biased toward 0.5), and leave both `value` and `at` untouched -- not decayed toward anything -- on a warmup candle where compute_btc_target returns None. Wire it into BOTH paths so live and backtest cannot diverge: (a) src/backtest/simulator.rs, the `if let Some(normalized) = TradingEngine::compute_btc_target(point, &[], &trading_config)` block, passing `candle.open_time` as `now` (mirroring how RiskManager::observe_time already takes the candle clock there, never wall-clock); (b) src/trading/engine.rs, handle_indicator's `combined.map(|normalized| ...)` block, with the filter held as a field on TradingEngine and the indicator's own timestamp passed as `now` where one is available, falling back to Utc::now() otherwise. Note in a comment that the two paths see very different cadences (one update per 60s bar in the simulator, roughly one per 250 ms live) and that expressing the half-life in wall-clock time is precisely what makes them equivalent -- do NOT attempt to change the live cadence itself. Add unit tests covering: a constant input stream converging to that constant; a step input reaching approximately half the step after exactly 1800 seconds of elapsed time REGARDLESS of whether that is delivered as 30 updates of 60s or 7200 updates of 0.25s (assert both, within a small tolerance -- this cadence-invariance is the whole point of the hypothesis and must be tested directly); the first-value seeding behaviour; a dt of 0 leaving the value unchanged; and that a None-returning warmup point leaves the state unchanged. In your report, state how far the smoothed signal's realized range and standard deviation shrank versus the raw one and the trade counts at each capital -- the mechanism's behaviour, not just the report JSON -- and state explicitly whether the 50,000 JPY report differs from the baseline's at all.",
+  "constraints": [
+    "MUST NOT modify the body or the signature of TradingEngine::compute_btc_target. The smoothing is applied to that function's RETURN VALUE in its callers; the allocation formula itself is out of scope for this change.",
+    "This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST pass `cargo test`. Update an existing test's expected values only where this change legitimately alters them, and do not weaken or delete a test just to make it pass.",
+    "MUST apply the change at both the live site in src/trading/engine.rs and the backtest site in src/backtest/simulator.rs, so live and backtest behaviour cannot diverge.",
+    "MUST NOT change src/signal/engine.rs's broadcast cadence or anything about live scheduling. The ~4 Hz live evaluation rate is a known open question (2026-09-12 and 2026-09-13 reports, 'Suspected defects'); report it, do not fix it here.",
+    "MUST NOT fit any new constant on the holdout window, or on any window at all. Values are a priori round numbers; if one turns out to be wrong, that is a result to report, not a value to retune mid-run.",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff changes the allocation target the live engine acts on, since it alters what the running instance would hold.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or the order-submission mechanics themselves.",
+    "The half-life MUST be expressed in wall-clock seconds and the decay MUST depend on elapsed time between updates. A per-update (bar-indexed) decay is explicitly what this hypothesis exists to replace; implementing one would make the result a duplicate of the already-tried `ewma-smoothed-composite-signal`.",
+    "You MAY read origin/experiment/ewma-smoothed-composite-signal for reference, but MUST NOT merge or cherry-pick it -- that branch carries the bar-indexed formulation this hypothesis replaces."
+  ]
+}

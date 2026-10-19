@@ -1,0 +1,27 @@
+{
+  "name": "four-hour-block-hourly-spacing-intermediate-reversion",
+  "kind": "parameter",
+  "rationale": "Mandatory trading-cost hypothesis (13 consecutive negative static-mix runs as of 2026-10-07). 2026-10-07 found the block/spacing curve turns over past 8h: 8h block / 1h spacing with rsi60/bb90 had the smallest deficit yet (-0.250 Sharpe @500k, -0.057 @5M) while 24h/24h was worse (-2.03 @500k). The 4h side of the peak has only been measured with 4h spacing (four-hour-block-four-hour-spacing, four-hour-throttle-intermediate-reversion), never with hourly drift correction inside the block. This maps the lower flank of the curve with spacing held at 1h, per lead #2 of the 2026-10-07 report.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 60,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 90,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 3600,
+    "signal_block_secs": 14400
+  }
+}

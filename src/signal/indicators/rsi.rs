@@ -1,15 +1,36 @@
-use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 
-use crate::signal::{Indicator, Signal};
+use crate::signal::{Indicator, IndicatorRawValues};
 use crate::types::market::Candle;
+
+/// Wilder 平滑化フェーズの状態。
+///
+/// NOTE: `avg_gain` / `avg_loss` / `prev_close` は必ず同時にセットされ、
+/// 常に揃って存在するか揃って不在かのどちらかである。個別の `Option` に
+/// 分けているとこの不変条件がコンパイラから見えず、更新側の `unwrap()` が
+/// 「他フィールドの `is_none()` チェック」に暗黙依存してしまう。1つの
+/// `Option<WilderState>` に畳むことで、その不変条件を型で保証する。
+struct WilderState {
+    avg_gain: f64,
+    avg_loss: f64,
+    prev_close: f64,
+}
+
+impl WilderState {
+    /// RSI = 100 - 100 / (1 + avg_gain / avg_loss)（範囲: 0.0〜100.0）
+    fn rsi(&self) -> f64 {
+        if self.avg_loss == 0.0 {
+            return 100.0;
+        }
+        100.0 - 100.0 / (1.0 + self.avg_gain / self.avg_loss)
+    }
+}
 
 pub struct Rsi {
     period: usize,
     closes: Vec<f64>,
-    avg_gain: Option<f64>,
-    avg_loss: Option<f64>,
-    prev_close: Option<f64>,
+    /// ウォームアップ完了後のみ `Some`。
+    state: Option<WilderState>,
     current_rsi: Option<f64>,
 }
 
@@ -19,20 +40,9 @@ impl Rsi {
         Self {
             period,
             closes: Vec::with_capacity(period + 2),
-            avg_gain: None,
-            avg_loss: None,
-            prev_close: None,
+            state: None,
             current_rsi: None,
         }
-    }
-
-    fn compute_rsi(&self) -> f64 {
-        let ag = self.avg_gain.unwrap_or(0.0);
-        let al = self.avg_loss.unwrap_or(0.0);
-        if al == 0.0 {
-            return 100.0;
-        }
-        100.0 - 100.0 / (1.0 + ag / al)
     }
 }
 
@@ -41,45 +51,45 @@ impl Indicator for Rsi {
         "RSI"
     }
 
-    fn update(&mut self, candle: &Candle) -> Option<Signal> {
+    /// RSI を更新する。売買判断は行わない。
+    fn update(&mut self, candle: &Candle) {
         let close = candle.close.to_f64().unwrap_or(0.0);
 
-        // ウォームアップフェーズ: closes を蓄積
-        if self.avg_gain.is_none() {
-            self.closes.push(close);
-            if self.closes.len() <= self.period {
-                return None;
+        let state = match &mut self.state {
+            // ウォームアップフェーズ: closes を蓄積
+            None => {
+                self.closes.push(close);
+                if self.closes.len() <= self.period {
+                    return;
+                }
+                // period+1 本目で最初の avg_gain / avg_loss を計算
+                let gains: f64 = self.closes.windows(2)
+                    .map(|w| (w[1] - w[0]).max(0.0))
+                    .sum::<f64>() / self.period as f64;
+                let losses: f64 = self.closes.windows(2)
+                    .map(|w| (w[0] - w[1]).max(0.0))
+                    .sum::<f64>() / self.period as f64;
+                self.state.insert(WilderState {
+                    avg_gain: gains,
+                    avg_loss: losses,
+                    prev_close: close,
+                })
             }
-            // period+1 本目で最初の avg_gain / avg_loss を計算
-            let gains: f64 = self.closes.windows(2)
-                .map(|w| (w[1] - w[0]).max(0.0))
-                .sum::<f64>() / self.period as f64;
-            let losses: f64 = self.closes.windows(2)
-                .map(|w| (w[0] - w[1]).max(0.0))
-                .sum::<f64>() / self.period as f64;
-            self.avg_gain = Some(gains);
-            self.avg_loss = Some(losses);
-            self.prev_close = Some(close);
-            let rsi = self.compute_rsi();
-            self.current_rsi = Some(rsi);
-            return Some(rsi_to_signal(rsi, candle.close));
-        }
+            // Wilder の平滑化
+            Some(state) => {
+                let change = close - state.prev_close;
+                let gain = change.max(0.0);
+                let loss = (-change).max(0.0);
 
-        // Wilder の平滑化
-        let prev = self.prev_close.unwrap();
-        let change = close - prev;
-        let gain = change.max(0.0);
-        let loss = (-change).max(0.0);
-
-        let ag = (self.avg_gain.unwrap() * (self.period as f64 - 1.0) + gain) / self.period as f64;
-        let al = (self.avg_loss.unwrap() * (self.period as f64 - 1.0) + loss) / self.period as f64;
-        self.avg_gain = Some(ag);
-        self.avg_loss = Some(al);
-        self.prev_close = Some(close);
-
-        let rsi = self.compute_rsi();
-        self.current_rsi = Some(rsi);
-        Some(rsi_to_signal(rsi, candle.close))
+                state.avg_gain =
+                    (state.avg_gain * (self.period as f64 - 1.0) + gain) / self.period as f64;
+                state.avg_loss =
+                    (state.avg_loss * (self.period as f64 - 1.0) + loss) / self.period as f64;
+                state.prev_close = close;
+                state
+            }
+        };
+        self.current_rsi = Some(state.rsi());
     }
 
     fn value(&self) -> Option<f64> {
@@ -88,24 +98,16 @@ impl Indicator for Rsi {
 
     fn reset(&mut self) {
         self.closes.clear();
-        self.avg_gain = None;
-        self.avg_loss = None;
-        self.prev_close = None;
+        self.state = None;
         self.current_rsi = None;
     }
 
     fn min_periods(&self) -> usize {
         self.period + 1
     }
-}
 
-fn rsi_to_signal(rsi: f64, price: Decimal) -> Signal {
-    if rsi < 30.0 {
-        Signal::Buy { price, confidence: (30.0 - rsi) / 30.0 }
-    } else if rsi > 70.0 {
-        Signal::Sell { price, confidence: (rsi - 70.0) / 30.0 }
-    } else {
-        Signal::Hold
+    fn snapshot(&self) -> IndicatorRawValues {
+        IndicatorRawValues::Scalar(self.current_rsi)
     }
 }
 
@@ -113,6 +115,7 @@ fn rsi_to_signal(rsi: f64, price: Decimal) -> Signal {
 mod tests {
     use super::*;
     use chrono::Utc;
+    use rust_decimal::Decimal;
     use rust_decimal_macros::dec;
 
     fn candle(close: f64) -> Candle {
@@ -130,19 +133,18 @@ mod tests {
     fn warmup_returns_none() {
         let mut rsi = Rsi::new(14);
         for i in 0..14 {
-            let sig = rsi.update(&candle(100.0 + i as f64));
-            assert!(sig.is_none(), "Expected None at step {}", i);
+            rsi.update(&candle(100.0 + i as f64));
+            assert!(rsi.value().is_none(), "Expected None at step {}", i);
         }
     }
 
     #[test]
     fn returns_some_after_period_plus_one() {
         let mut rsi = Rsi::new(14);
-        for i in 0..=14 {
+        for i in 0..=15 {
             rsi.update(&candle(100.0 + i as f64));
         }
-        let sig = rsi.update(&candle(115.0));
-        assert!(sig.is_some());
+        assert!(rsi.value().is_some());
     }
 
     #[test]
@@ -152,20 +154,21 @@ mod tests {
         for i in 0..=3 {
             rsi.update(&candle(100.0 + i as f64 * 10.0));
         }
-        let sig = rsi.update(&candle(150.0));
-        // RSI=100 → Sell (>70)
-        assert!(matches!(sig, Some(Signal::Sell { .. })));
+        rsi.update(&candle(150.0));
+        // RSI=100 → value > 70
+        assert!(rsi.value().unwrap() > 70.0);
     }
 
     #[test]
     fn all_losses_gives_oversold() {
         let mut rsi = Rsi::new(3);
-        // 全部下落 → RSI ≈ 0 → Buy
+        // 全部下落 → RSI ≈ 0
         for i in 0..=3 {
             rsi.update(&candle(100.0 - i as f64 * 10.0));
         }
-        let sig = rsi.update(&candle(50.0));
-        assert!(matches!(sig, Some(Signal::Buy { .. })));
+        rsi.update(&candle(50.0));
+        // RSI ≈ 0 → value < 30
+        assert!(rsi.value().unwrap() < 30.0);
     }
 
     #[test]
@@ -175,6 +178,7 @@ mod tests {
             rsi.update(&candle(100.0 + i as f64));
         }
         rsi.reset();
-        assert!(rsi.update(&candle(100.0)).is_none());
+        rsi.update(&candle(100.0));
+        assert!(rsi.value().is_none());
     }
 }

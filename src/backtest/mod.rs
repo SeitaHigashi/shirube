@@ -1,0 +1,250 @@
+pub mod backfill;
+pub mod data;
+pub mod report;
+pub mod simulator;
+
+use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
+
+/// Parameters controlling a single backtest run: time range, resolution,
+/// and simulated trading costs. The allocation model (indicator periods,
+/// zone config, weights) is supplied separately as a `TradingConfig` so
+/// that a run always exercises the exact same allocation logic
+/// (`TradingEngine::compute_btc_target`) as live trading.
+#[derive(Debug, Clone)]
+pub struct BacktestConfig {
+    pub product_code: String,
+    pub from: DateTime<Utc>,
+    pub to: DateTime<Utc>,
+    pub resolution_secs: u32,
+    /// スリッページ率（例: 0.001 = 0.1%）
+    pub slippage_pct: f64,
+    /// 手数料率の固定値（例: 0.0015 = 0.15%）。
+    /// None の場合は MockExchangeClient のティア制手数料を自動適用する。
+    pub fee_pct: Option<f64>,
+    pub initial_jpy: Decimal,
+    /// Number of leading candles in the series handed to `Simulator::run`
+    /// that lie *before* `from` and exist only to warm the indicators up.
+    ///
+    /// NOTE: without this, indicators are warmed from the first in-window
+    /// candle, so a long-period indicator is `None` for a large leading
+    /// fraction of the evaluation window (e.g. SMA(200) over a 336-candle
+    /// hourly window is undefined for 199 of them — 59% of the run). Those
+    /// candles are fed through the indicator pipeline but are excluded from
+    /// trading, the equity curve and the report, so the measured window is
+    /// exactly `[from, to]` with fully warmed indicators throughout.
+    ///
+    /// Defaults to 0, which reproduces the previous behavior byte-for-byte.
+    pub warmup_candles: usize,
+}
+
+/// Aggregate performance metrics produced by a completed backtest run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BacktestReport {
+    pub total_return_pct: f64,
+    pub sharpe_ratio: f64,
+    pub max_drawdown_pct: f64,
+    pub win_rate: f64,
+    pub total_trades: u32,
+    /// How many of `total_trades` were buys.
+    ///
+    /// NOTE: added 2026-09-12. `total_trades` alone cannot distinguish a
+    /// strategy taking directional views from one oscillating across a
+    /// single allocation threshold — the 2026-09-11 ping-pong observation
+    /// (3,744 buys against 4,751 sells) was only visible because someone
+    /// counted the sides by hand. Reporting the split makes that mechanism
+    /// readable directly off every run. `#[serde(default)]` so report JSON
+    /// written before this field existed still parses.
+    #[serde(default)]
+    pub buy_trades: u32,
+    /// How many of `total_trades` were sells. See `buy_trades`.
+    /// `buy_trades + sell_trades == total_trades` by construction.
+    #[serde(default)]
+    pub sell_trades: u32,
+    /// How many times the daily-drawdown circuit breaker tripped during the
+    /// run (at most once per simulated day, since `RiskManager` clears the
+    /// flag at each day boundary).
+    ///
+    /// NOTE: `#[serde(default)]` so that report JSON written before this
+    /// field existed still parses — `shirube compare-backtest` reads
+    /// baseline reports saved by earlier runs.
+    #[serde(default)]
+    pub circuit_breaker_trips: u32,
+    /// How many orders `RiskManager::evaluate` refused (circuit breaker
+    /// active, or size below the exchange minimum). An order counted here
+    /// never reached the exchange, so it is absent from `total_trades`.
+    #[serde(default)]
+    pub orders_rejected: u32,
+    /// How many rebalances the strategy wanted but bitFlyer's lot size
+    /// forbade: the allocation delta had already cleared
+    /// `allocation_threshold`, yet `TradingEngine::allocation_delta_to_order`
+    /// still returned `None` because the resulting order was below
+    /// `min_order_size` (0.001 BTC).
+    ///
+    /// NOTE: an order counted here never reached `RiskManager::evaluate`, so
+    /// it appears in neither `total_trades` nor `orders_rejected` — it was
+    /// previously invisible in every report. The effect is strongly
+    /// capital-dependent: at a BTC price near 12.3M JPY the 0.001 BTC lot is
+    /// ~24.7% of a 50,000 JPY portfolio, ~2.5% of 500,000 JPY and ~0.25% of
+    /// 5,000,000 JPY, so a small account silently drops nearly every
+    /// rebalance its configured threshold asked for.
+    #[serde(default)]
+    pub orders_below_min: u32,
+    /// Sum of every filled trade's fee (JPY), i.e. total trading costs paid
+    /// over the run.
+    ///
+    /// NOTE: `#[serde(default)]` so that report JSON written before this
+    /// field existed still parses — `shirube compare-backtest` reads
+    /// baseline reports saved by earlier runs.
+    #[serde(default)]
+    pub total_fees_jpy: f64,
+    /// Sum of `price * size` over every filled trade — the cumulative JPY
+    /// notional traded, i.e. the same quantity bitFlyer's fee-tier table is
+    /// keyed on (see `FEE_TIERS` in `exchange::mock`).
+    #[serde(default)]
+    pub traded_volume_jpy: f64,
+    /// `total_fees_jpy / traded_volume_jpy` — the blended fee rate actually
+    /// paid across the whole run. 0.0 when no trades were placed (or
+    /// `traded_volume_jpy` is 0), rather than dividing by zero.
+    #[serde(default)]
+    pub effective_fee_pct: f64,
+    /// The bitFlyer fee tier rate that applied by the end of the run, i.e.
+    /// looked up from the final cumulative `traded_volume_jpy`. When the run
+    /// used a fixed `--fee-pct` override instead of the tier table, this is
+    /// simply that fixed rate.
+    #[serde(default)]
+    pub final_fee_tier_pct: f64,
+    /// `total_fees_jpy / initial_jpy * 100.0` — total fees as a percentage
+    /// of starting capital, using the same denominator convention as
+    /// `total_return_pct` so the two are directly comparable (e.g. "fees ate
+    /// N percentage points of the return"). 0.0 when `initial_jpy` is 0.
+    #[serde(default)]
+    pub fee_drag_pct: f64,
+    /// Mean BTC allocation fraction (`btc_value / total`) across every
+    /// *evaluated* candle (warmup candles excluded), 0.0-1.0. This is the
+    /// strategy's own average exposure to BTC over the run, and is the
+    /// weight used to build the `static_mix_*` benchmark below so that the
+    /// benchmark matches the strategy's own average risk level.
+    ///
+    /// NOTE: `#[serde(default)]` so older report JSON (written before this
+    /// field existed) still parses.
+    #[serde(default)]
+    pub avg_btc_exposure: f64,
+    /// Buy-and-hold benchmark: total return (%) of a single market buy of
+    /// the entire `initial_jpy` balance at the first evaluated candle
+    /// (paying `slippage_pct` and a single entry commission), held and
+    /// marked to market at every subsequent evaluated candle's close.
+    /// Computed over exactly the same evaluated candle slice as the
+    /// strategy itself (warmup candles excluded from both).
+    #[serde(default)]
+    pub hold_return_pct: f64,
+    /// Annualized Sharpe ratio of the buy-and-hold benchmark curve, using
+    /// the same `calculate_sharpe` function and `resolution_secs` as the
+    /// strategy's own `sharpe_ratio` so the two are directly comparable.
+    #[serde(default)]
+    pub hold_sharpe_ratio: f64,
+    /// Maximum peak-to-trough drawdown (%) of the buy-and-hold benchmark
+    /// curve, via the same `calculate_max_drawdown` function used for
+    /// `max_drawdown_pct`.
+    #[serde(default)]
+    pub hold_max_drawdown_pct: f64,
+    /// Static-mix benchmark: like `hold_return_pct`, but only
+    /// `avg_btc_exposure` of the balance is bought at entry (paying the
+    /// same slippage/commission), with the rest held as JPY. This is the
+    /// fair comparison against the strategy: it matches the strategy's own
+    /// average exposure, isolating timing skill from exposure level. When
+    /// `avg_btc_exposure == 1.0` this is identical to the hold benchmark.
+    #[serde(default)]
+    pub static_mix_return_pct: f64,
+    /// Annualized Sharpe ratio of the static-mix benchmark curve.
+    #[serde(default)]
+    pub static_mix_sharpe_ratio: f64,
+    /// Maximum peak-to-trough drawdown (%) of the static-mix benchmark
+    /// curve.
+    #[serde(default)]
+    pub static_mix_max_drawdown_pct: f64,
+    /// `total_return_pct - static_mix_return_pct`. Positive means the
+    /// strategy's actual return beat a static position matching its own
+    /// average exposure — i.e. its timing earned more than it cost. This
+    /// is a reported diagnostic only; it does not affect the promotion
+    /// rule in `compare()`.
+    #[serde(default)]
+    pub excess_return_vs_static_mix_pct: f64,
+    /// `sharpe_ratio - static_mix_sharpe_ratio`. Positive means the
+    /// strategy earned better risk-adjusted returns than simply holding
+    /// its own average exposure statically. This is a reported diagnostic
+    /// only; it does not affect the promotion rule in `compare()`.
+    #[serde(default)]
+    pub sharpe_minus_static_mix: f64,
+    /// How many warmup candles the caller asked for (`--warmup-candles`).
+    ///
+    /// NOTE: added 2026-09-20. The shortfall this pairs with
+    /// `warmup_candles_actual` to expose used to appear only as a line on
+    /// stderr, so nothing downstream — not `compare-backtest`, not the
+    /// self-improvement loop's report generator — could tell that a run's
+    /// indicators had been under-seeded. A run whose `sma_period` exceeds
+    /// `warmup_candles_actual` starts its window on a `None` SMA, which is
+    /// a materially different strategy from the one the config describes.
+    /// `#[serde(default)]` so report JSON written before this field
+    /// existed still parses.
+    #[serde(default)]
+    pub warmup_candles_requested: usize,
+    /// How many warmup candles were actually available and used.
+    ///
+    /// Equal to `warmup_candles_requested` on a healthy run. A smaller
+    /// value means the DB did not hold enough history before `from`; see
+    /// `warmup_candles_requested`. Compare it against the binding
+    /// indicator period in the run's `TradingConfig` before trusting the
+    /// leading portion of the window.
+    #[serde(default)]
+    pub warmup_candles_actual: usize,
+}
+
+/// Risk-gate activity observed during a backtest run.
+///
+/// # Why this is counted
+///
+/// `Simulator::run` discards every `RiskDecision` it does not act on, so a
+/// risk-gate setting that never fires and one that fires constantly used to
+/// be indistinguishable from the report alone. Establishing which had
+/// happened for a single `max_daily_drawdown` hypothesis (2026-09-08) took
+/// four extra backtests plus a separate price-series analysis, and the
+/// obvious proxy is wrong: blocking a rebalance on a down day defers the
+/// exposure change to a later candle rather than removing a trade, so
+/// `total_trades` can be identical whether or not the breaker fired.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RiskEventCounts {
+    pub circuit_breaker_trips: u32,
+    pub orders_rejected: u32,
+    /// Rebalances suppressed before the risk manager ever saw them because
+    /// the requested size fell below the exchange lot size. See
+    /// `BacktestReport::orders_below_min` for why this is counted.
+    pub orders_below_min: u32,
+}
+
+/// Result of comparing a candidate variant's report against a baseline
+/// report over the same (holdout) period. See `report::compare` for the
+/// promotion rule this encodes.
+#[derive(Debug, Clone, Serialize)]
+pub struct BacktestComparison {
+    pub baseline: BacktestReport,
+    pub candidate: BacktestReport,
+    /// Relative Sharpe ratio improvement, in percent. `None` when the
+    /// baseline Sharpe ratio is <= 0 (relative comparison is meaningless
+    /// against a zero/negative baseline; see `sharpe_absolute_delta`).
+    pub sharpe_improvement_pct: Option<f64>,
+    /// Absolute Sharpe ratio delta (candidate - baseline). Always computed,
+    /// used as the promotion signal when the baseline Sharpe is <= 0.
+    pub sharpe_absolute_delta: f64,
+    /// candidate.max_drawdown_pct - baseline.max_drawdown_pct. Negative or
+    /// zero means the candidate did not make drawdown worse.
+    pub drawdown_delta_pct: f64,
+    /// candidate.total_trades / baseline.total_trades. Used to catch
+    /// degenerate "improvements" from a near-empty sample.
+    pub trade_count_ratio: f64,
+    /// True when the candidate passes every promotion criterion.
+    pub promoted: bool,
+    /// Human-readable pros/cons lines explaining the verdict.
+    pub reasons: Vec<String>,
+}

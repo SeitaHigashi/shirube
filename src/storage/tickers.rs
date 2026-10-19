@@ -17,6 +17,29 @@ pub struct DownsampleStats {
     pub tickers_deleted: u64,
 }
 
+/// Row count and time range for one product's stored ticker bars.
+/// Backs `shirube db-stats` (see `cli.rs`), which needs this to decide how
+/// many days of backfill to request without running raw SQL outside the
+/// repository.
+pub struct TickerStats {
+    pub rows: u64,
+    pub oldest: Option<DateTime<Utc>>,
+    pub newest: Option<DateTime<Utc>>,
+}
+
+impl TickerStats {
+    /// The stats of a product with no stored rows at all — also used as the
+    /// fallback when the DB itself could not be opened or queried, so an
+    /// unreadable file degrades the same way as a genuinely empty one.
+    pub fn empty() -> Self {
+        Self {
+            rows: 0,
+            oldest: None,
+            newest: None,
+        }
+    }
+}
+
 /// 内部処理用の生行（id 込み）
 struct RawRow {
     id: i64,
@@ -224,6 +247,10 @@ impl TickerRepository {
 
     /// tickers テーブルから任意の resolution_secs でキャンドルを集約して返す。
     /// ltp_open/ltp_high/ltp_low/ltp を OHLC として使用する。
+    ///
+    /// `limit` が `None` の場合は `[from, to]` 全体を返す。バックテストは
+    /// 期間全体を評価する必要があるため、ここで暗黙に件数を打ち切ると
+    /// `ORDER BY bucket_ts ASC` の性質上、期間の後半が黙って捨てられる。
     pub async fn get_aggregated(
         &self,
         product_code: &str,
@@ -235,7 +262,8 @@ impl TickerRepository {
         let pc = product_code.to_string();
         let from_str = from.to_rfc3339();
         let to_str = to.to_rfc3339();
-        let limit = limit.unwrap_or(1000);
+        // SQLite treats a negative LIMIT as "no limit".
+        let limit: i64 = limit.map(i64::from).unwrap_or(-1);
         let res = resolution_secs as i64;
 
         let candles = self
@@ -315,6 +343,44 @@ impl TickerRepository {
         Ok(candles)
     }
 
+    /// 指定した product_code の行数・最古/最新タイムスタンプを返す。
+    /// 行が存在しない場合は `oldest`/`newest` が `None` になる。
+    pub async fn stats(&self, product_code: &str) -> Result<TickerStats> {
+        let pc = product_code.to_string();
+        let (rows, oldest, newest) = self
+            .conn
+            .call(move |c| {
+                let row = c.query_row(
+                    "SELECT COUNT(*), MIN(timestamp), MAX(timestamp)
+                     FROM tickers WHERE product_code = ?1",
+                    rusqlite::params![pc],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                        ))
+                    },
+                )?;
+                Ok(row)
+            })
+            .await?;
+
+        // MIN/MAX(timestamp) come back as RFC3339 strings (the storage
+        // format); a value that fails to parse is treated as absent rather
+        // than panicking or silently defaulting to the UNIX epoch.
+        let parse = |s: Option<String>| {
+            s.and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                .map(|dt| dt.with_timezone(&Utc))
+        };
+
+        Ok(TickerStats {
+            rows: rows.max(0) as u64,
+            oldest: parse(oldest),
+            newest: parse(newest),
+        })
+    }
+
     /// 段階的ダウンサンプリングを実行する。
     ///
     /// - 1〜7日前: 5 秒バケットに集約
@@ -337,7 +403,7 @@ impl TickerRepository {
         let deleted2 = self
             .compact_zone(
                 product_code,
-                DateTime::<Utc>::from_timestamp(0, 0).unwrap(),
+                DateTime::<Utc>::UNIX_EPOCH,
                 day7_ago,
                 60,
             )
@@ -417,23 +483,29 @@ impl TickerRepository {
         let mut ids_to_delete: Vec<i64> = Vec::new();
 
         for indices in buckets.values() {
-            // id 昇順なので indices[0] が MIN(id) = 代表行
-            let rep_idx = *indices.iter().min().unwrap();
+            // raw_rows は id 昇順で取得し、その順に push しているので indices も
+            // 昇順。よって first() が MIN(id) = 代表行、last() が終値の行になる
+            // （O(n) の min()/max() 走査は不要）。空バケットは push 時に必ず
+            // 1件入るため発生しないが、panic させず読み飛ばす。
+            let (Some(&rep_idx), Some(&last_idx)) = (indices.first(), indices.last()) else {
+                continue;
+            };
             let rep = &raw_rows[rep_idx];
+            // 最後の行（最大 id）の終値・スプレッド・出来高を代表値として使う
+            let last = &raw_rows[last_idx];
 
+            // 非空が保証されているためフォールバックは到達しないが、
+            // 到達した場合も代表行の値を使えば意味的に正しい。
             let high = indices
                 .iter()
                 .map(|&i| raw_rows[i].ltp_high)
                 .max()
-                .unwrap();
+                .unwrap_or(rep.ltp_high);
             let low = indices
                 .iter()
                 .map(|&i| raw_rows[i].ltp_low)
                 .min()
-                .unwrap();
-            // 最後の行（最大 id）の終値・スプレッド・出来高を代表値として使う
-            let last_idx = *indices.iter().max().unwrap();
-            let last = &raw_rows[last_idx];
+                .unwrap_or(rep.ltp_low);
 
             updates.push(BucketUpdate {
                 id: rep.id,
@@ -609,6 +681,38 @@ mod tests {
         }
     }
 
+    /// `limit: None` must return the whole `[from, to]` range. A previous
+    /// implicit cap of 1000 silently truncated backtests longer than ~41
+    /// days at 1h resolution, dropping the *newest* candles because the
+    /// query orders ascending.
+    #[tokio::test]
+    async fn get_aggregated_without_limit_returns_full_range() {
+        let db = Database::open_in_memory().await.unwrap();
+        let repo = db.tickers();
+
+        let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let hours = 1200;
+        for h in 0..hours {
+            let ts = start + chrono::Duration::hours(h);
+            repo.insert(&make_ticker(ts, dec!(9000000) + Decimal::from(h)))
+                .await
+                .unwrap();
+        }
+        let end = start + chrono::Duration::hours(hours);
+
+        let unlimited = repo
+            .get_aggregated("BTC_JPY", 3600, start, end, None)
+            .await
+            .unwrap();
+        assert_eq!(unlimited.len(), hours as usize);
+
+        let capped = repo
+            .get_aggregated("BTC_JPY", 3600, start, end, Some(500))
+            .await
+            .unwrap();
+        assert_eq!(capped.len(), 500);
+    }
+
     #[tokio::test]
     async fn insert_and_latest() {
         let db = Database::open_in_memory().await.unwrap();
@@ -688,6 +792,33 @@ mod tests {
         assert_eq!(row.ltp_high, dec!(9005000)); // 最大
         assert_eq!(row.ltp_low, dec!(8995000));  // 最小
         assert_eq!(row.ltp, dec!(9002000));       // 最後
+    }
+
+    #[tokio::test]
+    async fn stats_on_empty_db_returns_zero_rows_and_no_timestamps() {
+        let db = Database::open_in_memory().await.unwrap();
+        let repo = db.tickers();
+
+        let stats = repo.stats("BTC_JPY").await.unwrap();
+        assert_eq!(stats.rows, 0);
+        assert!(stats.oldest.is_none());
+        assert!(stats.newest.is_none());
+    }
+
+    #[tokio::test]
+    async fn stats_reports_row_count_and_range() {
+        let db = Database::open_in_memory().await.unwrap();
+        let repo = db.tickers();
+
+        let t1 = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let t2 = Utc.with_ymd_and_hms(2024, 1, 3, 0, 0, 0).unwrap();
+        repo.insert(&make_ticker(t1, dec!(9000000))).await.unwrap();
+        repo.insert(&make_ticker(t2, dec!(9100000))).await.unwrap();
+
+        let stats = repo.stats("BTC_JPY").await.unwrap();
+        assert_eq!(stats.rows, 2);
+        assert_eq!(stats.oldest, Some(t1));
+        assert_eq!(stats.newest, Some(t2));
     }
 
     #[tokio::test]

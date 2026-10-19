@@ -1,0 +1,24 @@
+{
+  "name": "hourly-rebalance-spacing",
+  "kind": "parameter",
+  "rationale": "2026-09-17 promoted `h1-block-held-signal` (PR #26) and then measured something its own rationale did not predict: of its 40 trades at the promotion capital, 39 fired on the first candle of a UTC-aligned 1-hour block and exactly 1 was a genuine mid-block drift correction. In realised behaviour over that window the promoted variant is therefore nearly indistinguishable from an hourly throttle on when the engine may act — a distinction of one trade. `rebalance_interval_secs` already expresses exactly that throttle as a DB-persisted config field, so this hypothesis asks the question PR #26 makes unavoidable: does the promoted gain need the new `signal_block_secs` code path at all, or is it reachable today with a two-number config edit, no source change, no new field and no live-order-path risk? The only spacing dose tested so far is `rebalance-spacing-15m` (900s, rejected); 3600s matches the promoted block length exactly, which is what makes the two runs comparable. Both outcomes are informative and both are cheap: if this is promoted, PR #26's reviewer learns that the same effect is available without a code change (and the two mechanisms can then be separated by the one trade that distinguishes them); if it is rejected while the H1 block was promoted, the held-signal mechanism is doing something a plain action throttle does not, which justifies the code. This is also a turnover-cutting hypothesis, so it satisfies the doc's warning-rule requirement, and must be scored on total_fees_jpy rather than trade count.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 3600
+  }
+}

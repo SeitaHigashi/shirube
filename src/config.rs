@@ -1,4 +1,3 @@
-use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 
@@ -12,9 +11,9 @@ use crate::risk::RiskParams;
 pub struct ZoneConfig {
     /// 生シグナルの最大値。デフォルト 1.0
     pub range_max: f64,
-    /// これ未満のraw_signalは effective=0.0（全JPY）。デフォルト 0.0
+    /// これ未満のraw_signalは effective=0.0（全JPY）。デフォルト 0.2
     pub hold_jpy_below: f64,
-    /// これ超のraw_signalは effective=1.0（全BTC）。デフォルト 1.0
+    /// これ超のraw_signalは effective=1.0（全BTC）。デフォルト 0.8
     pub hold_btc_above: f64,
 }
 
@@ -24,18 +23,23 @@ impl Default for ZoneConfig {
     }
 }
 
+/// 取引設定。インジケータ周期・シグナル重み・ゾーン設定・リバランス間隔を保持する。
+/// リスク管理パラメータ（ポジション上限・ドローダウン）は RiskParams で別管理。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradingConfig {
-    // リスク管理
-    pub max_position_btc: f64,
-    pub max_daily_drawdown: f64,
-    pub stop_loss_pct: f64,
-    pub min_order_size: f64,
-
-    // シグナル閾値
-    pub signal_threshold: f64,
-    /// 配分変更の dead-band。|delta| がこれ未満なら注文しない。デフォルト 0.05 (5%)
+    /// 配分変更の最小しきい値。|delta| がこれ未満なら注文しない。
+    /// デフォルト 0.0（追加の回数制限なし）。dust 注文は bitFlyer の最小取引量
+    /// (0.001 BTC, `min_order_size`) で別途弾かれるため、取引所条件が実質的な下限になる。
     pub allocation_threshold: f64,
+
+    /// サーキットブレーカーを有効化するか。デフォルト true。
+    /// 既存DBに保存された古い設定JSONにはこのフィールドが存在しないため、
+    /// 起動時のリスク保護が欠落しないよう `serde(default)` で true にフォールバックする。
+    #[serde(default = "default_circuit_breaker_enabled")]
+    pub circuit_breaker_enabled: bool,
+    /// サーキットブレーカーが発動する日次ドローダウン率。デフォルト 0.05 (5%)
+    #[serde(default = "default_max_daily_drawdown")]
+    pub max_daily_drawdown: f64,
 
     // インジケータ設定
     pub sma_period: usize,
@@ -47,7 +51,7 @@ pub struct TradingConfig {
     pub bollinger_period: usize,
     pub bollinger_std: f64,
 
-    // シグナル重み
+    // シグナル重み（ta_weight + sentiment_weight = 1.0）
     pub ta_weight: f64,
     pub sentiment_weight: f64,
 
@@ -60,21 +64,41 @@ pub struct TradingConfig {
     /// 現在配分 vs 目標配分を確認する。デフォルト: 60秒。
     #[serde(default = "default_rebalance_interval")]
     pub rebalance_interval_secs: u64,
+
+    /// 合成シグナル（compute_btc_target の戻り値）を UTC 整列ブロック単位で
+    /// 量子化する際のブロック長（秒）。
+    ///
+    /// 0 = ブロッキング無効（毎バー再計算する＝従来どおりの挙動）。
+    /// 正の値のときは、タイムスタンプが属するブロックが切り替わったときだけ
+    /// compute_btc_target を呼び、同一ブロック内では直前の合成値を保持する。
+    /// リバランス間隔・しきい値・ゾーン写像・各インジケータ周期は一切変更しない
+    /// ため、保持された目標に対するドリフト補正の売買は従来どおり毎バー発生する。
+    ///
+    /// NOTE: hypothesis `h1-block-held-signal` (arXiv:2602.11708). これは
+    /// 「どれだけ頻繁にシグナルを取り直すか」だけを変えるノブであり、
+    /// 「どれだけ頻繁に行動してよいか」を絞る rebalance_interval_secs とは
+    /// 別の機構である。既存DBに保存された設定JSONにはこのフィールドが無いため、
+    /// `serde(default)` で 0（＝完全な現行互換）にフォールバックする。
+    #[serde(default = "default_signal_block_secs")]
+    pub signal_block_secs: u64,
 }
 
-fn default_rebalance_interval() -> u64 {
-    60
-}
+fn default_rebalance_interval() -> u64 { 60 }
+/// シグナルブロッキングのデフォルトは 0（無効）。
+/// 0 のときブロッキングは完全な no-op であり、このフィールドを持たない
+/// 設定JSONは変更前とバイト単位で同一の結果を生む。
+fn default_signal_block_secs() -> u64 { 0 }
+fn default_circuit_breaker_enabled() -> bool { true }
+fn default_max_daily_drawdown() -> f64 { 0.05 }
 
 impl Default for TradingConfig {
     fn default() -> Self {
         Self {
-            max_position_btc: 0.1,
+            // NOTE: threshold 0.0 defers entirely to the exchange minimum lot
+            // (`min_order_size`); 0.15 previously throttled trades well above it.
+            allocation_threshold: 0.0,
+            circuit_breaker_enabled: true,
             max_daily_drawdown: 0.05,
-            stop_loss_pct: 0.02,
-            min_order_size: 0.001,
-            signal_threshold: 0.4,
-            allocation_threshold: 0.15,
             sma_period: 200,
             ema_period: 100,
             rsi_period: 42,
@@ -87,39 +111,28 @@ impl Default for TradingConfig {
             sentiment_weight: 0.3,
             zone: ZoneConfig::default(),
             rebalance_interval_secs: 60,
+            // 0 = シグナルブロッキング無効。デフォルトは現行挙動と完全に同一。
+            signal_block_secs: 0,
         }
     }
 }
 
 impl TradingConfig {
+    /// RiskParams へ変換する。最小注文サイズは固定値（0.001 BTC）を使用する。
     pub fn to_risk_params(&self) -> RiskParams {
         RiskParams {
-            max_position_btc: Decimal::try_from(self.max_position_btc).unwrap_or(dec!(0.1)),
+            min_order_size: dec!(0.001),
+            circuit_breaker_enabled: self.circuit_breaker_enabled,
             max_daily_drawdown: self.max_daily_drawdown,
-            stop_loss_pct: self.stop_loss_pct,
-            min_order_size: Decimal::try_from(self.min_order_size).unwrap_or(dec!(0.001)),
-            circuit_breaker_enabled: false,
         }
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        if !(0.0..=1.0).contains(&self.signal_threshold) {
-            return Err("signal_threshold は 0.0〜1.0 の範囲で指定してください".into());
-        }
         if !(0.0..=1.0).contains(&self.allocation_threshold) {
             return Err("allocation_threshold は 0.0〜1.0 の範囲で指定してください".into());
         }
         if !(0.0..=1.0).contains(&self.max_daily_drawdown) {
             return Err("max_daily_drawdown は 0.0〜1.0 の範囲で指定してください".into());
-        }
-        if !(0.0..=1.0).contains(&self.stop_loss_pct) {
-            return Err("stop_loss_pct は 0.0〜1.0 の範囲で指定してください".into());
-        }
-        if self.max_position_btc <= 0.0 {
-            return Err("max_position_btc は 0 より大きい値を指定してください".into());
-        }
-        if self.min_order_size <= 0.0 {
-            return Err("min_order_size は 0 より大きい値を指定してください".into());
         }
         if self.macd_slow <= self.macd_fast {
             return Err("macd_slow は macd_fast より大きい値を指定してください".into());
@@ -145,6 +158,11 @@ impl TradingConfig {
         if self.zone.hold_jpy_below >= self.zone.hold_btc_above {
             return Err("zone.hold_jpy_below < zone.hold_btc_above を満たす必要があります".into());
         }
+        // BASE_RESOLUTION = 60 秒（1バー）より短いブロックは意味を持たないため、
+        // 0（無効）か 60 の正の倍数のみを許可する。
+        if self.signal_block_secs != 0 && self.signal_block_secs % 60 != 0 {
+            return Err("signal_block_secs は 0 または 60 の正の倍数で指定してください".into());
+        }
         Ok(())
     }
 }
@@ -156,7 +174,7 @@ mod tests {
     #[test]
     fn default_values_are_correct() {
         let cfg = TradingConfig::default();
-        assert_eq!(cfg.signal_threshold, 0.4);
+        assert_eq!(cfg.allocation_threshold, 0.0);
         assert_eq!(cfg.sma_period, 200);
         assert_eq!(cfg.ta_weight, 0.7);
     }
@@ -166,15 +184,8 @@ mod tests {
         let cfg = TradingConfig::default();
         let json = serde_json::to_string(&cfg).unwrap();
         let back: TradingConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.signal_threshold, cfg.signal_threshold);
+        assert_eq!(back.allocation_threshold, cfg.allocation_threshold);
         assert_eq!(back.sma_period, cfg.sma_period);
-    }
-
-    #[test]
-    fn validate_rejects_invalid_threshold() {
-        let mut cfg = TradingConfig::default();
-        cfg.signal_threshold = 1.5;
-        assert!(cfg.validate().is_err());
     }
 
     #[test]
@@ -194,10 +205,78 @@ mod tests {
     }
 
     #[test]
-    fn to_risk_params_converts_correctly() {
+    fn to_risk_params_sets_min_order_size() {
         let cfg = TradingConfig::default();
         let params = cfg.to_risk_params();
-        assert_eq!(params.max_daily_drawdown, 0.05);
-        assert_eq!(params.stop_loss_pct, 0.02);
+        assert_eq!(params.min_order_size, dec!(0.001));
+    }
+
+    #[test]
+    fn to_risk_params_carries_circuit_breaker_settings() {
+        let mut cfg = TradingConfig::default();
+        cfg.circuit_breaker_enabled = true;
+        cfg.max_daily_drawdown = 0.1;
+        let params = cfg.to_risk_params();
+        assert!(params.circuit_breaker_enabled);
+        assert_eq!(params.max_daily_drawdown, 0.1);
+    }
+
+    #[test]
+    fn validate_rejects_bad_max_daily_drawdown() {
+        let mut cfg = TradingConfig::default();
+        cfg.max_daily_drawdown = 1.5;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn missing_fields_in_stored_json_fall_back_to_safe_defaults() {
+        // Simulates a config JSON persisted before circuit_breaker_enabled /
+        // max_daily_drawdown existed. Must still deserialize, and must default
+        // to the breaker being ON rather than silently disabled.
+        let cfg = TradingConfig::default();
+        let mut json: serde_json::Value = serde_json::to_value(&cfg).unwrap();
+        json.as_object_mut().unwrap().remove("circuit_breaker_enabled");
+        json.as_object_mut().unwrap().remove("max_daily_drawdown");
+        let loaded: TradingConfig = serde_json::from_value(json).unwrap();
+        assert!(loaded.circuit_breaker_enabled);
+        assert_eq!(loaded.max_daily_drawdown, 0.05);
+    }
+
+    #[test]
+    fn missing_signal_block_secs_deserialises_to_zero() {
+        // A stored config (or a hypothesis file) written before
+        // `signal_block_secs` existed must still deserialize, and must default
+        // to 0 = blocking disabled, i.e. exactly the pre-change behaviour.
+        let cfg = TradingConfig::default();
+        let mut json: serde_json::Value = serde_json::to_value(&cfg).unwrap();
+        json.as_object_mut().unwrap().remove("signal_block_secs");
+        assert!(json.get("signal_block_secs").is_none());
+        let loaded: TradingConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(loaded.signal_block_secs, 0);
+    }
+
+    #[test]
+    fn default_signal_block_secs_is_zero() {
+        assert_eq!(TradingConfig::default().signal_block_secs, 0);
+    }
+
+    #[test]
+    fn validate_accepts_zero_and_minute_multiples_for_signal_block_secs() {
+        let mut cfg = TradingConfig::default();
+        for secs in [0u64, 60, 900, 3600, 21600] {
+            cfg.signal_block_secs = secs;
+            assert!(cfg.validate().is_ok(), "signal_block_secs={secs} should validate");
+        }
+    }
+
+    #[test]
+    fn validate_rejects_sub_bar_signal_block_secs() {
+        // Anything that is not a multiple of BASE_RESOLUTION = 60 would mean a
+        // block shorter than (or misaligned with) a single 1-minute bar.
+        let mut cfg = TradingConfig::default();
+        for secs in [1u64, 30, 59, 61, 3599] {
+            cfg.signal_block_secs = secs;
+            assert!(cfg.validate().is_err(), "signal_block_secs={secs} should be rejected");
+        }
     }
 }

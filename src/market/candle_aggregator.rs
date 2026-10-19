@@ -1,4 +1,4 @@
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use tracing::{info, warn};
 
@@ -86,7 +86,12 @@ impl CandleAggregator {
         let ts_secs = ts.timestamp();
         // Integer division floors towards zero, giving the bucket start
         let bucket = (ts_secs / self.resolution_secs as i64) * self.resolution_secs as i64;
-        Utc.timestamp_opt(bucket, 0).unwrap()
+        // INVARIANT: `bucket` is `ts` floored by at most `resolution_secs`, and
+        // `ts` is already a representable DateTime, so the result is always in
+        // chrono's range. `expect` documents that this is an invariant rather
+        // than an unchecked assumption.
+        DateTime::from_timestamp(bucket, 0)
+            .expect("bucket floor of a valid timestamp is always representable")
     }
 
     /// Ticker から更新（REST ポーリング由来）。
@@ -141,12 +146,12 @@ impl CandleAggregator {
                 cur.update(price, volume);
                 None
             }
-            Some(_) => {
-                // New bucket: close the previous candle and open a fresh one
-                let old = self.current.take().unwrap();
-                let finalized = old.finalize(&self.product_code, self.resolution_secs);
-                self.current = Some(PartialCandle::new(bucket, price, volume));
-                Some(finalized)
+            Some(cur) => {
+                // New bucket: close the previous candle and open a fresh one.
+                // `replace` swaps in the new partial and hands back the old one
+                // by value, so no `Option` unwrapping is needed.
+                let old = std::mem::replace(cur, PartialCandle::new(bucket, price, volume));
+                Some(old.finalize(&self.product_code, self.resolution_secs))
             }
         }
     }
@@ -170,9 +175,13 @@ pub async fn build_seeded_aggregator(
     let now = Utc::now();
     let bucket_start_ts =
         (now.timestamp() / resolution_secs as i64) * resolution_secs as i64;
-    let bucket_start = Utc.timestamp_opt(bucket_start_ts, 0).unwrap();
+    // INVARIANT: both are derived from `Utc::now()` ± one bucket, so they are
+    // always within chrono's representable range.
+    let bucket_start = DateTime::from_timestamp(bucket_start_ts, 0)
+        .expect("bucket start derived from now() is always representable");
     let bucket_end_ts = bucket_start_ts + resolution_secs as i64;
-    let bucket_end = Utc.timestamp_opt(bucket_end_ts, 0).unwrap();
+    let bucket_end = DateTime::from_timestamp(bucket_end_ts, 0)
+        .expect("bucket end derived from now() is always representable");
 
     match db.tickers().range(product_code, bucket_start, bucket_end).await {
         Ok(stored) => {
@@ -201,7 +210,7 @@ pub async fn build_seeded_aggregator(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
     use rust_decimal_macros::dec;
 
     fn ticker(ts_secs: i64, ltp: Decimal) -> Ticker {

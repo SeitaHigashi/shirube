@@ -1,0 +1,35 @@
+{
+  "name": "trend-weight-half",
+  "kind": "algorithm",
+  "rationale": "The 2026-09-09 report's lead #3, and now with a second reason to run it. mean-reversion-weighted-subsignals (merged as PR #12) set REVERSION_SUBSIGNAL_WEIGHT = 1.0 and TREND_SUBSIGNAL_WEIGHT = 0.25 in TradingEngine::compute_btc_target, and that report says plainly that '1.0 / 0.25 was chosen only as the mirror of a rejected variant, not because anything says 0.25 is right' -- the promoted point sits at one end of a curve nobody has walked. The second reason is that the evidence behind 0.25 no longer applies as measured: it was justified by a -0.028 lag-1 autocorrelation of HOURLY returns on CoinGecko data, and both the resolution and the data source have since changed. Re-measured on this run's real bitFlyer bars at the resolution the engine actually trades (1-minute), over the pre-holdout training window only (2026-08-09T04:03Z -> 2026-08-26T19:15Z, 18,648 bars), the lag-1 autocorrelation is -0.0146 -- still mean-reverting in sign, but about half the magnitude that motivated pushing the trend family down to a quarter weight. Halfway between the merged 0.25 and the rejected trend-dominant 1.0 is the natural next probe, and it is a one-constant change with no formula edit: if the curve is flat between the two ends, that is worth knowing before anyone tunes these weights further.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  },
+  "code_change_summary": "In TradingEngine::compute_btc_target (src/trading/engine.rs), change the single constant TREND_SUBSIGNAL_WEIGHT from 0.25 to 0.5, leaving REVERSION_SUBSIGNAL_WEIGHT at 1.0. Nothing else changes: every sub-signal formula (RSI, damped SMA cross, damped EMA cross, damped MACD histogram, Bollinger %B), the weighted-mean aggregation ta_normalized = sum(value*weight)/sum(weight), the empty-sub_signals warmup guard returning None, the non-positive SMA/EMA guards, the MACD bb_middle fallback and the sentiment combination all stay byte-for-byte identical. Update the constant's doc comment to record that 0.5 is a midpoint probe between the merged 0.25 and the rejected trend-dominant 1.0, and to cite the re-measured lag-1 autocorrelation of -0.0146 on 1-minute bitFlyer returns over the pre-holdout training window (2026-08-09 -> 2026-08-26, 18,648 bars) rather than the superseded -0.028 hourly CoinGecko figure. Then update the expected values in the compute_btc_target_* unit tests in src/trading/engine.rs's test module wherever the new weight legitimately changes them -- verify which are affected by running the tests rather than assuming; the existing comment in compute_btc_target_strong_buy_returns_target_above_half spells out its arithmetic ((0.8*1.0 + 1.0*0.25)/1.25 = 0.84) and will need recomputing for weight 0.5.",
+  "constraints": [
+    "This hypothesis modifies the body of TradingEngine::compute_btc_target. This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST NOT change TradingEngine::compute_btc_target's signature (its parameter list or return type) -- only its body.",
+    "MUST NOT change any individual sub-signal's own formula, the aggregation expression, or REVERSION_SUBSIGNAL_WEIGHT; exactly one numeric constant changes.",
+    "MUST pass `cargo test`, including the compute_btc_target_* unit tests in src/trading/engine.rs -- update their expected values if the new weight legitimately changes them (do not weaken or delete a test just to make it pass).",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff touches compute_btc_target's body, so the reviewer gives it the scrutiny an allocation-formula change deserves.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or anything on the live order-submission path."
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "name": "reversion-horizon-15m",
+  "kind": "parameter",
+  "rationale": "Since PR #12 merged (2026-09-09), compute_btc_target weights the mean-reverting family (RSI, Bollinger %B) at 1.0 against 0.25 for the trend family, so the two mean-reverting sub-signals now dominate the composite -- but nothing has ever tested the horizon they are measured over. Both are currently long: rsi_period 42 (42 minutes) and bollinger_period 60 (1 hour) at the 60s resolution the engine actually trades. arXiv:2608.21888 measures crypto short-horizon reversal directly and finds it peaks at the highest frequencies tested and decays monotonically to no-skill by roughly four hours, with its headline measurement taken on 15-minute candles. shirube's own pre-holdout data agrees that the current horizons are long: over the 19,888-bar training window (2026-08-09T04:03Z -> 2026-08-27T19:14Z, strictly before HOLDOUT_START, so no holdout data enters this authoring) the lag-1 autocorrelation of 1-minute returns is -0.0147 -- mean-reverting in sign at exactly the resolution the engine trades. This hypothesis shortens only the two mean-reverting indicators to a 15-bar (15-minute) horizon and leaves every trend period (sma 200, ema 100, macd 52/104/18) untouched, so it is a clean test of the reversion horizon rather than a general speed-up. Note the one coupling to declare: bollinger_period also sets bb_middle, which compute_btc_target uses purely as a scale reference to convert the MACD histogram into a relative magnitude, so the MACD sub-signal's scaling shifts slightly as a side effect; its own periods are unchanged. Expected direction on turnover is upward (faster indicators saturate more often), which is the opposite of the two variants Run 2 lost to the trade-count floor.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 15,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 15,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  },
+  "paper_reference": {
+    "title": "Short-horizon mean reversion in cryptocurrency markets: a matched cross-market measurement",
+    "authors": "see arXiv listing",
+    "venue_year": "arXiv:2608.21888, 2026",
+    "url": "https://arxiv.org/html/2608.21888v1",
+    "key_claim": "Short-horizon directional reversal is pervasive in crypto and far stronger than in equities -- 90% of 183 Binance USDT pairs show significant reversal at a 15-minute horizon against 2.7% of 187 US stocks/ETFs -- and it decays monotonically as the sampling horizon lengthens, reaching no-skill within about four hours.",
+    "pros": "Same asset class, recent sample (Jan 2025 - Feb 2026), and it measures precisely the quantity shirube's now-dominant mean-reverting family depends on: how far out the reversal signal survives. It is validated across four venues (Binance, Coinbase, OKX, Bybit), walk-forward tested with a frozen six-month holdout, and supported by 340 permutation tests, so the horizon-decay shape is unusually well evidenced for this literature. It maps onto shirube with no code change at all -- two integers in TradingConfig -- and its predicted direction is independently corroborated by shirube's own -0.0147 lag-1 autocorrelation measured on pre-holdout 1-minute bitFlyer bars.",
+    "cons": "The decisive caveat is the paper's own economic conclusion, and it argues against shirube's whole approach rather than for this hypothesis: the gross edge peaks near 1.3bp per trade against a 5bp round-trip cost, i.e. detectable but not tradable on spot. shirube's round-trip cost is materially worse than the paper's 5bp, so a horizon fix alone cannot be expected to turn the strategy profitable -- at best it makes the signal less wrong. The instrument also differs (Binance USDT pairs vs bitFlyer BTC/JPY spot), the paper studies a direct reversal predictor rather than an RSI/Bollinger composite passed through a zone allocator, and it says nothing about indicator periods as such -- mapping '15-minute horizon' onto 'rsi_period 15 and bollinger_period 15' is this pipeline's translation, not the authors'. shirube's own backtest gate decides, not the paper's AUC figures."
+  }
+}

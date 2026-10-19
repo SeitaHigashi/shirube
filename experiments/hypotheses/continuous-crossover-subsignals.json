@@ -1,0 +1,31 @@
+{
+  "name": "continuous-crossover-subsignals",
+  "kind": "algorithm",
+  "rationale": "In src/trading/engine.rs::TradingEngine::compute_btc_target (current dev HEAD, restored 2026-09-08 in a89687b), the SMA-cross, EMA-cross, and MACD-histogram sub-signals are hard step functions: `if close > sma { 1.0 } else if close < sma { 0.0 } else { 0.5 }` (and equivalently for EMA and the histogram sign). A candle that closes 0.01% above the SMA contributes the exact same full +1.0 bullish sub-signal as one that closes 10% above it, so ta_normalized (and therefore the zone-mapped target) is maximally sensitive to noise right at each crossover boundary — a single noisy tick can flip a third of the averaged sub-signals between 0.0 and 1.0 with no change in the actual trend strength. Replacing the three step functions with a continuous, saturating mapping of relative distance from the reference line should reduce noise-driven target flips (and the trades allocation_threshold lets through) without discarding genuine trend information, since a real breakout still saturates toward 0.0/1.0 just as before.",
+  "trading_config": {
+    "allocation_threshold": 0.15,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  },
+  "code_change_summary": "In TradingEngine::compute_btc_target (src/trading/engine.rs), replace the SMA-cross and EMA-cross sub-signal step functions with a continuous mapping: sub_signal = (((close - reference) / reference) / 0.02).clamp(-1.0, 1.0) * 0.5 + 0.5 (i.e. a 2% relative distance from the reference line saturates fully to 1.0 or 0.0; smaller deviations map linearly through 0.5), applied identically for sma and ema as the reference. Apply the same style of continuous, clamped mapping to the MACD histogram sub-signal, scaling by the histogram's magnitude relative to bb_middle (or another already-available reference scale) instead of only its sign, so a barely-positive histogram no longer contributes a full 1.0. RSI's sub-signal and Bollinger %B's sub-signal are already continuous and should be left unchanged. Update the doc comment's '# Sub-signal mappings' section to describe the new formulas, and update the expected values in the compute_btc_target_* unit tests in src/trading/engine.rs's test module to match the new continuous outputs (the warmup/None test and the news-only test are unaffected since they don't exercise sma/ema/histogram).",
+  "constraints": [
+    "This hypothesis modifies the body of TradingEngine::compute_btc_target. This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch — never as a direct commit to dev/main.",
+    "MUST pass `cargo test`, including the compute_btc_target_* unit tests in src/trading/engine.rs — update their expected values if the new formula legitimately changes them (do not weaken or delete a test just to make it pass).",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically — a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff touches compute_btc_target's body, so the reviewer gives it the scrutiny an allocation-formula change deserves.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or anything on the live order-submission path."
+  ]
+}

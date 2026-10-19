@@ -49,12 +49,61 @@ ACCESS-SIGN = HEX( HMAC-SHA256( api_secret, 署名対象文字列 ) )
 | GET | `/v1/getmarkets` | 取引可能なマーケット一覧 | ✗ |
 | GET | `/v1/getboard` | 板情報（オーダーブック） | ✗ |
 | GET | `/v1/getticker` | ティッカー情報 | ✅ |
-| GET | `/v1/getexecutions` | 最近の約定履歴 | ✗ |
+| GET | `/v1/getexecutions` | 最近の約定履歴 | ✅ |
 | GET | `/v1/getboardstate` | 板の状態（運営状況） | ✗ |
 | GET | `/v1/gethealth` | 取引所の稼働状況 | ✗ |
 | GET | `/v1/getfundingrate` | CFD 商品のファンディングレート | ✗ |
 | GET | `/v1/getcorporateleverage` | 法人向け最大レバレッジ | ✗ |
 | GET | `/v1/getchats` | チャット履歴 | ✗ |
+
+### GET /v1/getexecutions（実装済）
+
+公開約定履歴（トレードテープ）。`BitFlyerRestClient::get_public_executions`
+が対応する。認証不要。
+
+**認証必須の `/v1/me/getexecutions`（自分の約定履歴）とは別物**なので注意。
+Rust 側もメソッド名を分けている（`get_public_executions` /
+`ExchangeClient::get_executions`）。
+
+| パラメータ | 必須 | 説明 |
+|---|---|---|
+| `product_code` | ✅ | 例: `BTC_JPY` |
+| `count` | ✗ | 取得件数。**上限 500**（`count=1000` を指定しても 500 件しか返らない） |
+| `before` | ✗ | この ID 未満の約定を取得（過去方向へのページング） |
+| `after` | ✗ | この ID 超の約定を取得 |
+
+#### 遡及可能期間は直近 31 日（実測 2026-09-09）
+
+保持期間を超える `before` を渡すと **HTTP 400** で以下を返す:
+
+```json
+{"status":-156,"error_message":"Execution history is limited to the most recent 31 days.","data":null}
+```
+
+二分探索による実測値:
+
+| 項目 | 値 |
+|---|---|
+| 最新 | `id=2650972445` / `2026-09-09T03:43:34` |
+| 最古到達 | `id=2649068611` / `2026-08-08T04:01:17`（31.99 日前） |
+| BTC_JPY 約定密度 | 約 13,000〜13,500 件/日 |
+
+**ローリングウィンドウ**なので、今日取れなかった履歴は明日には失われる。
+バックテスト用データはこれを前提に早めに蓄積すること
+（`shirube backfill-executions`、`src/backtest/backfill.rs` を参照）。
+
+> NOTE: `id` は BTC_JPY 専用ではなく全プロダクト共通の連番。ID 差分から
+> BTC_JPY の約定件数を推定すると 4〜5 倍に過大評価するので注意
+> （FX_BTC_JPY 等の約定も同じ採番を消費している）。
+
+#### レート制限
+
+公開 API の IP 単位上限は約 **500 リクエスト / 5 分（≒100 req/min）**。
+`RateLimiter::new(200)` はバケットが満杯の状態から始まるため 200 連射を
+許してしまい、数百リクエストを連続で投げるバックフィルでは
+`{"status":-1,"error_message":"Over API limit per period, per IP address"}`
+に到達する。`backtest::backfill` は独自に 750ms 間隔（約 80 req/min）へ
+ペーシングし、status `-1` は指数バックオフでリトライする。
 
 ### GET /v1/getticker レスポンス（実装済）
 

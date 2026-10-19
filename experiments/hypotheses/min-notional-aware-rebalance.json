@@ -1,0 +1,35 @@
+{
+  "name": "min-notional-aware-rebalance",
+  "kind": "algorithm",
+  "rationale": "Measured 2026-09-11 at initial_jpy=50000 on real bitFlyer 1-minute bars (2026-08-10 .. 2026-09-09): sweeping allocation_threshold over 0.05, 0.10 and 0.15 produced three byte-identical reports (-3.336052597% return, 481 trades, identical Sharpe and max drawdown). The cause is TradingEngine::allocation_delta_to_order, which computes `size = delta * total_value / price` and returns None when `size < min_order_size` (0.001 BTC). At a BTC price around 12.2M JPY the exchange minimum is ~12,224 JPY of notional, which on a 50,000 JPY account is 24.4% of the portfolio — so on a small account every configured threshold below ~0.245 is inert, and the true rebalance gate is set by bitFlyer's lot size rather than by the config. The same floor is 2.4% at 500,000 JPY and 0.24% at 5,000,000 JPY, which is why runs at and above 500,000 JPY are otherwise scale-invariant (2727 trades, identical to 5 decimal places, differing only through the fee tier). Worse, this is invisible in the report: the None return happens BEFORE RiskManager::evaluate, so these skipped rebalances are counted in neither total_trades nor orders_rejected. With the primary evaluation capital now 50,000 JPY, this is the single largest unmodelled effect in the pipeline. This hypothesis makes the constraint explicit and testable: count the skips, and when a rebalance is warranted but lands under the lot size, round the order up to exactly min_order_size if the balance affords it, instead of silently dropping the signal.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  },
+  "code_change_summary": "Two coupled changes. (1) Observability: add a `orders_below_min: u32` counter to RiskEventCounts (src/backtest/mod.rs) and a matching `#[serde(default)] orders_below_min: u32` field on BacktestReport, incremented in Simulator::run every time allocation_delta_to_order returns None for a delta that had already cleared allocation_threshold — i.e. a rebalance the strategy wanted but the lot size forbade. Persist it alongside the other report fields and print it in format_report. This half is pure measurement and must not change any trading decision. (2) Behavior under test: change TradingEngine::allocation_delta_to_order so that instead of returning None when `size < min_size`, it rounds the order UP to exactly `min_size` — but only when the rounded-up order is actually affordable and does not overshoot the target: for a Buy, `min_size * price` must not exceed the available JPY balance, and for both sides the rounded-up size must not exceed what would take the portfolio past 100%/0% allocation. When either guard fails, keep returning None exactly as today. Since allocation_delta_to_order does not currently receive balances, extend its parameter list with the information needed for those guards (e.g. the available JPY and BTC balances) and update all three call sites (the signal handler, handle_rebalance, and Simulator::run). Document the new behavior with a doc comment that states the mechanism, gives the measured 24.4% / 2.4% / 0.24% notional floors at 50k / 500k / 5M JPY of capital, and carries a NOTE explaining that on a small account this converts a silently-dropped signal into a minimum-lot trade.",
+  "constraints": [
+    "The observability half (orders_below_min) MUST NOT alter any trading decision — it only counts. Verify by running the backtest with only that half applied and confirming total_return_pct, sharpe_ratio and total_trades are byte-identical to the current baseline at every capital.",
+    "MUST NOT change TradingEngine::compute_btc_target at all — neither signature nor body.",
+    "MUST NOT lower or otherwise reinterpret min_order_size (0.001 BTC in RiskParams): it is bitFlyer's lot size, not a tunable. The change may only round an order UP to it, never place anything below it.",
+    "Rounding up MUST be guarded: never place a Buy the JPY balance cannot cover, never place a Sell exceeding the BTC balance, and never let the rounded-up size push allocation past the 0%/100% bounds. When a guard fails, return None as today.",
+    "MUST pass `cargo test`. Add unit tests for allocation_delta_to_order covering: a sub-minimum delta that is affordable (rounds up to exactly min_size), a sub-minimum delta that is NOT affordable (still None), a delta already above min_size (unchanged, byte-identical size), and the sell-side equivalent of each.",
+    "Report the backtest at initial_jpy=50000 AND 500000 AND 5000000, since the whole point is that this effect is capital-dependent and is nearly invisible above 500,000 JPY.",
+    "This changes the live order-submission path (order sizes actually sent to bitFlyer). Flag that explicitly and prominently in the PR description.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or the FEE_TIERS table."
+  ]
+}

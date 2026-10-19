@@ -1,0 +1,24 @@
+{
+  "name": "lower-allocation-threshold",
+  "kind": "parameter",
+  "rationale": "src/config.rs's default allocation_threshold is 0.15 — a rebalance only fires once the sticky-target vs. current-allocation delta exceeds 15 percentage points. This is a variable independent of indicator warmup (see shorter-hourly-indicator-periods.json's rationale for that separate structural issue), so it is worth isolating on its own: even once compute_btc_target starts producing directional signals, a 15pp gate may be suppressing legitimate rebalances that a lower, still dust-order-safe threshold (0.05, well above allocation_delta_to_order's 0.001 BTC min_order_size floor at typical BTC/JPY prices) would allow through. Testing this change alone, with every indicator period left at default, isolates whether the threshold itself is a binding constraint on trade frequency and Sharpe.",
+  "trading_config": {
+    "allocation_threshold": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  }
+}

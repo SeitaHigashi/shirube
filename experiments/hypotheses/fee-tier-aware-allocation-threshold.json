@@ -1,0 +1,35 @@
+{
+  "name": "fee-tier-aware-allocation-threshold",
+  "kind": "algorithm",
+  "rationale": "Measured 2026-09-11 on real bitFlyer 1-minute bars (2026-08-10 .. 2026-09-09, 30 days, baseline config): the strategy turns over ~305x its equity per 30 days (~10x/day, 2727 trades), so its P&L is almost entirely a function of the commission rate. Holding the config fixed and only varying --fee-pct at initial_jpy=500000 gives a near-perfectly linear curve: 0.15% -> -34.77%, 0.09% -> -19.30%, 0.05% -> -7.05%, 0.03% -> -0.23%, 0.02% -> +3.36%, 0.01% -> +7.09%, 0% -> +10.95%. Break-even sits at an effective commission of roughly 0.030%. bitFlyer's spot commission is volume-tiered (0.15% under 100k JPY of 30-day volume, down to 0.01% above 500M JPY), and at 305x turnover the tier an account reaches is set by its capital: 50k JPY of capital only reaches ~15M JPY of 30-day volume (0.05% tier, hopelessly above break-even), while 5M JPY of capital reaches ~1.5B JPY (0.01% tier, comfortably below it). The strategy's turnover is therefore only affordable once the fee tier is deep enough, and the current logic has no notion of this at all: allocation_threshold is a fixed constant regardless of what the account is actually being charged. This hypothesis makes the rebalance gate a function of the live commission rate, so a small or freshly-started account trades rarely (only large allocation moves clear the bar) and automatically tightens toward the configured threshold as its volume pushes it into cheaper tiers. It is the direct, minimal test of 'adjust the logic according to the fee'.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "fee_threshold_multiplier": 200.0,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  },
+  "code_change_summary": "Add a new f64 field `fee_threshold_multiplier` to TradingConfig (src/config.rs) with a serde default of 0.0, meaning 'disabled / exactly today's behavior'. Update TradingConfig::validate() to reject negative values, and update the ConfigRepository DB round-trip (src/storage/config.rs) plus any schema definition so the field persists and reloads like every other field. Then introduce one private helper on TradingEngine, `effective_allocation_threshold(config: &TradingConfig, commission_rate: f64) -> f64`, returning `config.allocation_threshold.max(config.fee_threshold_multiplier * commission_rate)`. The multiplier is expressed in units of 'portfolio fraction per unit of commission rate', so at the baseline 0.15% tier a multiplier of 200 yields a 0.30 threshold, while at the 0.01% tier it yields 0.02 and the configured allocation_threshold of 0.10 wins — i.e. the gate loosens automatically as the account's fee tier deepens. Call this helper in BOTH places that currently read `config.allocation_threshold` to gate a rebalance: TradingEngine's signal handler and handle_rebalance (src/trading/engine.rs), and Simulator::run (src/backtest/simulator.rs). The commission rate comes from the exchange client's existing `ExchangeClient::fee_pct()` trait method — MockExchangeClient already returns its volume-tiered rate from that method, so the backtest sees the tier deepen as simulated volume accumulates, which is exactly the effect under test. Document the helper with a doc comment giving the formula, the unit of the multiplier, the worked 0.15%/0.01% examples above, and a NOTE that 0.0 disables the mechanism entirely.",
+  "constraints": [
+    "MUST NOT change TradingEngine::compute_btc_target at all — neither its signature nor its body. This hypothesis changes only WHEN a rebalance is allowed to fire, never what the target allocation is.",
+    "MUST NOT change FEE_TIERS or fee_from_volume in src/exchange/mock.rs — the tier table is bitFlyer's published schedule and is not part of this experiment.",
+    "`fee_threshold_multiplier: 0.0` MUST reproduce today's behavior byte-for-byte. Add a unit test asserting effective_allocation_threshold returns config.allocation_threshold exactly when the multiplier is 0.0, at several commission rates.",
+    "MUST keep the existing allocation_threshold as a floor: the effective threshold is the MAX of the two, never the fee term alone, so a configured threshold can never be silently lowered by a cheap fee tier.",
+    "MUST pass `cargo test`, including the existing config validate()/round-trip tests and the trading engine tests. Add unit tests for effective_allocation_threshold covering: multiplier 0.0 (inert), a high commission tier producing the fee-derived threshold, and a low commission tier falling back to allocation_threshold.",
+    "Adding a TradingConfig field changes the live instance's persisted config: flag this explicitly in the PR description, and confirm an existing DB row lacking the column still loads (serde default) rather than failing startup.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or anything on the live order-submission path beyond the threshold comparison described above."
+  ]
+}

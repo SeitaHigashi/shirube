@@ -1,0 +1,26 @@
+{
+  "name": "medium-hourly-indicator-periods",
+  "kind": "parameter",
+  "rationale": "The 2026-09-08 report's shorter-hourly-indicator-periods hypothesis (SMA 48/EMA 24/RSI 14/MACD 12-26-9/Bollinger 20) fixed the indicator-warmup starvation problem described there and produced a real Sharpe improvement (+14.81 absolute, baseline non-positive) with a healthy trade count (56 vs 37, 151%), but was rejected purely because max drawdown ticked up by 0.0020 percentage points (4.2896% -> 4.2915%) -- the report itself calls this 'almost certainly simulation noise rather than a meaningful regression', yet the promotion rule (correctly, by design) does not carve out an epsilon for it. Rather than re-testing the exact same config (which would just reproduce the same near-miss), this hypothesis tests a less extreme shortening -- roughly halfway between the stock defaults (200/100/42/104/60) and the previously-tested short values (48/24/14/26/20) -- on the theory that a smaller step count reduction still frees most of the 336-hour holdout for active signal (per the original structural argument) while generating fewer total rebalances than the fully-shortened variant, which may avoid the fee-drag-driven drawdown uptick that sank the more aggressive version.",
+  "trading_config": {
+    "allocation_threshold": 0.15,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 72,
+    "ema_period": 36,
+    "rsi_period": 21,
+    "macd_fast": 17,
+    "macd_slow": 35,
+    "macd_signal": 12,
+    "bollinger_period": 30,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  }
+}

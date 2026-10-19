@@ -1,0 +1,26 @@
+{
+  "name": "code-default-allocation-threshold",
+  "kind": "parameter",
+  "rationale": "Two independent reasons converge on the same untested value. (1) Drift: TradingConfig::default() has carried allocation_threshold = 0.15 since commit 7245310 ('perf: raise allocation_threshold from 0.05 to 0.15', a hand-made change), but experiments/baseline-config.json -- which docs/self-improvement-loop.md defines as 'the config the currently-running instance is assumed to use' -- has always held 0.1 and has never matched the shipped default. Every parameter verdict this pipeline has produced was therefore measured against a threshold the live instance most likely does not run. (2) The curve is unsampled between 0.10 and 0.25. On 2026-09-09 Run 2, higher-allocation-threshold (0.10 -> 0.25) improved Sharpe by +3.207 and max drawdown by 1.73pp -- the largest gain this pipeline has ever measured on those two axes -- and was rejected on the trade-count floor alone, at 16% of baseline trades (204 vs 1285). lower-allocation-threshold (2026-09-08) moved the other way and was rejected on merit. So the promotable point, if one exists, lies strictly inside (0.10, 0.25), and 0.15 is both the midpoint of that interval and the value the code itself ships. The baseline does 1288 trades over 15194 in-window candles (92.0/day, an order of magnitude above the doc's non-binding 4-10/day guideline, with the cost-dominated 72.0% win rate / -8.33% return shape); 0.15 has to retain >= 644 trades to clear the 50% floor, which is exactly the open question this measurement answers.",
+  "trading_config": {
+    "allocation_threshold": 0.15,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 60
+  }
+}

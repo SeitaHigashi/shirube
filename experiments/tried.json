@@ -918,5 +918,35 @@
     "sharpe_absolute_delta": 0.5093302756298392,
     "report_path": "experiments/reports/2026-10-19.md",
     "note": "PROMOTED (PR #34). Retest after the 2026-10-19 registry purge. Zone 0.1/0.9 is already the baseline, so the only economic difference is MACD 52/104/18 vs 12/26/9 (reverts classic-macd-periods). Slightly worse at 500k/5M (sign flips across capitals)."
+  },
+  {
+    "name": "equal-weight-subsignals-current-config",
+    "content_hash": "85bb8ad5a7c0663e3d1f891eb5f472a401c2d7c360233e5d6799290aade75b00",
+    "tried_at": "2026-10-22T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 1.2732098795948992,
+    "report_path": "experiments/reports/2026-10-22.md",
+    "note": "REJECTED at 50k on drawdown only (+0.50 pp, 2.78% -> 3.27%); Sharpe +1.27 abs, 4 vs 1 trades, return -0.52% -> +0.15%, beats static mix by +0.77 pp. Best diagnostic result to date: 500k Sharpe -28.53 -> -4.94, return -14.96% -> -2.80%, fees 29,888 -> 6,395 JPY; 5M -11.64% -> -2.25%. Touches compute_btc_target (TREND_SUBSIGNAL_WEIGHT 0.25 -> 1.0). Branch experiment/equal-weight-subsignals-current-config kept FOR HUMAN REVIEW."
+  },
+  {
+    "name": "trend-weight-half-current-config",
+    "content_hash": "c2142de441a2bf268b3223188fd232b6877812605c0b628151daf2bbeb4f21ec",
+    "tried_at": "2026-10-22T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 0.010003325732947266,
+    "report_path": "experiments/reports/2026-10-22.md",
+    "note": "REJECTED at 50k: drawdown +0.33 pp, Sharpe +0.01; both baseline and variant made only the opening buy (lot floor), so the 50k verdict only measures initial position size (UNTESTABLE at the promotion capital). Diagnostics strongly improved: 500k Sharpe -28.53 -> -13.47, return -14.96% -> -7.26%; 5M -11.64% -> -5.42%. Touches compute_btc_target (TREND 0.25 -> 0.5). Branch experiment/trend-weight-half-current-config kept FOR HUMAN REVIEW."
+  },
+  {
+    "name": "rebalance-spacing-15m-current-config",
+    "content_hash": "24dc06584b8f872fb8e6e8de130eebb0405e4d059cbd868331f47c1efef1262c",
+    "tried_at": "2026-10-22T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 0.0,
+    "report_path": "experiments/reports/2026-10-22.md",
+    "note": "UNTESTABLE at the 50,000 JPY promotion capital: economically identical to baseline (1 trade each, the opening buy; lot floor). Diagnostics improved: 500k Sharpe -28.53 -> -18.23, return -14.96% -> -9.76%, trades 800 -> 376; 5M -11.64% -> -7.40%. Recorded rejected by convention; the verdict is a lot-floor artifact."
   }
 ]

@@ -1,0 +1,26 @@
+{
+  "name": "rebalance-spacing-15m-current-config",
+  "kind": "parameter",
+  "rationale": "Lead #2 of the 2026-10-19 report. rebalance-spacing-15m was the strongest pure-config improvement at the diagnostic capitals on that run (Sharpe -21.2 vs -31.4 at 500k, -16.7 vs -24.6 at 5M) and a near-miss at 50k (Sharpe +2.33, rejected on +0.48 pp drawdown), but it ran with the stale zone 0.2/0.8. This is experiments/baseline-config.json exactly, with only rebalance_interval_secs raised from 60 to 900, so the delta measures the spacing alone. Also a cost-side hypothesis: the baseline has lost to its static mix at 500k for 17 consecutive runs, and the warning rule requires one turnover-targeting hypothesis.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 900
+  }
+}

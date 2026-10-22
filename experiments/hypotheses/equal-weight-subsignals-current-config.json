@@ -1,0 +1,44 @@
+{
+  "name": "equal-weight-subsignals-current-config",
+  "kind": "algorithm",
+  "rationale": "Literature-motivated. Wen, Bouri, Xu & Zhao (2022) find Bitcoin intraday returns show BOTH momentum and reversal, with the dominant pattern shifting by regime (around jumps, FOMC, liquidity). That argues against hard-coding either family as dominant. dev ships reversion 1.0 / trend 0.25 (chosen on hourly CoinGecko data), while on 2026-10-19 two independent trend-heavier variants (trend-weight-half, trend-weighted-subsignals) improved results at every diagnostic capital. Equal weights (1.0 / 1.0) is the neutral point the paper's 'both' finding suggests, and it brackets trend-weight-half (0.5) from the other side, so the two together walk the weight curve on the current baseline config.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 60
+  },
+  "code_change_summary": "In TradingEngine::compute_btc_target (src/trading/engine.rs), change the single constant TREND_SUBSIGNAL_WEIGHT from 0.25 to 1.0, leaving REVERSION_SUBSIGNAL_WEIGHT at 1.0, so all five sub-signals are weighted equally. Nothing else changes: every sub-signal formula (RSI, damped SMA cross, damped EMA cross, damped MACD histogram / step fallback, Bollinger %B), the weighted-mean aggregation, the empty-sub_signals warmup guard, the non-positive SMA/EMA guards and the sentiment combination stay byte-for-byte identical. Update the constant's doc comment (and the doc comment on compute_btc_target that lists the weights) to record that 1.0 is an equal-weight probe motivated by Wen et al. (2022). Then update the expected values in the compute_btc_target_* unit tests wherever the new weight legitimately changes them; in particular compute_btc_target_mean_reverting_family_dominates_trend_disagreement asserts reversion dominance, which equal weighting removes by design -- rewrite that test to assert the new equal-weight arithmetic rather than deleting it.",
+  "constraints": [
+    "This hypothesis modifies the body of TradingEngine::compute_btc_target. This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST NOT change TradingEngine::compute_btc_target's signature (its parameter list or return type) -- only its body.",
+    "MUST NOT change any individual sub-signal's own formula, the aggregation expression, or REVERSION_SUBSIGNAL_WEIGHT; exactly one numeric constant changes.",
+    "MUST pass `cargo test`, including the compute_btc_target_* unit tests in src/trading/engine.rs -- update their expected values if the new weight legitimately changes them (do not weaken or delete a test just to make it pass).",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff touches compute_btc_target's body, so the reviewer gives it the scrutiny an allocation-formula change deserves.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or anything on the live order-submission path."
+  ],
+  "paper_reference": {
+    "title": "Intraday return predictability in the cryptocurrency markets: Momentum, reversal, or both",
+    "authors": "Zhuzhu Wen, Elie Bouri, Yahua Xu, Yang Zhao",
+    "venue_year": "North American Journal of Economics and Finance 62, 2022",
+    "url": "https://ideas.repec.org/a/eee/ecofin/v62y2022ics1062940822000833.html",
+    "key_claim": "High-frequency Bitcoin returns (2013-2020) show both intraday momentum and reversal, with the dominant pattern switching around jumps, FOMC days, liquidity and COVID; timing strategies on these predictors beat buy-and-hold.",
+    "pros": "Same asset, intraday horizon, and directly addresses the momentum-vs-reversion weighting question that the 2026-10-19 run's results raised.",
+    "cons": "Predictors are half-hour session returns, not 1-minute TA sub-signals; sample ends 2020 and predates the current liquidity regime; spot-index data rather than bitFlyer BTC/JPY; fee/slippage treatment unknown from the abstract (full text paywalled). The paper says the dominant pattern is regime-dependent, which a fixed equal weight does not capture."
+  }
+}

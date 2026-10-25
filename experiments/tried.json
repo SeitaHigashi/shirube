@@ -948,5 +948,35 @@
     "sharpe_absolute_delta": 0.0,
     "report_path": "experiments/reports/2026-10-22.md",
     "note": "UNTESTABLE at the 50,000 JPY promotion capital: economically identical to baseline (1 trade each, the opening buy; lot floor). Diagnostics improved: 500k Sharpe -28.53 -> -18.23, return -14.96% -> -9.76%, trades 800 -> 376; 5M -11.64% -> -7.40%. Recorded rejected by convention; the verdict is a lot-floor artifact."
+  },
+  {
+    "name": "trend-full-reversion-half-current-config",
+    "content_hash": "0995cb58f6b4f3632cbe27018fa05ac50789c9511df77eb66f24ce2f50d65403",
+    "tried_at": "2026-10-25T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 11.781,
+    "report_path": "experiments/reports/2026-10-25.md",
+    "note": "Rejected on trade count only (1 vs 107; Sharpe +11.78, DD 9.53% -> 3.71%). 50k run degenerate: one opening buy, then lot floor. Diagnostics: 500k -15.90% -> -5.64%, Sharpe -29.11 -> -10.17, trades 758 -> 141; 5M -12.77% -> -4.87%. Branch experiment/trend-full-reversion-half-current-config (8c0582f) pushed for human review."
+  },
+  {
+    "name": "equal-weight-rebalance-15m-current-config",
+    "content_hash": "9dd98ef6ce1e2939a4a86e5cba7d8368a825b135492a4b2bc2d9d81d2989a356",
+    "tried_at": "2026-10-25T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 11.786,
+    "report_path": "experiments/reports/2026-10-25.md",
+    "note": "Rejected on trade count only (1 vs 107; Sharpe +11.79, DD 9.53% -> 3.90%). 50k run degenerate (opening buy only). Best diagnostics this run: 500k -15.90% -> -3.78%, Sharpe -29.11 -> -6.52, trades 758 -> 56, fees 28,201 -> 3,841 JPY; 5M -12.77% -> -3.52%. Branch experiment/equal-weight-rebalance-15m-current-config (fd8f45e) pushed for human review."
+  },
+  {
+    "name": "trend-weighted-subsignals-current-config",
+    "content_hash": "91c6dc3406ff87ccf751b7e8139009d01e248d120a8537703c019445f8cd1bac",
+    "tried_at": "2026-10-25T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 11.734,
+    "report_path": "experiments/reports/2026-10-25.md",
+    "note": "Rejected on trade count only (5 vs 107; Sharpe +11.73, DD 9.53% -> 3.52%). Diagnostics: 500k -15.90% -> -9.55%, Sharpe -29.11 -> -17.53, trades 758 -> 307; 5M -12.77% -> -7.93%. Worse than trend 1.0/rev 0.5 at 500k/5M: the trend-weight curve turns past rev 0.5. Branch experiment/trend-weighted-subsignals-current-config (dc109c5) pushed for human review."
   }
 ]

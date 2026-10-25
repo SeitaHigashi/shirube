@@ -1,0 +1,35 @@
+{
+  "name": "equal-weight-rebalance-15m-current-config",
+  "kind": "algorithm",
+  "rationale": "Lead #3 of the 2026-10-22 report, and the cost-side hypothesis the warning rule requires (baseline sharpe_minus_static_mix negative at 500k for 18 consecutive runs). Combines the two best diagnostic effects of 2026-10-22: equal sub-signal weights (500k return -14.96% -> -2.80%, trades 800 -> 108) and rebalance_interval_secs 900 (500k trades 800 -> 376, Sharpe improved). equal-weight was rejected at 50k only on a +0.50 pp drawdown increase from 4 trades; spacing rebalances may cut the chasing that produced that drawdown. Config is experiments/baseline-config.json with only rebalance_interval_secs 60 -> 900.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 900
+  },
+  "code_change_summary": "In TradingEngine::compute_btc_target (src/trading/engine.rs), set TREND_SUBSIGNAL_WEIGHT to 1.0 and REVERSION_SUBSIGNAL_WEIGHT to 1.0. Nothing else changes: every sub-signal formula (RSI, damped SMA cross, damped EMA cross, damped MACD histogram / step fallback, Bollinger %B), the weighted-mean aggregation, the empty-sub_signals warmup guard, the non-positive SMA/EMA guards and the sentiment combination stay byte-for-byte identical. Update both constants' doc comments (and the compute_btc_target doc comment listing the weights) to record that this is an equal-weight probe combined with 15-minute rebalance spacing (2026-10-22 lead #3). Then update the expected values in the compute_btc_target_* unit tests wherever the new weights legitimately change them; any test asserting reversion dominance (e.g. compute_btc_target_mean_reverting_family_dominates_trend_disagreement) must be rewritten to assert the new arithmetic rather than deleted.",
+  "constraints": [
+    "This hypothesis modifies the body of TradingEngine::compute_btc_target. This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST NOT change TradingEngine::compute_btc_target's signature (its parameter list or return type) -- only its body.",
+    "MUST NOT change any individual sub-signal's own formula, the aggregation expression, or REVERSION_SUBSIGNAL_WEIGHT; exactly one numeric constant changes (TREND 0.25 -> 1.0).",
+    "MUST pass `cargo test`, including the compute_btc_target_* unit tests in src/trading/engine.rs -- update their expected values if the new weight legitimately changes them (do not weaken or delete a test just to make it pass).",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff touches compute_btc_target's body, so the reviewer gives it the scrutiny an allocation-formula change deserves.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or anything on the live order-submission path."
+  ]
+}

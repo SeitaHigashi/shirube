@@ -232,7 +232,15 @@ impl TradingEngine {
     /// - mean-reverting family (RSI, Bollinger %B) — weight
     ///   `REVERSION_SUBSIGNAL_WEIGHT` = 1.0
     /// - trend-following family (SMA cross, EMA cross, MACD histogram) — weight
-    ///   `TREND_SUBSIGNAL_WEIGHT` = 0.25
+    ///   `TREND_SUBSIGNAL_WEIGHT` = 1.0
+    ///
+    /// NOTE: hypothesis `equal-weight-rebalance-10m-current-config` (2026-10-25
+    /// lead #2). Both families now carry weight 1.0, i.e. the weighted mean is a
+    /// plain equal-weight average of the five sub-signals. This equal-weight
+    /// probe is paired with 10-minute rebalance spacing
+    /// (`rebalance_interval_secs` = 600) in the hypothesis's trading config.
+    /// The history below documents the earlier reversion-tilted weighting
+    /// (trend 0.25) this probe replaces.
     ///
     /// Rationale (hypothesis `mean-reversion-weighted-subsignals`): over the
     /// 76-day pre-holdout training window (2026-06-11 → 2026-08-26) the lag-1
@@ -283,6 +291,11 @@ impl TradingEngine {
         /// training window (2026-06-11 → 2026-08-26) is -0.028 — weakly
         /// mean-reverting at the 1h resolution this engine trades at — so the
         /// mean-reverting family carries full weight.
+        ///
+        /// NOTE: hypothesis `equal-weight-rebalance-10m-current-config`
+        /// (2026-10-25 lead #2) leaves this at 1.0 and raises the trend weight
+        /// to match, making the aggregation an equal-weight mean; the probe is
+        /// combined with 10-minute rebalance spacing.
         const REVERSION_SUBSIGNAL_WEIGHT: f64 = 1.0;
 
         /// Aggregation weight of the trend-following sub-signals (SMA cross,
@@ -293,7 +306,14 @@ impl TradingEngine {
         /// which was that run's worst result on every axis (Sharpe -1.237,
         /// max drawdown +1.35pp, win rate 6.7%). Trend sub-signals are kept
         /// rather than dropped so they still break ties, at quarter influence.
-        const TREND_SUBSIGNAL_WEIGHT: f64 = 0.25;
+        ///
+        /// NOTE: hypothesis `equal-weight-rebalance-10m-current-config`
+        /// (2026-10-25 lead #2) raises this from 0.25 to 1.0 — equal weight
+        /// with the mean-reverting family — as an equal-weight probe combined
+        /// with 10-minute rebalance spacing (`rebalance_interval_secs` = 600).
+        /// The best 500k result on record (2026-10-25) was equal-weight with
+        /// 900s spacing; this isolates the spacing contribution.
+        const TREND_SUBSIGNAL_WEIGHT: f64 = 1.0;
 
         // (sub-signal value ∈ [0.0, 1.0], family weight) pairs. Combined below
         // as a weighted mean over whichever sub-signals this point supplied.
@@ -1031,11 +1051,11 @@ mod tests {
         let result = TradingEngine::compute_btc_target(&raw, &[], &make_cfg());
         // RSI sub_signal=0.8 (mean-reverting, weight 1.0). SMA-cross:
         // (10100-10000)/10000 = +1.0% relative, past the 0.5% saturation band
-        // → sub_signal=1.0 (trend-following, weight 0.25).
-        // → ta_normalized = (0.8*1.0 + 1.0*0.25) / 1.25 = 0.84.
-        // No news → sentiment_normalized=0.5. combined = 0.84*0.7 + 0.5*0.3 = 0.738.
+        // → sub_signal=1.0 (trend-following, weight 1.0 under equal weighting).
+        // → ta_normalized = (0.8*1.0 + 1.0*1.0) / 2.0 = 0.9.
+        // No news → sentiment_normalized=0.5. combined = 0.9*0.7 + 0.5*0.3 = 0.78.
         let val = result.unwrap();
-        let expected = (0.8 * 1.0 + 1.0 * 0.25) / 1.25 * 0.7 + 0.5 * 0.3;
+        let expected = (0.8 * 1.0 + 1.0 * 1.0) / 2.0 * 0.7 + 0.5 * 0.3;
         assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
         assert!(val > 0.5);
     }
@@ -1053,11 +1073,11 @@ mod tests {
         };
         let result = TradingEngine::compute_btc_target(&raw, &[], &make_cfg());
         // RSI sub_signal=0.2 (weight 1.0). SMA-cross: (9900-10000)/10000 = -1.0%
-        // relative, past the 0.5% saturation band → sub_signal=0.0 (weight 0.25).
-        // → ta_normalized = (0.2*1.0 + 0.0*0.25) / 1.25 = 0.16.
-        // No news → sentiment_normalized=0.5. combined = 0.16*0.7 + 0.5*0.3 = 0.262.
+        // relative, past the 0.5% saturation band → sub_signal=0.0 (weight 1.0).
+        // → ta_normalized = (0.2*1.0 + 0.0*1.0) / 2.0 = 0.1.
+        // No news → sentiment_normalized=0.5. combined = 0.1*0.7 + 0.5*0.3 = 0.22.
         let val = result.unwrap();
-        let expected = (0.2 * 1.0 + 0.0 * 0.25) / 1.25 * 0.7 + 0.5 * 0.3;
+        let expected = (0.2 * 1.0 + 0.0 * 1.0) / 2.0 * 0.7 + 0.5 * 0.3;
         assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
         assert!(val < 0.5);
     }
@@ -1078,15 +1098,15 @@ mod tests {
         };
         let result = TradingEngine::compute_btc_target(&raw, &[], &make_cfg());
         // RSI sub_signal=0.5 (weight 1.0), SMA-cross=0.75, EMA-cross=0.75
-        // (weight 0.25 each) → ta_normalized =
-        //   (0.5*1.0 + 0.75*0.25 + 0.75*0.25) / 1.5 = 0.5833333...
+        // (weight 1.0 each under equal weighting) → ta_normalized =
+        //   (0.5*1.0 + 0.75*1.0 + 0.75*1.0) / 3.0 = 0.6666666...
         // No news → sentiment_normalized=0.5.
-        // combined = 0.5833333*0.7 + 0.5*0.3 = 0.5583333.
+        // combined = 0.6666666*0.7 + 0.5*0.3 = 0.6166666.
         let val = result.unwrap();
-        let expected = (0.5 * 1.0 + 0.75 * 0.25 + 0.75 * 0.25) / 1.5 * 0.7 + 0.5 * 0.3;
+        let expected = (0.5 * 1.0 + 0.75 * 1.0 + 0.75 * 1.0) / 3.0 * 0.7 + 0.5 * 0.3;
         assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
-        // Strictly between neutral and the fully-saturated 0.738 of the strong-buy case.
-        assert!(val > 0.5 && val < 0.738);
+        // Strictly between neutral and the fully-saturated 0.78 of the strong-buy case.
+        assert!(val > 0.5 && val < 0.78);
     }
 
     #[test]
@@ -1102,7 +1122,7 @@ mod tests {
         };
         let val = TradingEngine::compute_btc_target(&damped, &[], &make_cfg()).unwrap();
         // ta_normalized = 0.75: a single sub-signal divides by its own weight
-        // (0.75*0.25 / 0.25), so family weighting cannot change a lone value.
+        // (0.75*w / w), so family weighting cannot change a lone value.
         // → 0.75*0.7 + 0.5*0.3 = 0.675
         assert!((val - 0.675).abs() < 1e-9, "expected ~0.675, got {}", val);
 
@@ -1115,17 +1135,19 @@ mod tests {
     }
 
     #[test]
-    fn compute_btc_target_mean_reverting_family_dominates_trend_disagreement() {
+    fn compute_btc_target_equal_weight_trend_majority_outvotes_reversion_disagreement() {
         // Sub-signal families point in opposite directions:
         //   trend-following  — close +1% over both SMA and EMA and a +1% MACD
         //                      histogram → all three saturate at 1.0 (bullish)
         //   mean-reverting   — RSI=90 (→0.1) and close pinned to the upper
         //                      Bollinger band, %B=100 (→0.0) (both bearish)
-        // Under the weighted mean the mean-reverting family (weight 1.0 each)
-        // must outweigh the trend family (weight 0.25 each), so the composite
-        // comes out bearish. The old unweighted mean would have produced
-        // (0.1+0.0+1.0+1.0+1.0)/5 = 0.62 → combined 0.584, i.e. bullish, so this
-        // assertion genuinely discriminates between the two aggregations.
+        // NOTE: rewritten for hypothesis `equal-weight-rebalance-10m-current-config`.
+        // Under the previous reversion-tilted weights (reversion 1.0 / trend
+        // 0.25) this case came out bearish (0.85/2.75 → combined 0.366). With
+        // equal weights (1.0 each) the composite is the plain mean, so the
+        // three bullish trend sub-signals outvote the two bearish reversion
+        // ones and the composite is bullish. Asserting the exact value and
+        // the bullish side discriminates between the two weightings.
         let raw = IndicatorPoint {
             time: chrono::Utc::now(),
             close: Some(10_100.0),
@@ -1140,14 +1162,17 @@ mod tests {
             bb_lower: Some(9_900.0),
         };
         let val = TradingEngine::compute_btc_target(&raw, &[], &make_cfg()).unwrap();
-        // ta_normalized = (0.1*1.0 + 0.0*1.0 + 1.0*0.25 * 3) / (1.0 + 1.0 + 0.75)
-        //               = 0.85 / 2.75 = 0.309090...
-        // combined = 0.309090*0.7 + 0.5*0.3 = 0.366363...
-        let expected = (0.1 + 0.0 + 3.0 * 0.25) / 2.75 * 0.7 + 0.5 * 0.3;
+        // ta_normalized = (0.1*1.0 + 0.0*1.0 + 1.0*1.0 * 3) / (1.0 * 5)
+        //               = 3.1 / 5.0 = 0.62
+        // combined = 0.62*0.7 + 0.5*0.3 = 0.584
+        let expected = (0.1 + 0.0 + 3.0 * 1.0) / 5.0 * 0.7 + 0.5 * 0.3;
         assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
+        // The old reversion-tilted value must no longer be produced.
+        let old_weighted = (0.1 + 0.0 + 3.0 * 0.25) / 2.75 * 0.7 + 0.5 * 0.3;
+        assert!((val - old_weighted).abs() > 1e-3);
         assert!(
-            val < 0.5,
-            "mean-reverting family must dominate: expected a bearish composite, got {}",
+            val > 0.5,
+            "equal weighting: trend majority must outvote reversion, got {}",
             val
         );
     }

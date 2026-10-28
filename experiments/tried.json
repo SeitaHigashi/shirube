@@ -978,5 +978,35 @@
     "sharpe_absolute_delta": 11.734,
     "report_path": "experiments/reports/2026-10-25.md",
     "note": "Rejected on trade count only (5 vs 107; Sharpe +11.73, DD 9.53% -> 3.52%). Diagnostics: 500k -15.90% -> -9.55%, Sharpe -29.11 -> -17.53, trades 758 -> 307; 5M -12.77% -> -7.93%. Worse than trend 1.0/rev 0.5 at 500k/5M: the trend-weight curve turns past rev 0.5. Branch experiment/trend-weighted-subsignals-current-config (dc109c5) pushed for human review."
+  },
+  {
+    "name": "equal-weight-rebalance-10m-current-config",
+    "content_hash": "451303f6edc8f742a6ea2bc018f34131508759c748153eda1af7cc81ba722542",
+    "tried_at": "2026-10-28T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -0.004,
+    "report_path": "experiments/reports/2026-10-28.md",
+    "note": "50k degenerate: baseline and variant both 1 trade (lot floor at BTC ~high), Sharpe delta -0.004. Diagnostic 500k: return -14.21% -> -2.08%, Sharpe -25.94 -> -3.48, trades 774 -> 58; same code at 60s/900s on this window gave -2.58%/-2.20%, so 600s is best of the three. Branch experiment/equal-weight-rebalance-10m-current-config (93e22ce) pushed for human review (touches compute_btc_target body)."
+  },
+  {
+    "name": "trend-full-reversion-075-current-config",
+    "content_hash": "649c8f978df30749dd08e52262f56eaf11e8ee0b56213919afe77eb478f0afc4",
+    "tried_at": "2026-10-28T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -0.005,
+    "report_path": "experiments/reports/2026-10-28.md",
+    "note": "50k degenerate: 1 vs 1 trade (lot floor), Sharpe delta -0.005. Diagnostic 500k: return -14.21% -> -3.01%, Sharpe -25.94 -> -5.24, trades 774 -> 91; worse than equal weights at 60s (-2.58%) on the same window, so the weight optimum sits at equal weights. Branch experiment/trend-full-reversion-075-current-config (18e8fe6) pushed for human review (touches compute_btc_target body)."
+  },
+  {
+    "name": "realized-vol-scaled-exposure-1m-recalibrated",
+    "content_hash": "df78189ad2940a9eb1f9a57f209d4e2840537cd8abd0c3814e542a82138d8e18",
+    "tried_at": "2026-10-28T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -9.257,
+    "report_path": "experiments/reports/2026-10-28.md",
+    "note": "Real rejection at 50k: amplification (k up to 1.5) pushed deltas over the lot floor, 77 trades vs 1, return -5.41% vs -0.58%, DD +2.80pp. 500k/5M roughly unchanged (-14.17% vs -14.21%). k now varies (92% interior, median 0.95), so this IS a fair test of 1m vol scaling: no effect. Live SignalEngine cannot supply realized_vol (always None). Branch experiment/realized-vol-scaled-exposure-1m-recalibrated (ab66646) pushed for human review (touches compute_btc_target body)."
   }
 ]

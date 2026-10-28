@@ -55,12 +55,47 @@ use crate::exchange::bitflyer::rest::BitFlyerRestClient;
 use crate::storage::db::Database;
 use crate::storage::tickers::TickerStats;
 
+/// Usage text printed by `shirube --help` / `-h` / `help`.
+///
+/// NOTE: kept as a short subcommand index rather than a full flag reference;
+/// the module doc comment above remains the authoritative per-flag usage.
+pub const USAGE: &str = "\
+usage: shirube                       start the trading server (paper trading without API keys)
+       shirube --version             print the version and exit
+       shirube --help                print this help and exit
+       shirube backtest-variant      --db <path> --config <json> --from <RFC3339> --to <RFC3339> [...]
+       shirube compare-backtest      --baseline <report.json> --candidate <report.json>
+       shirube print-default-config
+       shirube backfill-executions   --db <path> [--product BTC_JPY] [--days 31] [--resolution-secs 60]
+       shirube hypothesis-hash       <hypothesis.json> [...]
+       shirube db-stats              --db <path> [--product BTC_JPY]
+       shirube backtest-data         <pull|push> --db <path> [--repo <owner/name>] [--tag backtest-data]
+";
+
+/// True when the first argv argument asks for help.
+///
+/// NOTE: before this existed, `shirube --help` fell through `dispatch()`
+/// into full server startup (port 3000, bitFlyer WebSocket, news fetch,
+/// paper or live trading depending on the API keys) — a costly surprise for
+/// anyone, human or pipeline agent, probing the CLI. Only these explicit
+/// help spellings are intercepted: any other unknown argument still falls
+/// through unchanged, because the auto-updater re-execs the binary with its
+/// original argv and rejecting arbitrary arguments could stop a running
+/// instance from restarting.
+pub fn is_help_request(first_arg: Option<&str>) -> bool {
+    matches!(first_arg, Some("--help" | "-h" | "help"))
+}
+
 /// Inspect argv for a known subcommand and run it to completion.
 /// Returns `Ok(true)` when a subcommand was handled (the caller should
 /// exit immediately afterwards); `Ok(false)` when argv doesn't match any
 /// subcommand, so normal server startup should proceed.
 pub async fn dispatch() -> anyhow::Result<bool> {
     let args: Vec<String> = std::env::args().collect();
+    if is_help_request(args.get(1).map(String::as_str)) {
+        print!("{USAGE}");
+        return Ok(true);
+    }
     match args.get(1).map(String::as_str) {
         Some("backtest-variant") => {
             run_backtest_variant(&args).await?;
@@ -834,6 +869,37 @@ async fn run_backtest_data_push(args: &[String]) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    /// `--help`, `-h` and `help` are intercepted so they print usage instead
+    /// of falling through into server startup; anything else (including no
+    /// argument at all, which starts the server) is left alone.
+    #[test]
+    fn is_help_request_matches_only_explicit_help_spellings() {
+        assert!(is_help_request(Some("--help")));
+        assert!(is_help_request(Some("-h")));
+        assert!(is_help_request(Some("help")));
+        assert!(!is_help_request(None));
+        assert!(!is_help_request(Some("--version")));
+        assert!(!is_help_request(Some("backtest-variant")));
+        assert!(!is_help_request(Some("--helpful")));
+    }
+
+    /// The usage text names every subcommand `dispatch()` handles, so it
+    /// cannot silently drift out of date when one is added.
+    #[test]
+    fn usage_lists_every_subcommand() {
+        for sub in [
+            "backtest-variant",
+            "compare-backtest",
+            "print-default-config",
+            "backfill-executions",
+            "hypothesis-hash",
+            "db-stats",
+            "backtest-data",
+        ] {
+            assert!(USAGE.contains(sub), "USAGE is missing {sub}");
+        }
+    }
 
     /// No stored bars at all (or a DB that could not be read) always
     /// recommends the maximum backfill window.

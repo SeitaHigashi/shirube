@@ -115,6 +115,80 @@ pub struct IndicatorPoint {
     pub bb_upper: Option<f64>,
     pub bb_middle: Option<f64>,
     pub bb_lower: Option<f64>,
+    /// Realized volatility: population standard deviation of the last
+    /// `REALIZED_VOL_WINDOW` close-to-close simple returns (dimensionless,
+    /// per-bar; ~0.0005 for 1-minute BTC/JPY bars). `None` until
+    /// `REALIZED_VOL_WINDOW + 1` closes have been seen, and always `None` on
+    /// the live `SignalEngine` path, which does not track it (see
+    /// `TradingEngine::compute_btc_target`, where `None` means "no scaling").
+    pub realized_vol: Option<f64>,
+}
+
+/// Number of close-to-close returns in the rolling realized-volatility window.
+///
+/// NOTE: hypothesis `realized-vol-scaled-exposure-1m-recalibrated`. 1,440 bars
+/// = 24h at the pipeline's 1-minute resolution (live `BASE_RESOLUTION = 60`).
+pub const REALIZED_VOL_WINDOW: usize = 1440;
+
+/// O(1)-per-update rolling population standard deviation of simple returns.
+///
+/// Keeps the last `window` returns in a ring buffer together with their
+/// running sum and sum of squares, so each new close costs one push and at
+/// most one eviction regardless of window length.
+struct RollingReturnVol {
+    window: usize,
+    prev_close: Option<f64>,
+    returns: std::collections::VecDeque<f64>,
+    sum: f64,
+    sum_sq: f64,
+}
+
+impl RollingReturnVol {
+    fn new(window: usize) -> Self {
+        Self {
+            window,
+            prev_close: None,
+            returns: std::collections::VecDeque::with_capacity(window + 1),
+            sum: 0.0,
+            sum_sq: 0.0,
+        }
+    }
+
+    /// Feed the next close and return the current realized vol, or `None`
+    /// while fewer than `window` returns (i.e. `window + 1` closes) are held.
+    ///
+    /// # Formula
+    ///   r_t   = close_t / close_{t-1} - 1
+    ///   sigma = sqrt( E[r^2] - E[r]^2 )   over the last `window` returns
+    /// A non-positive or non-finite close breaks the return chain: it is not
+    /// used as a reference price, so no infinite/NaN return enters the sums.
+    fn update(&mut self, close: Option<f64>) -> Option<f64> {
+        let close = close.filter(|c| c.is_finite() && *c > 0.0);
+        if let (Some(prev), Some(cur)) = (self.prev_close, close) {
+            let r = cur / prev - 1.0;
+            self.returns.push_back(r);
+            self.sum += r;
+            self.sum_sq += r * r;
+            if self.returns.len() > self.window {
+                if let Some(old) = self.returns.pop_front() {
+                    self.sum -= old;
+                    self.sum_sq -= old * old;
+                }
+            }
+        }
+        if close.is_some() {
+            self.prev_close = close;
+        }
+        if self.returns.len() < self.window {
+            return None;
+        }
+        let n = self.window as f64;
+        let mean = self.sum / n;
+        // max(0.0): running-sum cancellation can push the variance a hair
+        // below zero for a near-constant series.
+        let var = (self.sum_sq / n - mean * mean).max(0.0);
+        Some(var.sqrt())
+    }
 }
 
 /// キャンドル列にインジケーターを順次適用し、各時点の値を返す。
@@ -128,6 +202,7 @@ pub fn compute_indicators(candles: &[Candle], cfg: &TradingConfig) -> Vec<Indica
     let mut rsi = Rsi::new(cfg.rsi_period);
     let mut macd = Macd::new(cfg.macd_fast, cfg.macd_slow, cfg.macd_signal);
     let mut bb = Bollinger::new(cfg.bollinger_period, cfg.bollinger_std);
+    let mut rv = RollingReturnVol::new(REALIZED_VOL_WINDOW);
 
     candles.iter().map(|c| {
         sma.update(c);
@@ -155,6 +230,7 @@ pub fn compute_indicators(candles: &[Candle], cfg: &TradingConfig) -> Vec<Indica
             bb_upper,
             bb_middle,
             bb_lower,
+            realized_vol: rv.update(c.close.to_f64()),
         }
     }).collect()
 }
@@ -278,6 +354,43 @@ mod tests {
         assert_eq!(ind.value(), None);
         ind.update(&candle);
         assert_eq!(ind.value(), Some(-0.3));
+    }
+
+    #[test]
+    fn compute_indicators_realized_vol_matches_naive_population_stdev() {
+        use rust_decimal::Decimal;
+        use rust_decimal::prelude::FromPrimitive;
+        // Deterministic pseudo-random walk long enough to roll the window.
+        let n = REALIZED_VOL_WINDOW + 300;
+        let mut price = 9_000_000.0f64;
+        let mut closes = Vec::with_capacity(n);
+        let mut seed: u64 = 42;
+        for _ in 0..n {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let u = (seed >> 11) as f64 / (1u64 << 53) as f64 - 0.5;
+            price *= 1.0 + u * 0.002;
+            closes.push(price.round());
+        }
+        let candles: Vec<Candle> = closes.iter().map(|c| Candle {
+            close: Decimal::from_f64(*c).unwrap(),
+            ..dummy_candle()
+        }).collect();
+        let points = compute_indicators(&candles, &crate::config::TradingConfig::default());
+
+        // None until REALIZED_VOL_WINDOW + 1 closes have been seen.
+        assert!(points[..REALIZED_VOL_WINDOW].iter().all(|p| p.realized_vol.is_none()));
+        assert!(points[REALIZED_VOL_WINDOW..].iter().all(|p| p.realized_vol.is_some()));
+
+        // Compare against a naive two-pass population stdev at a few indices.
+        for &i in &[REALIZED_VOL_WINDOW, REALIZED_VOL_WINDOW + 1, n - 1] {
+            let rets: Vec<f64> = (i + 1 - REALIZED_VOL_WINDOW..=i)
+                .map(|j| closes[j] / closes[j - 1] - 1.0)
+                .collect();
+            let mean = rets.iter().sum::<f64>() / rets.len() as f64;
+            let var = rets.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / rets.len() as f64;
+            let got = points[i].realized_vol.unwrap();
+            assert!((got - var.sqrt()).abs() < 1e-12, "i={} got {} want {}", i, got, var.sqrt());
+        }
     }
 
     #[test]

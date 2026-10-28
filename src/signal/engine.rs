@@ -101,6 +101,11 @@ impl SignalEngine {
                                 sma: None, ema: None, rsi: None,
                                 macd_line: None, signal_line: None, histogram: None,
                                 bb_upper: None, bb_middle: None, bb_lower: None,
+                                // NOTE: the live path does not track a 1,440-bar
+                                // return window, so realized_vol stays None and
+                                // compute_btc_target applies no vol scaling (k = 1.0).
+                                // This is a known live/backtest gap.
+                                realized_vol: None,
                             };
                             let indicator_signals: Vec<IndicatorSignal> = self.indicators
                                 .iter_mut()

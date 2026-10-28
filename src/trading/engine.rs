@@ -365,6 +365,45 @@ impl TradingEngine {
         let ta_normalized =
             sub_signals.iter().map(|(v, w)| v * w).sum::<f64>() / weight_sum;
 
+        /// Reference per-bar realized volatility at which the TA deviation is
+        /// left unscaled (k = 1.0).
+        ///
+        /// NOTE: hypothesis `realized-vol-scaled-exposure-1m-recalibrated`.
+        /// 0.0005 is the mean rolling-1440 population stdev of 1-minute simple
+        /// returns over the pre-holdout training window 2026-09-27..2026-10-14
+        /// (median 0.000515, p10 0.000361, p90 0.000612).
+        const REFERENCE_MINUTE_VOL: f64 = 0.0005;
+        /// Lower clamp of the volatility factor k (strongest damping).
+        const VOL_SCALE_MIN: f64 = 0.5;
+        /// Upper clamp of the volatility factor k (strongest amplification).
+        const VOL_SCALE_MAX: f64 = 1.5;
+
+        // Inverse-variance volatility scaling (Moreira & Muir) of the TA
+        // deviation from neutral:
+        //   k             = ((REFERENCE_MINUTE_VOL / realized_vol)^2).clamp(0.5, 1.5)
+        //   ta_normalized = 0.5 + (ta_normalized - 0.5) * k
+        // Inputs: realized_vol = rolling-1440 stdev of 1-minute returns
+        // (~0.0003..0.0007 in practice). Range: k ∈ [0.5, 1.5]; high vol damps
+        // toward neutral 0.5, low vol amplifies. The result can leave [0, 1]
+        // only when k > 1; the final clamp below bounds the combined output.
+        //
+        // NOTE: guarded explicitly rather than relying on clamp, because
+        // f64::clamp propagates NaN. A missing (warmup / live path), zero,
+        // negative or non-finite realized_vol gives k = 1.0 exactly, so such
+        // points reduce bit-for-bit to the unscaled formula.
+        let vol_k = match raw.realized_vol {
+            Some(rv) if rv.is_finite() && rv > 0.0 => {
+                let k = (REFERENCE_MINUTE_VOL / rv).powi(2);
+                if k.is_finite() { k.clamp(VOL_SCALE_MIN, VOL_SCALE_MAX) } else { VOL_SCALE_MAX }
+            }
+            _ => 1.0,
+        };
+        let ta_normalized = if vol_k == 1.0 {
+            ta_normalized
+        } else {
+            0.5 + (ta_normalized - 0.5) * vol_k
+        };
+
         // Average news sentiment: [-1.0, 1.0] → normalize to [0.0, 1.0]
         // Empty cache (Ollama unavailable or not yet run) → neutral 0.0
         let avg_sentiment = if news_scores.is_empty() {
@@ -763,6 +802,7 @@ mod tests {
                 sma: None, ema: None, rsi: None,
                 macd_line: None, signal_line: None, histogram: None,
                 bb_upper: None, bb_middle: None, bb_lower: None,
+                realized_vol: None,
             },
             calculated_at: chrono::Utc::now(),
         }
@@ -785,6 +825,7 @@ mod tests {
                 bb_upper: Some(10_200.0),
                 bb_middle: Some(10_000.0),
                 bb_lower: Some(9_800.0), // close near middle, %B ≈ 50 → neutral from BB
+                realized_vol: None,
             },
             calculated_at: chrono::Utc::now(),
         }
@@ -807,6 +848,7 @@ mod tests {
                 bb_upper: Some(10_200.0),
                 bb_middle: Some(10_000.0),
                 bb_lower: Some(9_800.0), // close near lower, %B ≈ 50 → neutral from BB
+                realized_vol: None,
             },
             calculated_at: chrono::Utc::now(),
         }
@@ -995,6 +1037,7 @@ mod tests {
             sma: None, ema: None, rsi: None,
             macd_line: None, signal_line: None, histogram: None,
             bb_upper: None, bb_middle: None, bb_lower: None,
+            realized_vol: None,
         };
         // No indicator field is present, so no sub-signal can be derived → warmup → None.
         assert_eq!(TradingEngine::compute_btc_target(&raw, &[], &make_cfg()), None);
@@ -1009,6 +1052,7 @@ mod tests {
             sma: None, ema: None, rsi: Some(50.0),
             macd_line: None, signal_line: None, histogram: None,
             bb_upper: None, bb_middle: None, bb_lower: None,
+            realized_vol: None,
         };
         let result = TradingEngine::compute_btc_target(&raw, &[], &make_cfg());
         assert!(result.is_some());
@@ -1027,6 +1071,7 @@ mod tests {
             ema: None, rsi: Some(20.0),
             macd_line: None, signal_line: None, histogram: None,
             bb_upper: None, bb_middle: None, bb_lower: None,
+            realized_vol: None,
         };
         let result = TradingEngine::compute_btc_target(&raw, &[], &make_cfg());
         // RSI sub_signal=0.8 (mean-reverting, weight 1.0). SMA-cross:
@@ -1050,6 +1095,7 @@ mod tests {
             ema: None, rsi: Some(80.0),
             macd_line: None, signal_line: None, histogram: None,
             bb_upper: None, bb_middle: None, bb_lower: None,
+            realized_vol: None,
         };
         let result = TradingEngine::compute_btc_target(&raw, &[], &make_cfg());
         // RSI sub_signal=0.2 (weight 1.0). SMA-cross: (9900-10000)/10000 = -1.0%
@@ -1075,6 +1121,7 @@ mod tests {
             rsi: Some(50.0),
             macd_line: None, signal_line: None, histogram: None,
             bb_upper: None, bb_middle: None, bb_lower: None,
+            realized_vol: None,
         };
         let result = TradingEngine::compute_btc_target(&raw, &[], &make_cfg());
         // RSI sub_signal=0.5 (weight 1.0), SMA-cross=0.75, EMA-cross=0.75
@@ -1099,6 +1146,7 @@ mod tests {
             sma: None, ema: None, rsi: None,
             macd_line: None, signal_line: None, histogram: Some(25.0),
             bb_upper: None, bb_middle: Some(10_000.0), bb_lower: None,
+            realized_vol: None,
         };
         let val = TradingEngine::compute_btc_target(&damped, &[], &make_cfg()).unwrap();
         // ta_normalized = 0.75: a single sub-signal divides by its own weight
@@ -1138,6 +1186,7 @@ mod tests {
             bb_upper: Some(10_100.0),
             bb_middle: Some(10_000.0),
             bb_lower: Some(9_900.0),
+            realized_vol: None,
         };
         let val = TradingEngine::compute_btc_target(&raw, &[], &make_cfg()).unwrap();
         // ta_normalized = (0.1*1.0 + 0.0*1.0 + 1.0*0.25 * 3) / (1.0 + 1.0 + 0.75)
@@ -1152,6 +1201,73 @@ mod tests {
         );
     }
 
+    /// Bullish RSI-only point (RSI=20 → ta_normalized = 0.8) with the given
+    /// realized volatility, used by the vol-scaling tests below.
+    fn rsi20_point(realized_vol: Option<f64>) -> IndicatorPoint {
+        IndicatorPoint {
+            time: chrono::Utc::now(),
+            close: None,
+            sma: None, ema: None, rsi: Some(20.0),
+            macd_line: None, signal_line: None, histogram: None,
+            bb_upper: None, bb_middle: None, bb_lower: None,
+            realized_vol,
+        }
+    }
+
+    #[test]
+    fn compute_btc_target_vol_scaling_is_identity_at_reference_vol() {
+        // realized_vol == REFERENCE_MINUTE_VOL (0.0005) → k = 1.0 exactly, so
+        // the output matches the unscaled (None) output bit for bit.
+        let at_ref = TradingEngine::compute_btc_target(&rsi20_point(Some(0.0005)), &[], &make_cfg()).unwrap();
+        let unscaled = TradingEngine::compute_btc_target(&rsi20_point(None), &[], &make_cfg()).unwrap();
+        assert_eq!(at_ref, unscaled);
+        // ta=0.8 → 0.8*0.7 + 0.5*0.3 = 0.71
+        assert!((at_ref - 0.71).abs() < 1e-9, "expected ~0.71, got {}", at_ref);
+    }
+
+    #[test]
+    fn compute_btc_target_vol_scaling_damps_toward_neutral_at_high_vol() {
+        // realized_vol = 2x reference → (0.5)^2 = 0.25 → clamped to VOL_SCALE_MIN 0.5.
+        // ta = 0.5 + (0.8-0.5)*0.5 = 0.65 → 0.65*0.7 + 0.15 = 0.605
+        let v = TradingEngine::compute_btc_target(&rsi20_point(Some(0.001)), &[], &make_cfg()).unwrap();
+        assert!((v - 0.605).abs() < 1e-9, "expected ~0.605, got {}", v);
+        // Moderately high vol inside the clamp: rv = 0.0005*sqrt(1/0.8) → k = 0.8.
+        // ta = 0.5 + 0.3*0.8 = 0.74 → 0.74*0.7 + 0.15 = 0.668
+        let rv = 0.0005 * (1.0f64 / 0.8).sqrt();
+        let v = TradingEngine::compute_btc_target(&rsi20_point(Some(rv)), &[], &make_cfg()).unwrap();
+        assert!((v - 0.668).abs() < 1e-9, "expected ~0.668, got {}", v);
+        // Bearish side is damped toward neutral too (RSI=80 → ta=0.2 → 0.35).
+        let mut bear = rsi20_point(Some(0.001));
+        bear.rsi = Some(80.0);
+        let v = TradingEngine::compute_btc_target(&bear, &[], &make_cfg()).unwrap();
+        assert!((v - (0.35 * 0.7 + 0.15)).abs() < 1e-9, "got {}", v);
+    }
+
+    #[test]
+    fn compute_btc_target_vol_scaling_amplification_capped_at_low_vol() {
+        // realized_vol = reference/10 → k = 100 → capped at VOL_SCALE_MAX 1.5.
+        // ta = 0.5 + 0.3*1.5 = 0.95 → 0.95*0.7 + 0.15 = 0.815
+        let v = TradingEngine::compute_btc_target(&rsi20_point(Some(0.00005)), &[], &make_cfg()).unwrap();
+        assert!((v - 0.815).abs() < 1e-9, "expected ~0.815, got {}", v);
+        // Tiny-but-positive vol where (ref/rv)^2 overflows to inf is still capped.
+        let v = TradingEngine::compute_btc_target(&rsi20_point(Some(1e-300)), &[], &make_cfg()).unwrap();
+        assert!((v - 0.815).abs() < 1e-9, "expected ~0.815, got {}", v);
+    }
+
+    #[test]
+    fn compute_btc_target_vol_scaling_invalid_vol_reduces_to_unscaled() {
+        // None / zero / negative / NaN / inf realized_vol → k = 1.0 → today's output.
+        let unscaled = TradingEngine::compute_btc_target(&rsi20_point(None), &[], &make_cfg()).unwrap();
+        for rv in [0.0, -0.001, f64::NAN, f64::INFINITY] {
+            let v = TradingEngine::compute_btc_target(&rsi20_point(Some(rv)), &[], &make_cfg()).unwrap();
+            assert_eq!(v, unscaled, "realized_vol={} must not scale", rv);
+        }
+        // Warmup guard unaffected: no sub-signals → None even with a vol value.
+        let mut empty = rsi20_point(Some(0.001));
+        empty.rsi = None;
+        assert!(TradingEngine::compute_btc_target(&empty, &[], &make_cfg()).is_none());
+    }
+
     #[test]
     fn compute_btc_target_neutral_ta_strong_news_returns_some() {
         // RSI=50 (neutral TA) but bullish news → Some and > 0.5
@@ -1161,6 +1277,7 @@ mod tests {
             sma: None, ema: None, rsi: Some(50.0),
             macd_line: None, signal_line: None, histogram: None,
             bb_upper: None, bb_middle: None, bb_lower: None,
+            realized_vol: None,
         };
         let news = vec![SentimentScore {
             headline: "BTC soars".into(),

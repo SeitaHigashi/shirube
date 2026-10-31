@@ -1,0 +1,44 @@
+{
+  "name": "stretched-band-gated-equal-weight-10m",
+  "kind": "algorithm",
+  "rationale": "De Nicola (Ledger 2021) finds BTC intraday mean reversion at 1-4h horizons is stronger after larger moves. shirube's reversion family (RSI, %B) dominates under every weighting tried, yet at 500k the baseline still trades ~55/day and loses ~43% of its static-mix deficit to fees: most rebalances happen when price is near the Bollinger midline, where the reversion signal is weakest. Gating new targets to bars where price is stretched (%B <= 0.2 or >= 0.8) should cut turnover and keep the rebalances that carry the strongest reversion evidence. This is also a cost-side hypothesis (the 500k deficit is negative for the 21st run). Built on equal weights + 600s spacing (best on record) so the gate's own effect is measured against that reference; the agent should also run plain equal-weight-10m on today's window as an unregistered reference.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 600
+  },
+  "code_change_summary": "In TradingEngine::compute_btc_target (src/trading/engine.rs), set TREND_SUBSIGNAL_WEIGHT from 0.25 to 1.0 (REVERSION_SUBSIGNAL_WEIGHT stays 1.0), exactly as experiment/equal-weight-rebalance-10m-current-config (93e22ce) does. Additionally, after the warmup check and before the weighted mean, add a stretched-band gate: when close, bb_upper and bb_lower are all present and bb_upper - bb_lower > 0, compute pct_b = (close - bb_lower) / (bb_upper - bb_lower); if 0.2 < pct_b < 0.8, return None. A None is already handled as 'hold the previous target' by the sticky-target logic in both TradingEngine::run and Simulator::run, so no caller changes. When Bollinger data is absent or the bandwidth is non-positive, the gate does not apply. Use named consts (STRETCH_LOWER = 0.2, STRETCH_UPPER = 0.8) with doc comments citing De Nicola 2021 and this hypothesis. Report the fraction of window bars on which the gate returned None. Update the compute_btc_target_* unit tests' expected values wherever the change legitimately alters them; rewrite (never delete) any test asserting reversion dominance, and add a regression test for any new behaviour.",
+  "constraints": [
+    "This hypothesis modifies the body of TradingEngine::compute_btc_target. This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST NOT change TradingEngine::compute_btc_target's signature (its parameter list or return type) -- only its body.",
+    "MUST NOT change any individual sub-signal's own formula or the aggregation expression; the only changes are TREND 0.25 -> 1.0 and the stretched-band gate returning None. The gate MUST use only IndicatorPoint fields that the live SignalEngine already supplies (close, bb_upper, bb_lower), so live and backtest behave identically.",
+    "MUST pass `cargo test`, including the compute_btc_target_* unit tests in src/trading/engine.rs -- update their expected values if the new weight legitimately changes them (do not weaken or delete a test just to make it pass).",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff touches compute_btc_target's body, so the reviewer gives it the scrutiny an allocation-formula change deserves.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or anything on the live order-submission path."
+  ],
+  "paper_reference": {
+    "title": "On the Intraday Behavior of Bitcoin",
+    "authors": "Giacomo De Nicola",
+    "venue_year": "Ledger, Vol. 6, 2021 (DOI 10.5195/LEDGER.2021.213)",
+    "url": "https://ledger.pitt.edu/ojs/ledger/article/view/213",
+    "key_claim": "BTC returns show significant negative first-order autocorrelation at 1h, 2h and 4h horizons, and larger price moves are followed by proportionally stronger reversals.",
+    "pros": "Same asset. Intraday horizon close to shirube's indicator lookbacks (bollinger_period 60 = 1h). It directly addresses an observed weakness: many small, fee-dominated rebalances near the midline.",
+    "cons": "Sample is 2015-2018, before BTC's ETF and derivatives-heavy regime. The trading test is in-sample and does not appear to model fees. The data is USD exchange data, not bitFlyer BTC/JPY. The 0.2/0.8 cutoffs are a priori, not taken from the paper."
+  }
+}

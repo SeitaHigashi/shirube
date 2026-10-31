@@ -1,0 +1,35 @@
+{
+  "name": "equal-weight-rebalance-10m-zone-020-080",
+  "kind": "algorithm",
+  "rationale": "2026-10-28 lead #2: equal weights + 600s spacing is the strongest candidate on record at both diagnostic capitals across two windows (500k return -14.21% -> -2.08%), and later runs should test zone parameters on top of it. The baseline zone 0.1/0.9 came from wide-zone-band under the old 0.25 trend weight; equal weights raise the composite's dispersion, so the narrower code-default zone 0.2/0.8 (TradingConfig::default) may cut whipsaw rebalances near the zone edges. Config = baseline-config.json with rebalance_interval_secs 600 and zone 0.2/0.8. The worktree agent should also run the same code with zone 0.1/0.9 at 600s on today's window as an unregistered reference, so the zone effect is isolated on one window.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.2,
+      "hold_btc_above": 0.8
+    },
+    "rebalance_interval_secs": 600
+  },
+  "code_change_summary": "In TradingEngine::compute_btc_target (src/trading/engine.rs), set TREND_SUBSIGNAL_WEIGHT from 0.25 to 1.0 (REVERSION_SUBSIGNAL_WEIGHT stays 1.0), exactly as experiment/equal-weight-rebalance-10m-current-config (93e22ce) does. Nothing else in the function changes. Update both constants' doc comments and the compute_btc_target doc comment to record this probe (equal weights + 10m spacing + zone 0.2/0.8, 2026-10-28 lead #2). Update the compute_btc_target_* unit tests' expected values wherever the change legitimately alters them; rewrite (never delete) any test asserting reversion dominance, and add a regression test for any new behaviour.",
+  "constraints": [
+    "This hypothesis modifies the body of TradingEngine::compute_btc_target. This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST NOT change TradingEngine::compute_btc_target's signature (its parameter list or return type) -- only its body.",
+    "MUST NOT change any individual sub-signal's own formula or the aggregation expression; exactly one numeric constant changes (TREND 0.25 -> 1.0).",
+    "MUST pass `cargo test`, including the compute_btc_target_* unit tests in src/trading/engine.rs -- update their expected values if the new weight legitimately changes them (do not weaken or delete a test just to make it pass).",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff touches compute_btc_target's body, so the reviewer gives it the scrutiny an allocation-formula change deserves.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or anything on the live order-submission path."
+  ]
+}

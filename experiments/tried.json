@@ -1008,5 +1008,35 @@
     "sharpe_absolute_delta": -9.257,
     "report_path": "experiments/reports/2026-10-28.md",
     "note": "Real rejection at 50k: amplification (k up to 1.5) pushed deltas over the lot floor, 77 trades vs 1, return -5.41% vs -0.58%, DD +2.80pp. 500k/5M roughly unchanged (-14.17% vs -14.21%). k now varies (92% interior, median 0.95), so this IS a fair test of 1m vol scaling: no effect. Live SignalEngine cannot supply realized_vol (always None). Branch experiment/realized-vol-scaled-exposure-1m-recalibrated (ab66646) pushed for human review (touches compute_btc_target body)."
+  },
+  {
+    "name": "equal-weight-rebalance-10m-zone-020-080",
+    "content_hash": "8a3fec3ca68627dafafca82d483322a3c9f7dde0f720448f3fc84ec465766722",
+    "tried_at": "2026-10-31T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 13.33,
+    "report_path": "experiments/reports/2026-10-31.md",
+    "note": "Rejected on trade count only (3 vs 137 = 2%); Sharpe -17.98 -> -4.65 and DD 10.91 -> 4.69 at 50k. Fair test of the zone itself: vs the same code at zone 0.1/0.9 it is worse at every capital (500k -4.78% vs -3.70%, 115 vs 60 trades). Branch experiment/equal-weight-rebalance-10m-zone-020-080 (1308358) pushed for human review (touches compute_btc_target body)."
+  },
+  {
+    "name": "stretched-band-gated-equal-weight-10m",
+    "content_hash": "15b40ca803e030b6145f2e5be9a4b22e277871923e1011a93fd961d456f8dca8",
+    "tried_at": "2026-10-31T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 13.607,
+    "report_path": "experiments/reports/2026-10-31.md",
+    "note": "Rejected on trade count (1 vs 137). At 50k it is economically identical to ungated equal-weight (lot floor). vs ungated at 500k/5M the gate is worse: trades 60 -> 70, fees +22%, return -3.70% -> -4.04% (500k). Gate returned None on 55.4% of bars. Held extreme targets keep drift deltas large. Branch experiment/stretched-band-gated-equal-weight-10m (b528582) pushed for human review (touches compute_btc_target body)."
+  },
+  {
+    "name": "equal-weight-rebalance-10m-threshold-015",
+    "content_hash": "2ab61244b48ba67b7fc8abf7c3ca43ac04a56b07eb152f81c17221b3af2199a9",
+    "tried_at": "2026-10-31T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 13.607,
+    "report_path": "experiments/reports/2026-10-31.md",
+    "note": "Rejected on trade count (1 vs 137); 50k is lot-floor-inert (identical to threshold 0.10). The diagnostics are the best on record: vs equal-weight at 0.10, 500k fees 3,941 -> 1,683 JPY, return -3.70% -> -3.22%, Sharpe -6.13 -> -5.39; vs the dev baseline at 500k, return -16.34% -> -3.22%. Still trails static mix by 0.59pp. Branch experiment/equal-weight-rebalance-10m-threshold-015 (bc00fab) pushed for human review (touches compute_btc_target body)."
   }
 ]

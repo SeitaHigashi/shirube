@@ -232,7 +232,15 @@ impl TradingEngine {
     /// - mean-reverting family (RSI, Bollinger %B) — weight
     ///   `REVERSION_SUBSIGNAL_WEIGHT` = 1.0
     /// - trend-following family (SMA cross, EMA cross, MACD histogram) — weight
-    ///   `TREND_SUBSIGNAL_WEIGHT` = 0.25
+    ///   `TREND_SUBSIGNAL_WEIGHT` = 1.0
+    ///
+    /// NOTE: hypothesis `equal-weight-rebalance-10m-current-config` (2026-10-25
+    /// lead #2). Both families now carry weight 1.0, i.e. the weighted mean is a
+    /// plain equal-weight average of the five sub-signals. This equal-weight
+    /// probe is paired with 10-minute rebalance spacing
+    /// (`rebalance_interval_secs` = 600) in the hypothesis's trading config.
+    /// The history below documents the earlier reversion-tilted weighting
+    /// (trend 0.25) this probe replaces.
     ///
     /// Rationale (hypothesis `mean-reversion-weighted-subsignals`): over the
     /// 76-day pre-holdout training window (2026-06-11 → 2026-08-26) the lag-1
@@ -256,6 +264,13 @@ impl TradingEngine {
     ///   ta_normalized    = Σ(value * weight) / Σ(weight)  ∈ [0.0, 1.0]
     ///   sentiment_norm   = (avg_sentiment + 1.0) / 2.0  ∈ [0.0, 1.0]
     ///   combined         = ta_normalized * ta_weight + sentiment_norm * sentiment_weight
+    ///
+    /// # Stretched-band gate
+    /// NOTE: hypothesis `stretched-band-gated-equal-weight-10m`. When close and
+    /// both Bollinger bands are present with a positive bandwidth and
+    /// `STRETCH_LOWER < (close - bb_lower) / (bb_upper - bb_lower) < STRETCH_UPPER`
+    /// (0.2 / 0.8), this returns `None` so callers hold the previous sticky
+    /// target. This diff touches this function's body, not its signature.
     pub(crate) fn compute_btc_target(
         raw: &IndicatorPoint,
         news_scores: &[SentimentScore],
@@ -283,6 +298,11 @@ impl TradingEngine {
         /// training window (2026-06-11 → 2026-08-26) is -0.028 — weakly
         /// mean-reverting at the 1h resolution this engine trades at — so the
         /// mean-reverting family carries full weight.
+        ///
+        /// NOTE: hypothesis `equal-weight-rebalance-10m-current-config`
+        /// (2026-10-25 lead #2) leaves this at 1.0 and raises the trend weight
+        /// to match, making the aggregation an equal-weight mean; the probe is
+        /// combined with 10-minute rebalance spacing.
         const REVERSION_SUBSIGNAL_WEIGHT: f64 = 1.0;
 
         /// Aggregation weight of the trend-following sub-signals (SMA cross,
@@ -293,7 +313,14 @@ impl TradingEngine {
         /// which was that run's worst result on every axis (Sharpe -1.237,
         /// max drawdown +1.35pp, win rate 6.7%). Trend sub-signals are kept
         /// rather than dropped so they still break ties, at quarter influence.
-        const TREND_SUBSIGNAL_WEIGHT: f64 = 0.25;
+        ///
+        /// NOTE: hypothesis `equal-weight-rebalance-10m-current-config`
+        /// (2026-10-25 lead #2) raises this from 0.25 to 1.0 — equal weight
+        /// with the mean-reverting family — as an equal-weight probe combined
+        /// with 10-minute rebalance spacing (`rebalance_interval_secs` = 600).
+        /// The best 500k result on record (2026-10-25) was equal-weight with
+        /// 900s spacing; this isolates the spacing contribution.
+        const TREND_SUBSIGNAL_WEIGHT: f64 = 1.0;
 
         // (sub-signal value ∈ [0.0, 1.0], family weight) pairs. Combined below
         // as a weighted mean over whichever sub-signals this point supplied.
@@ -355,6 +382,43 @@ impl TradingEngine {
         // Warmup: no indicator data available yet
         if sub_signals.is_empty() {
             return None;
+        }
+
+        /// Lower %B cutoff (as a fraction, 0.0 = lower band, 1.0 = upper band)
+        /// of the stretched-band gate: at or below it price counts as stretched
+        /// to the downside and a new target may be emitted.
+        ///
+        /// NOTE: hypothesis `stretched-band-gated-equal-weight-10m`. De Nicola,
+        /// "On the Intraday Behavior of Bitcoin" (Ledger 6, 2021) reports that
+        /// BTC's 1-4h mean reversion is stronger after larger moves. The 0.2 /
+        /// 0.8 cutoffs are a priori choices of this hypothesis, not values
+        /// taken from the paper.
+        const STRETCH_LOWER: f64 = 0.2;
+
+        /// Upper %B cutoff of the stretched-band gate: at or above it price
+        /// counts as stretched to the upside and a new target may be emitted.
+        ///
+        /// NOTE: same hypothesis and citation as `STRETCH_LOWER`.
+        const STRETCH_UPPER: f64 = 0.8;
+
+        // Stretched-band gate: when price sits inside the middle of the
+        // Bollinger band (STRETCH_LOWER < %B < STRETCH_UPPER) the reversion
+        // evidence is weakest, so no new target is emitted. Returning None
+        // makes both TradingEngine::handle_indicator and Simulator::run hold
+        // the previous sticky target (drift-correcting rebalances against
+        // that held target still happen). The gate only uses close, bb_upper
+        // and bb_lower, which the live SignalEngine supplies, so live and
+        // backtest behave identically. Without band data, or with a
+        // non-positive bandwidth, the gate does not apply.
+        //   pct_b = (close - bb_lower) / (bb_upper - bb_lower)   (unbounded; 0..1 inside the band)
+        if let (Some(close), Some(bb_upper), Some(bb_lower)) = (raw.close, raw.bb_upper, raw.bb_lower) {
+            let bandwidth = bb_upper - bb_lower;
+            if bandwidth > 0.0 {
+                let pct_b = (close - bb_lower) / bandwidth;
+                if pct_b > STRETCH_LOWER && pct_b < STRETCH_UPPER {
+                    return None;
+                }
+            }
         }
 
         // Weighted mean over the sub-signals actually present. Dividing by the
@@ -770,6 +834,12 @@ mod tests {
 
     /// Build an IndicatorOutput with strong bullish raw values.
     /// RSI=20 (oversold), close > SMA, positive histogram, low %B.
+    ///
+    /// NOTE: the bands place close at %B ≈ 0.167 (≤ STRETCH_LOWER) so the
+    /// stretched-band gate (hypothesis `stretched-band-gated-equal-weight-10m`)
+    /// lets this fixture emit a target. The previous bands (9_800..10_200)
+    /// put close at %B = 0.75, inside the gated middle, contradicting the
+    /// "low %B" this fixture is documented to have.
     fn bullish_output() -> IndicatorOutput {
         IndicatorOutput {
             indicators: vec![IndicatorSignal { name: "RSI".into(), value: Some(20.0) }],
@@ -782,9 +852,9 @@ mod tests {
                 macd_line: Some(50.0),
                 signal_line: Some(30.0),
                 histogram: Some(20.0), // positive → bullish
-                bb_upper: Some(10_200.0),
-                bb_middle: Some(10_000.0),
-                bb_lower: Some(9_800.0), // close near middle, %B ≈ 50 → neutral from BB
+                bb_upper: Some(10_350.0),
+                bb_middle: Some(10_200.0),
+                bb_lower: Some(10_050.0), // close near lower band, %B ≈ 0.167 → bullish from BB
             },
             calculated_at: chrono::Utc::now(),
         }
@@ -792,6 +862,11 @@ mod tests {
 
     /// Build an IndicatorOutput with strong bearish raw values.
     /// RSI=80 (overbought), close < SMA, negative histogram, high %B.
+    ///
+    /// NOTE: the bands place close at %B ≈ 0.833 (≥ STRETCH_UPPER) so the
+    /// stretched-band gate lets this fixture emit a target. The previous bands
+    /// (9_800..10_200) put close at %B = 0.25, inside the gated middle and
+    /// contradicting the documented "high %B".
     fn bearish_output() -> IndicatorOutput {
         IndicatorOutput {
             indicators: vec![IndicatorSignal { name: "RSI".into(), value: Some(80.0) }],
@@ -804,9 +879,9 @@ mod tests {
                 macd_line: Some(-50.0),
                 signal_line: Some(-30.0),
                 histogram: Some(-20.0), // negative → bearish
-                bb_upper: Some(10_200.0),
-                bb_middle: Some(10_000.0),
-                bb_lower: Some(9_800.0), // close near lower, %B ≈ 50 → neutral from BB
+                bb_upper: Some(9_950.0),
+                bb_middle: Some(9_800.0),
+                bb_lower: Some(9_650.0), // close near upper band, %B ≈ 0.833 → bearish from BB
             },
             calculated_at: chrono::Utc::now(),
         }
@@ -938,11 +1013,12 @@ mod tests {
         drop(indicator_tx);
 
         engine.run().await;
-        // sub_signals (value, family weight):
-        //   RSI=0.2 (1.0), BB%B=0.75 (1.0, close sits near the lower band),
-        //   SMA-cross=0.0 (0.25), EMA-cross=0.0 (0.25), MACD-hist=0.3 (0.25)
-        // → ta_normalized = (0.2 + 0.75 + 0.25*0.3) / 2.75 ≈ 0.3727
-        // combined ≈ 0.3727*0.7 + 0.5*0.3 ≈ 0.4109 → zone-mapped target ≈ 0.35,
+        // sub_signals (value, equal weight 1.0 each):
+        //   RSI=0.2, BB%B sub-signal=1-0.833=0.167 (close near the upper band,
+        //   so the stretched-band gate passes), SMA-cross=0.0, EMA-cross=0.0
+        //   (-0.5% saturates), MACD-hist=0.5-0.204=0.296 (-20/9_800 scaled)
+        // → ta_normalized ≈ (0.2 + 0.167 + 0.0 + 0.0 + 0.296) / 5 ≈ 0.133
+        // combined ≈ 0.133*0.7 + 0.5*0.3 ≈ 0.243 → bearish zone-mapped target,
         // far below the ~0.90 already-held allocation → Sell.
         let orders = mock_exchange.placed_orders();
         assert_eq!(orders.len(), 1);
@@ -1031,11 +1107,11 @@ mod tests {
         let result = TradingEngine::compute_btc_target(&raw, &[], &make_cfg());
         // RSI sub_signal=0.8 (mean-reverting, weight 1.0). SMA-cross:
         // (10100-10000)/10000 = +1.0% relative, past the 0.5% saturation band
-        // → sub_signal=1.0 (trend-following, weight 0.25).
-        // → ta_normalized = (0.8*1.0 + 1.0*0.25) / 1.25 = 0.84.
-        // No news → sentiment_normalized=0.5. combined = 0.84*0.7 + 0.5*0.3 = 0.738.
+        // → sub_signal=1.0 (trend-following, weight 1.0 under equal weighting).
+        // → ta_normalized = (0.8*1.0 + 1.0*1.0) / 2.0 = 0.9.
+        // No news → sentiment_normalized=0.5. combined = 0.9*0.7 + 0.5*0.3 = 0.78.
         let val = result.unwrap();
-        let expected = (0.8 * 1.0 + 1.0 * 0.25) / 1.25 * 0.7 + 0.5 * 0.3;
+        let expected = (0.8 * 1.0 + 1.0 * 1.0) / 2.0 * 0.7 + 0.5 * 0.3;
         assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
         assert!(val > 0.5);
     }
@@ -1053,11 +1129,11 @@ mod tests {
         };
         let result = TradingEngine::compute_btc_target(&raw, &[], &make_cfg());
         // RSI sub_signal=0.2 (weight 1.0). SMA-cross: (9900-10000)/10000 = -1.0%
-        // relative, past the 0.5% saturation band → sub_signal=0.0 (weight 0.25).
-        // → ta_normalized = (0.2*1.0 + 0.0*0.25) / 1.25 = 0.16.
-        // No news → sentiment_normalized=0.5. combined = 0.16*0.7 + 0.5*0.3 = 0.262.
+        // relative, past the 0.5% saturation band → sub_signal=0.0 (weight 1.0).
+        // → ta_normalized = (0.2*1.0 + 0.0*1.0) / 2.0 = 0.1.
+        // No news → sentiment_normalized=0.5. combined = 0.1*0.7 + 0.5*0.3 = 0.22.
         let val = result.unwrap();
-        let expected = (0.2 * 1.0 + 0.0 * 0.25) / 1.25 * 0.7 + 0.5 * 0.3;
+        let expected = (0.2 * 1.0 + 0.0 * 1.0) / 2.0 * 0.7 + 0.5 * 0.3;
         assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
         assert!(val < 0.5);
     }
@@ -1078,15 +1154,15 @@ mod tests {
         };
         let result = TradingEngine::compute_btc_target(&raw, &[], &make_cfg());
         // RSI sub_signal=0.5 (weight 1.0), SMA-cross=0.75, EMA-cross=0.75
-        // (weight 0.25 each) → ta_normalized =
-        //   (0.5*1.0 + 0.75*0.25 + 0.75*0.25) / 1.5 = 0.5833333...
+        // (weight 1.0 each under equal weighting) → ta_normalized =
+        //   (0.5*1.0 + 0.75*1.0 + 0.75*1.0) / 3.0 = 0.6666666...
         // No news → sentiment_normalized=0.5.
-        // combined = 0.5833333*0.7 + 0.5*0.3 = 0.5583333.
+        // combined = 0.6666666*0.7 + 0.5*0.3 = 0.6166666.
         let val = result.unwrap();
-        let expected = (0.5 * 1.0 + 0.75 * 0.25 + 0.75 * 0.25) / 1.5 * 0.7 + 0.5 * 0.3;
+        let expected = (0.5 * 1.0 + 0.75 * 1.0 + 0.75 * 1.0) / 3.0 * 0.7 + 0.5 * 0.3;
         assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
-        // Strictly between neutral and the fully-saturated 0.738 of the strong-buy case.
-        assert!(val > 0.5 && val < 0.738);
+        // Strictly between neutral and the fully-saturated 0.78 of the strong-buy case.
+        assert!(val > 0.5 && val < 0.78);
     }
 
     #[test]
@@ -1102,7 +1178,7 @@ mod tests {
         };
         let val = TradingEngine::compute_btc_target(&damped, &[], &make_cfg()).unwrap();
         // ta_normalized = 0.75: a single sub-signal divides by its own weight
-        // (0.75*0.25 / 0.25), so family weighting cannot change a lone value.
+        // (0.75*w / w), so family weighting cannot change a lone value.
         // → 0.75*0.7 + 0.5*0.3 = 0.675
         assert!((val - 0.675).abs() < 1e-9, "expected ~0.675, got {}", val);
 
@@ -1115,17 +1191,19 @@ mod tests {
     }
 
     #[test]
-    fn compute_btc_target_mean_reverting_family_dominates_trend_disagreement() {
+    fn compute_btc_target_equal_weight_trend_majority_outvotes_reversion_disagreement() {
         // Sub-signal families point in opposite directions:
         //   trend-following  — close +1% over both SMA and EMA and a +1% MACD
         //                      histogram → all three saturate at 1.0 (bullish)
         //   mean-reverting   — RSI=90 (→0.1) and close pinned to the upper
         //                      Bollinger band, %B=100 (→0.0) (both bearish)
-        // Under the weighted mean the mean-reverting family (weight 1.0 each)
-        // must outweigh the trend family (weight 0.25 each), so the composite
-        // comes out bearish. The old unweighted mean would have produced
-        // (0.1+0.0+1.0+1.0+1.0)/5 = 0.62 → combined 0.584, i.e. bullish, so this
-        // assertion genuinely discriminates between the two aggregations.
+        // NOTE: rewritten for hypothesis `equal-weight-rebalance-10m-current-config`.
+        // Under the previous reversion-tilted weights (reversion 1.0 / trend
+        // 0.25) this case came out bearish (0.85/2.75 → combined 0.366). With
+        // equal weights (1.0 each) the composite is the plain mean, so the
+        // three bullish trend sub-signals outvote the two bearish reversion
+        // ones and the composite is bullish. Asserting the exact value and
+        // the bullish side discriminates between the two weightings.
         let raw = IndicatorPoint {
             time: chrono::Utc::now(),
             close: Some(10_100.0),
@@ -1140,16 +1218,90 @@ mod tests {
             bb_lower: Some(9_900.0),
         };
         let val = TradingEngine::compute_btc_target(&raw, &[], &make_cfg()).unwrap();
-        // ta_normalized = (0.1*1.0 + 0.0*1.0 + 1.0*0.25 * 3) / (1.0 + 1.0 + 0.75)
-        //               = 0.85 / 2.75 = 0.309090...
-        // combined = 0.309090*0.7 + 0.5*0.3 = 0.366363...
-        let expected = (0.1 + 0.0 + 3.0 * 0.25) / 2.75 * 0.7 + 0.5 * 0.3;
+        // ta_normalized = (0.1*1.0 + 0.0*1.0 + 1.0*1.0 * 3) / (1.0 * 5)
+        //               = 3.1 / 5.0 = 0.62
+        // combined = 0.62*0.7 + 0.5*0.3 = 0.584
+        let expected = (0.1 + 0.0 + 3.0 * 1.0) / 5.0 * 0.7 + 0.5 * 0.3;
         assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
+        // The old reversion-tilted value must no longer be produced.
+        let old_weighted = (0.1 + 0.0 + 3.0 * 0.25) / 2.75 * 0.7 + 0.5 * 0.3;
+        assert!((val - old_weighted).abs() > 1e-3);
         assert!(
-            val < 0.5,
-            "mean-reverting family must dominate: expected a bearish composite, got {}",
+            val > 0.5,
+            "equal weighting: trend majority must outvote reversion, got {}",
             val
         );
+    }
+
+    /// Build an IndicatorPoint carrying RSI and Bollinger bands only, for the
+    /// stretched-band gate tests (hypothesis `stretched-band-gated-equal-weight-10m`).
+    fn band_point(close: f64, bb_lower: f64, bb_upper: f64) -> IndicatorPoint {
+        IndicatorPoint {
+            time: chrono::Utc::now(),
+            close: Some(close),
+            sma: None, ema: None, rsi: Some(50.0),
+            macd_line: None, signal_line: None, histogram: None,
+            bb_upper: Some(bb_upper),
+            bb_middle: Some((bb_upper + bb_lower) / 2.0),
+            bb_lower: Some(bb_lower),
+        }
+    }
+
+    #[test]
+    fn compute_btc_target_stretch_gate_inside_band_returns_none() {
+        // %B = 0.5 (midline), 0.25 and 0.75 are all strictly inside (0.2, 0.8)
+        // → the gate withholds a new target so the sticky target is held.
+        for close in [10_000.0, 9_950.0, 10_050.0] {
+            let raw = band_point(close, 9_900.0, 10_100.0);
+            assert_eq!(
+                TradingEngine::compute_btc_target(&raw, &[], &make_cfg()),
+                None,
+                "close {} is inside the band middle and must be gated",
+                close
+            );
+        }
+    }
+
+    #[test]
+    fn compute_btc_target_stretch_gate_stretched_returns_some() {
+        // %B = 0.1 (below lower cutoff): RSI 0.5, %B sub-signal 0.9
+        // → ta = (0.5 + 0.9) / 2 = 0.7 → combined = 0.7*0.7 + 0.5*0.3 = 0.64.
+        let low = band_point(9_920.0, 9_900.0, 10_100.0);
+        let val = TradingEngine::compute_btc_target(&low, &[], &make_cfg()).unwrap();
+        let expected = (0.5 + 0.9) / 2.0 * 0.7 + 0.5 * 0.3;
+        assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
+
+        // %B = 0.9 (above upper cutoff) → bearish target emitted.
+        let high = band_point(10_080.0, 9_900.0, 10_100.0);
+        let val = TradingEngine::compute_btc_target(&high, &[], &make_cfg()).unwrap();
+        let expected = (0.5 + 0.1) / 2.0 * 0.7 + 0.5 * 0.3;
+        assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
+
+        // Exactly on the cutoffs (0.2 and 0.8) counts as stretched (the gate
+        // is a strict inequality). Values chosen to be exact in binary.
+        let at_lower = band_point(2.0, 0.0, 10.0);
+        assert!(TradingEngine::compute_btc_target(&at_lower, &[], &make_cfg()).is_some());
+        let at_upper = band_point(8.0, 0.0, 10.0);
+        assert!(TradingEngine::compute_btc_target(&at_upper, &[], &make_cfg()).is_some());
+    }
+
+    #[test]
+    fn compute_btc_target_stretch_gate_absent_without_band_data() {
+        // No Bollinger data at all → the gate does not apply; RSI alone yields Some.
+        let raw = IndicatorPoint {
+            time: chrono::Utc::now(),
+            close: Some(10_000.0),
+            sma: None, ema: None, rsi: Some(50.0),
+            macd_line: None, signal_line: None, histogram: None,
+            bb_upper: None, bb_middle: None, bb_lower: None,
+        };
+        assert!(TradingEngine::compute_btc_target(&raw, &[], &make_cfg()).is_some());
+
+        // Flat bands (bandwidth 0) → gate does not apply either; %B sub-signal
+        // falls back to neutral 0.5 → combined 0.5.
+        let flat = band_point(10_000.0, 10_000.0, 10_000.0);
+        let val = TradingEngine::compute_btc_target(&flat, &[], &make_cfg()).unwrap();
+        assert!((val - 0.5).abs() < 1e-9, "expected ~0.5, got {}", val);
     }
 
     #[test]

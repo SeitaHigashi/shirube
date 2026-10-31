@@ -429,6 +429,12 @@ mod tests {
         trading_config.macd_slow = 3;
         trading_config.macd_signal = 2;
         trading_config.bollinger_period = 2;
+        // NOTE: std multiplier 1.0 with a 2-period window puts every close
+        // exactly on a band (%B = 0.0 or 1.0), so the stretched-band gate in
+        // `compute_btc_target` (hypothesis `stretched-band-gated-equal-weight-10m`)
+        // never withholds the target. With the default 2.0 a ramp sits at
+        // %B = 0.75 forever and the fixture would never trade.
+        trading_config.bollinger_std = 1.0;
         trading_config.allocation_threshold = 0.01;
 
         let prices = [
@@ -480,6 +486,12 @@ mod tests {
         trading_config.macd_slow = 3;
         trading_config.macd_signal = 2;
         trading_config.bollinger_period = 2;
+        // NOTE: std multiplier 1.0 with a 2-period window puts every close
+        // exactly on a band (%B = 0.0 or 1.0), so the stretched-band gate in
+        // `compute_btc_target` (hypothesis `stretched-band-gated-equal-weight-10m`)
+        // never withholds the target. With the default 2.0 a ramp sits at
+        // %B = 0.75 forever and the fixture would never trade.
+        trading_config.bollinger_std = 1.0;
         trading_config.allocation_threshold = 0.01;
 
         let prices = [
@@ -539,6 +551,12 @@ mod tests {
         trading_config.macd_slow = 3;
         trading_config.macd_signal = 2;
         trading_config.bollinger_period = 2;
+        // NOTE: std multiplier 1.0 with a 2-period window puts every close
+        // exactly on a band (%B = 0.0 or 1.0), so the stretched-band gate in
+        // `compute_btc_target` (hypothesis `stretched-band-gated-equal-weight-10m`)
+        // never withholds the target. With the default 2.0 a ramp sits at
+        // %B = 0.75 forever and the fixture would never trade.
+        trading_config.bollinger_std = 1.0;
         trading_config.allocation_threshold = 0.01;
         trading_config.circuit_breaker_enabled = true;
         trading_config.max_daily_drawdown = 0.05;
@@ -598,6 +616,12 @@ mod tests {
         trading_config.macd_slow = 3;
         trading_config.macd_signal = 2;
         trading_config.bollinger_period = 2;
+        // NOTE: std multiplier 1.0 with a 2-period window puts every close
+        // exactly on a band (%B = 0.0 or 1.0), so the stretched-band gate in
+        // `compute_btc_target` (hypothesis `stretched-band-gated-equal-weight-10m`)
+        // never withholds the target. With the default 2.0 a ramp sits at
+        // %B = 0.75 forever and the fixture would never trade.
+        trading_config.bollinger_std = 1.0;
         trading_config.allocation_threshold = 0.01;
 
         // Steadily rising series so the post-warmup half is unambiguously bullish.
@@ -658,6 +682,12 @@ mod tests {
         trading_config.macd_slow = 3;
         trading_config.macd_signal = 2;
         trading_config.bollinger_period = 2;
+        // NOTE: std multiplier 1.0 with a 2-period window puts every close
+        // exactly on a band (%B = 0.0 or 1.0), so the stretched-band gate in
+        // `compute_btc_target` (hypothesis `stretched-band-gated-equal-weight-10m`)
+        // never withholds the target. With the default 2.0 a ramp sits at
+        // %B = 0.75 forever and the fixture would never trade.
+        trading_config.bollinger_std = 1.0;
         trading_config.allocation_threshold = 0.01;
 
         let candles: Vec<Candle> = (0..8)
@@ -718,6 +748,12 @@ mod tests {
         trading_config.macd_slow = 3;
         trading_config.macd_signal = 2;
         trading_config.bollinger_period = 2;
+        // NOTE: std multiplier 1.0 with a 2-period window puts every close
+        // exactly on a band (%B = 0.0 or 1.0), so the stretched-band gate in
+        // `compute_btc_target` (hypothesis `stretched-band-gated-equal-weight-10m`)
+        // never withholds the target. With the default 2.0 a ramp sits at
+        // %B = 0.75 forever and the fixture would never trade.
+        trading_config.bollinger_std = 1.0;
         trading_config.allocation_threshold = 0.01;
         trading_config.circuit_breaker_enabled = true;
         trading_config.max_daily_drawdown = max_daily_drawdown;
@@ -850,6 +886,12 @@ mod tests {
         trading_config.macd_slow = 3;
         trading_config.macd_signal = 2;
         trading_config.bollinger_period = 2;
+        // NOTE: std multiplier 1.0 with a 2-period window puts every close
+        // exactly on a band (%B = 0.0 or 1.0), so the stretched-band gate in
+        // `compute_btc_target` (hypothesis `stretched-band-gated-equal-weight-10m`)
+        // never withholds the target. With the default 2.0 a ramp sits at
+        // %B = 0.75 forever and the fixture would never trade.
+        trading_config.bollinger_std = 1.0;
         trading_config.allocation_threshold = 0.01;
         trading_config.circuit_breaker_enabled = false;
 
@@ -891,6 +933,12 @@ mod tests {
         trading_config.macd_slow = 3;
         trading_config.macd_signal = 2;
         trading_config.bollinger_period = 2;
+        // NOTE: std multiplier 1.0 with a 2-period window puts every close
+        // exactly on a band (%B = 0.0 or 1.0), so the stretched-band gate in
+        // `compute_btc_target` (hypothesis `stretched-band-gated-equal-weight-10m`)
+        // never withholds the target. With the default 2.0 a ramp sits at
+        // %B = 0.75 forever and the fixture would never trade.
+        trading_config.bollinger_std = 1.0;
         trading_config.allocation_threshold = 0.01;
         trading_config.zone = crate::config::ZoneConfig {
             range_max: 1.0,
@@ -1082,6 +1130,12 @@ mod tests {
         trading_config.macd_slow = 3;
         trading_config.macd_signal = 2;
         trading_config.bollinger_period = 2;
+        // NOTE: std multiplier 1.0 with a 2-period window puts every close
+        // exactly on a band (%B = 0.0 or 1.0), so the stretched-band gate in
+        // `compute_btc_target` (hypothesis `stretched-band-gated-equal-weight-10m`)
+        // never withholds the target. With the default 2.0 a ramp sits at
+        // %B = 0.75 forever and the fixture would never trade.
+        trading_config.bollinger_std = 1.0;
         trading_config.allocation_threshold = 0.01;
         trading_config.circuit_breaker_enabled = false;
         trading_config.rebalance_interval_secs = rebalance_interval_secs;

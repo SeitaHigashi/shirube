@@ -1038,5 +1038,35 @@
     "sharpe_absolute_delta": 13.607,
     "report_path": "experiments/reports/2026-10-31.md",
     "note": "Rejected on trade count (1 vs 137); 50k is lot-floor-inert (identical to threshold 0.10). The diagnostics are the best on record: vs equal-weight at 0.10, 500k fees 3,941 -> 1,683 JPY, return -3.70% -> -3.22%, Sharpe -6.13 -> -5.39; vs the dev baseline at 500k, return -16.34% -> -3.22%. Still trails static mix by 0.59pp. Branch experiment/equal-weight-rebalance-10m-threshold-015 (bc00fab) pushed for human review (touches compute_btc_target body)."
+  },
+  {
+    "name": "equal-weight-rebalance-10m-threshold-020",
+    "content_hash": "810ed52aa39d4b90b020a8e429b8ea46c78c8a131d925196c39f95ac1e64ea2c",
+    "tried_at": "2026-11-01T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 0.0021,
+    "report_path": "experiments/reports/2026-11-01.md",
+    "note": "50k economically identical to baseline (1 vs 1 trade; lot floor). REJECT: Sharpe +0.002 < 0.1 abs, DD +0.14pp (entry-size artefact). Diagnostic: at 0.20 the strategy never rebalances at ANY capital (1 trade at 50k/500k/5M), i.e. it is a static mix; vs threshold 0.15 ref at 500k fees 1,353 -> 362 JPY, return -2.54% -> -2.31%, but by not trading. The threshold curve on equal weights ends here on this window. Branch experiment/equal-weight-rebalance-10m-threshold-020 (ea07037) pushed for human review (touches compute_btc_target body)."
+  },
+  {
+    "name": "equal-weight-10m-threshold-015-trade-to-band-edge",
+    "content_hash": "8a0bda6b1ebff8883bf436e59f8e5933529ee970ae530515ffa3b83ef1080fa6",
+    "tried_at": "2026-11-01T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -0.022,
+    "report_path": "experiments/reports/2026-11-01.md",
+    "note": "REJECT: Sharpe -0.022 abs at 50k (single smaller opening buy, exposure 0.33 vs 0.47; DD 5.00 -> 3.56). Fair test at 500k/5M vs no-shrink ref: fees -73%/-69% (1,353 -> 364; 11,134 -> 3,447 JPY) but Sharpe -0.06/-0.11 and excess vs static mix -0.02/-0.05pp; trades become one-sided (0 sells at 500k). Fee saving did not pay for tracking error. Touches compute_btc_target body AND live order sizing. Branch experiment/equal-weight-10m-threshold-015-trade-to-band-edge (1964109) pushed for human review."
+  },
+  {
+    "name": "equal-weight-rebalance-30m-threshold-015",
+    "content_hash": "bb9ebe192c173eed78eaaae748d5ade18c23fe5d2e6e0fedf3dca0d793f26bd6",
+    "tried_at": "2026-11-01T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 0.0021,
+    "report_path": "experiments/reports/2026-11-01.md",
+    "note": "50k economically identical to baseline (1 trade; lot floor). REJECT: Sharpe +0.002, DD +0.14pp (entry-size artefact). Fair test at 500k/5M vs 600s ref: trades 11 -> 7, fees -28%/-26%, but Sharpe -0.14/-0.18, return -0.015/-0.034pp: stale-target cost exceeds fee saving. 600s remains the best spacing. Branch experiment/equal-weight-rebalance-30m-threshold-015 (9768611) pushed for human review (touches compute_btc_target body)."
   }
 ]

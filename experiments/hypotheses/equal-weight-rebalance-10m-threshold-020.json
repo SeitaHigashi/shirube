@@ -1,0 +1,35 @@
+{
+  "name": "equal-weight-rebalance-10m-threshold-020",
+  "kind": "algorithm",
+  "rationale": "Cost-side hypothesis (2026-10-31 lead #2; the 500k static-mix deficit has been negative for 21 consecutive runs). On equal weights + 600s spacing, raising allocation_threshold 0.10 -> 0.15 cut 500k fees 57% (3,941 -> 1,683 JPY) and improved every 500k/5M metric on 2026-10-31. This tests the next point on that curve, 0.20. Caveat stated up front: at 50,000 JPY every threshold below ~0.25 is inert under the lot floor, so a 50k result identical to the 0.15 variant is expected and not evidence; the 500k/5M diagnostics carry the information, scored on total_fees_jpy, not trade count. The 500k floor (~2.4%) sits far below 0.20, so the 2026-09-16 cliff should not apply there. The agent should also run the same code at threshold 0.15 on today's window as an unregistered reference.",
+  "trading_config": {
+    "allocation_threshold": 0.2,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 600
+  },
+  "code_change_summary": "In TradingEngine::compute_btc_target (src/trading/engine.rs), set TREND_SUBSIGNAL_WEIGHT from 0.25 to 1.0 (REVERSION_SUBSIGNAL_WEIGHT stays 1.0), exactly as experiment/equal-weight-rebalance-10m-threshold-015 (bc00fab) does. Nothing else in the function changes. Update both constants' doc comments and the compute_btc_target doc comment to record this probe. Update the compute_btc_target_* unit tests' expected values wherever the change legitimately alters them; rewrite (never delete) any test asserting reversion dominance. Record allocation_threshold 0.20 in the doc comments.",
+  "constraints": [
+    "This hypothesis modifies the body of TradingEngine::compute_btc_target. This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST NOT change TradingEngine::compute_btc_target's signature (its parameter list or return type) -- only its body.",
+    "MUST NOT change any individual sub-signal's own formula or the aggregation expression; exactly one numeric constant changes (TREND 0.25 -> 1.0).",
+    "MUST pass `cargo test`, including the compute_btc_target_* unit tests in src/trading/engine.rs -- update their expected values if the new weight legitimately changes them (do not weaken or delete a test just to make it pass).",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff touches compute_btc_target's body, so the reviewer gives it the scrutiny an allocation-formula change deserves.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or anything on the live order-submission path."
+  ]
+}

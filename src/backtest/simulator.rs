@@ -248,8 +248,13 @@ impl Simulator {
                         let delta = target_pct - current_alloc;
 
                         if delta.abs() >= trading_config.allocation_threshold {
+                            // Size the order to the band edge, not the target,
+                            // via the same helper the live engine uses.
                             let order_req = TradingEngine::allocation_delta_to_order(
-                                delta,
+                                TradingEngine::band_edge_delta(
+                                    delta,
+                                    trading_config.allocation_threshold,
+                                ),
                                 total,
                                 mid,
                                 &self.config.product_code,
@@ -921,21 +926,30 @@ mod tests {
             warmup_candles: 4,
         };
 
+        let threshold = trading_config.allocation_threshold;
         let db = crate::storage::db::Database::open_in_memory().await.unwrap();
         let report = Simulator::new(cfg, db)
             .run(candles, trading_config)
             .await
             .unwrap();
 
-        // Zero fee/slippage in this fixture, so once the target is reached
-        // (immediately, since indicators are warm from the start of the
-        // evaluated window) the allocation stays effectively exactly 1.0 for
-        // every evaluated candle. The epsilon only absorbs the deliberate
-        // round-down-to-8dp in `allocation_delta_to_order`, far tighter than
-        // it would need to be to catch a real accounting bug.
+        // Zero fee/slippage in this fixture, so once the first rebalance
+        // fires (immediately, since indicators are warm from the start of the
+        // evaluated window) the allocation stays effectively constant for
+        // every evaluated candle.
+        // NOTE: hypothesis `equal-weight-10m-threshold-015-trade-to-band-edge`
+        // sizes orders via `TradingEngine::band_edge_delta`, so the single
+        // rebalance from 0.0 trades only to the band edge, target - threshold
+        // = 1.0 - 0.01 = 0.99, and the remaining 0.01 delta never clears the
+        // `delta >= threshold` gate again. The epsilon only absorbs the
+        // deliberate round-down-to-8dp in `allocation_delta_to_order` and the
+        // mild price drift of the held BTC, far tighter than it would need to
+        // be to catch a real accounting bug (or a full-to-target order, 1.0).
+        let expected = 1.0 - threshold;
         assert!(
-            (report.avg_btc_exposure - 1.0).abs() < 1e-4,
-            "expected avg_btc_exposure ~= 1.0, got {}",
+            (report.avg_btc_exposure - expected).abs() < 1e-4,
+            "expected avg_btc_exposure ~= {}, got {}",
+            expected,
             report.avg_btc_exposure
         );
     }

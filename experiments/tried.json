@@ -1068,5 +1068,35 @@
     "sharpe_absolute_delta": 0.0021,
     "report_path": "experiments/reports/2026-11-01.md",
     "note": "50k economically identical to baseline (1 trade; lot floor). REJECT: Sharpe +0.002, DD +0.14pp (entry-size artefact). Fair test at 500k/5M vs 600s ref: trades 11 -> 7, fees -28%/-26%, but Sharpe -0.14/-0.18, return -0.015/-0.034pp: stale-target cost exceeds fee saving. 600s remains the best spacing. Branch experiment/equal-weight-rebalance-30m-threshold-015 (9768611) pushed for human review (touches compute_btc_target body)."
+  },
+  {
+    "name": "constant-mix-50-rebalance-10m-threshold-010",
+    "content_hash": "f17e8f6a50713b44ec2280c35de44a657745f0654cf08d4db68c206dc42c91f5",
+    "tried_at": "2026-11-07T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 12.2112,
+    "report_path": "experiments/reports/2026-11-07.md",
+    "note": "REJECT on trade count (1 vs 157, 0.6%). 1 trade at every capital: 0.10 drift band around 50% never fired in a -5.2% window, so the variant IS the static mix (excess -0.03pp). Timing-null not measured; would need a 0.01-0.03 band. Branch experiment/constant-mix-50-rebalance-10m-threshold-010 (ab3e802) pushed for human review (touches compute_btc_target body)."
+  },
+  {
+    "name": "trend-only-subsignals-10m-threshold-015",
+    "content_hash": "56b5f54e4e6377b9127132e87840d34d2178f3a3a2950e12405c00f8dcf032a0",
+    "tried_at": "2026-11-07T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 9.1911,
+    "report_path": "experiments/reports/2026-11-07.md",
+    "note": "REJECT on trade count (73 vs 157, 46.5% < 50%) despite Sharpe -15.95 -> -6.76 and DD 11.00 -> 5.00. Net excess vs static mix negative at all capitals (50k -1.97pp, 500k -4.01pp, 5M -2.12pp); zero-cost 500k +2.98pp (largest gross timing value measured). Worse net than eq-weight ref at 500k (-6.64 vs -2.87%). Branch experiment/trend-only-subsignals-10m-threshold-015 (0d2c192) pushed for human review (touches compute_btc_target body)."
+  },
+  {
+    "name": "equal-weight-10m-threshold-015-full-ta-weight",
+    "content_hash": "e2b104ef347d289bf090b3cdda8ffcc9a73509846cf802f6031825a7e410f279",
+    "tried_at": "2026-11-07T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 12.6166,
+    "report_path": "experiments/reports/2026-11-07.md",
+    "note": "REJECT on trade count (13 vs 157, 8%) despite Sharpe -15.95 -> -3.33, DD 11.00 -> 4.02; 50k excess vs static mix +0.36pp/+0.39 Sharpe. 500k net -0.95pp vs static mix (ref -0.15pp); zero-cost 500k +1.05pp (ref +0.71pp). Bigger dose adds gross timing but fees eat it. Branch experiment/equal-weight-10m-threshold-015-full-ta-weight (f39d31b) pushed for human review (touches compute_btc_target body; removes news from live composite)."
   }
 ]

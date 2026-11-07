@@ -230,11 +230,22 @@ impl TradingEngine {
     /// into two families and combined as a *weighted* mean:
     ///
     /// - mean-reverting family (RSI, Bollinger %B) — weight
-    ///   `REVERSION_SUBSIGNAL_WEIGHT` = 1.0
+    ///   `REVERSION_SUBSIGNAL_WEIGHT` = 0.0 (excluded)
     /// - trend-following family (SMA cross, EMA cross, MACD histogram) — weight
-    ///   `TREND_SUBSIGNAL_WEIGHT` = 0.25
+    ///   `TREND_SUBSIGNAL_WEIGHT` = 1.0
     ///
-    /// Rationale (hypothesis `mean-reversion-weighted-subsignals`): over the
+    /// NOTE: hypothesis `trend-only-subsignals-10m-threshold-015`. Raising the
+    /// trend weight from 0.25 to 1.0 (equal weighting) improved the 500k
+    /// return by ~12-13.5pp over the reversion-dominated mix on four
+    /// consecutive windows, so this variant removes the mean-reversion family
+    /// entirely to isolate whether the trend family alone has timing value.
+    /// RSI and %B are still computed (their formulas are unchanged) but carry
+    /// zero weight. Because a point that supplies only RSI/%B (partial warmup)
+    /// now has a zero weight sum, such a point returns `None` (no target)
+    /// instead of dividing by zero.
+    ///
+    /// Historical rationale (hypothesis `mean-reversion-weighted-subsignals`,
+    /// superseded on this branch): over the
     /// 76-day pre-holdout training window (2026-06-11 → 2026-08-26) the lag-1
     /// autocorrelation of hourly BTC/JPY returns measured -0.028, i.e. hourly
     /// returns are weakly *mean-reverting* at exactly the resolution this engine
@@ -246,9 +257,10 @@ impl TradingEngine {
     /// weights used to combine them differ.
     ///
     /// Because the weighted mean divides by the sum of the weights actually
-    /// present, it degrades correctly during warmup: a point where only RSI is
-    /// available still yields exactly the RSI sub-signal, and the result always
-    /// stays in [0.0, 1.0].
+    /// present, it degrades correctly during warmup: a point where only the SMA
+    /// cross is available yields exactly that sub-signal, and the result always
+    /// stays in [0.0, 1.0]. A point whose present sub-signals all have zero
+    /// weight (only RSI and/or %B) yields `None`, exactly like a full warmup.
     ///
     /// # Formula
     ///   cross_sub_signal = ((x / ref) / SATURATION).clamp(-1, 1) * 0.5 + 0.5
@@ -278,22 +290,24 @@ impl TradingEngine {
 
         /// Aggregation weight of the mean-reverting sub-signals (RSI, Bollinger %B).
         ///
-        /// NOTE: hypothesis `mean-reversion-weighted-subsignals`. The lag-1
-        /// autocorrelation of hourly BTC/JPY returns over the 76-day pre-holdout
-        /// training window (2026-06-11 → 2026-08-26) is -0.028 — weakly
-        /// mean-reverting at the 1h resolution this engine trades at — so the
-        /// mean-reverting family carries full weight.
-        const REVERSION_SUBSIGNAL_WEIGHT: f64 = 1.0;
+        /// NOTE: hypothesis `trend-only-subsignals-10m-threshold-015` sets this
+        /// to 0.0, removing the mean-reversion family from the composite. It
+        /// was 1.0 under `mean-reversion-weighted-subsignals` (lag-1 hourly
+        /// return autocorrelation -0.028), but the equal-weight experiments
+        /// showed the reversion-dominated mix is where return is lost. The
+        /// sub-signals are still pushed (formulas unchanged) so the weighted-
+        /// mean expression stays identical; they simply contribute nothing.
+        const REVERSION_SUBSIGNAL_WEIGHT: f64 = 0.0;
 
         /// Aggregation weight of the trend-following sub-signals (SMA cross,
         /// EMA cross, MACD histogram).
         ///
-        /// NOTE: same hypothesis. This is the mirror of the rejected
-        /// `trend-weighted-subsignals` variant (trend 1.0 / reversion 0.25),
-        /// which was that run's worst result on every axis (Sharpe -1.237,
-        /// max drawdown +1.35pp, win rate 6.7%). Trend sub-signals are kept
-        /// rather than dropped so they still break ties, at quarter influence.
-        const TREND_SUBSIGNAL_WEIGHT: f64 = 0.25;
+        /// NOTE: hypothesis `trend-only-subsignals-10m-threshold-015` raises
+        /// this from 0.25 to 1.0, making the trend family the sole driver of
+        /// the TA composite. The earlier `trend-weighted-subsignals` variant
+        /// (trend 1.0 / reversion 0.25) was rejected, but at 60s spacing and
+        /// allocation_threshold 0.1 — never on top of 600s / 0.15.
+        const TREND_SUBSIGNAL_WEIGHT: f64 = 1.0;
 
         // (sub-signal value ∈ [0.0, 1.0], family weight) pairs. Combined below
         // as a weighted mean over whichever sub-signals this point supplied.
@@ -358,10 +372,17 @@ impl TradingEngine {
         }
 
         // Weighted mean over the sub-signals actually present. Dividing by the
-        // realised weight sum (never zero here, since both family weights are
-        // positive and the vec is non-empty) keeps the result in [0.0, 1.0] and
-        // makes a partial warmup point reduce to exactly its available signals.
+        // realised weight sum keeps the result in [0.0, 1.0] and makes a
+        // partial warmup point reduce to exactly its available signals.
         let weight_sum: f64 = sub_signals.iter().map(|(_, w)| w).sum();
+
+        // NOTE: with REVERSION_SUBSIGNAL_WEIGHT = 0.0 the weight sum is zero
+        // when only RSI and/or %B are present (partial warmup before the
+        // trend indicators are ready). Treat that as "no target yet" rather
+        // than producing NaN from 0/0.
+        if weight_sum <= 0.0 {
+            return None;
+        }
         let ta_normalized =
             sub_signals.iter().map(|(v, w)| v * w).sum::<f64>() / weight_sum;
 
@@ -1002,11 +1023,14 @@ mod tests {
 
     #[test]
     fn compute_btc_target_neutral_rsi_returns_some() {
-        // RSI=50 → sub_signal=0.5 → neutral TA, no news → Some(0.5)
+        // RSI=50 plus close exactly on the SMA → neutral TA, no news → Some(0.5).
+        // NOTE: under trend-only weighting an RSI-only point has zero weight sum
+        // and returns None (see compute_btc_target_reversion_only_point_returns_none),
+        // so a zero-gap SMA cross (sub_signal=0.5) supplies the neutral trend input.
         let raw = IndicatorPoint {
             time: chrono::Utc::now(),
-            close: None,
-            sma: None, ema: None, rsi: Some(50.0),
+            close: Some(10_000.0),
+            sma: Some(10_000.0), ema: None, rsi: Some(50.0),
             macd_line: None, signal_line: None, histogram: None,
             bb_upper: None, bb_middle: None, bb_lower: None,
         };
@@ -1029,13 +1053,13 @@ mod tests {
             bb_upper: None, bb_middle: None, bb_lower: None,
         };
         let result = TradingEngine::compute_btc_target(&raw, &[], &make_cfg());
-        // RSI sub_signal=0.8 (mean-reverting, weight 1.0). SMA-cross:
+        // RSI sub_signal=0.8 (mean-reverting, weight 0.0). SMA-cross:
         // (10100-10000)/10000 = +1.0% relative, past the 0.5% saturation band
-        // → sub_signal=1.0 (trend-following, weight 0.25).
-        // → ta_normalized = (0.8*1.0 + 1.0*0.25) / 1.25 = 0.84.
-        // No news → sentiment_normalized=0.5. combined = 0.84*0.7 + 0.5*0.3 = 0.738.
+        // → sub_signal=1.0 (trend-following, weight 1.0).
+        // → ta_normalized = (0.8*0.0 + 1.0*1.0) / 1.0 = 1.0.
+        // No news → sentiment_normalized=0.5. combined = 1.0*0.7 + 0.5*0.3 = 0.85.
         let val = result.unwrap();
-        let expected = (0.8 * 1.0 + 1.0 * 0.25) / 1.25 * 0.7 + 0.5 * 0.3;
+        let expected = (0.8 * 0.0 + 1.0 * 1.0) / 1.0 * 0.7 + 0.5 * 0.3;
         assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
         assert!(val > 0.5);
     }
@@ -1052,12 +1076,12 @@ mod tests {
             bb_upper: None, bb_middle: None, bb_lower: None,
         };
         let result = TradingEngine::compute_btc_target(&raw, &[], &make_cfg());
-        // RSI sub_signal=0.2 (weight 1.0). SMA-cross: (9900-10000)/10000 = -1.0%
-        // relative, past the 0.5% saturation band → sub_signal=0.0 (weight 0.25).
-        // → ta_normalized = (0.2*1.0 + 0.0*0.25) / 1.25 = 0.16.
-        // No news → sentiment_normalized=0.5. combined = 0.16*0.7 + 0.5*0.3 = 0.262.
+        // RSI sub_signal=0.2 (weight 0.0). SMA-cross: (9900-10000)/10000 = -1.0%
+        // relative, past the 0.5% saturation band → sub_signal=0.0 (weight 1.0).
+        // → ta_normalized = (0.2*0.0 + 0.0*1.0) / 1.0 = 0.0.
+        // No news → sentiment_normalized=0.5. combined = 0.0*0.7 + 0.5*0.3 = 0.15.
         let val = result.unwrap();
-        let expected = (0.2 * 1.0 + 0.0 * 0.25) / 1.25 * 0.7 + 0.5 * 0.3;
+        let expected = (0.2 * 0.0 + 0.0 * 1.0) / 1.0 * 0.7 + 0.5 * 0.3;
         assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
         assert!(val < 0.5);
     }
@@ -1077,16 +1101,16 @@ mod tests {
             bb_upper: None, bb_middle: None, bb_lower: None,
         };
         let result = TradingEngine::compute_btc_target(&raw, &[], &make_cfg());
-        // RSI sub_signal=0.5 (weight 1.0), SMA-cross=0.75, EMA-cross=0.75
-        // (weight 0.25 each) → ta_normalized =
-        //   (0.5*1.0 + 0.75*0.25 + 0.75*0.25) / 1.5 = 0.5833333...
+        // RSI sub_signal=0.5 (weight 0.0), SMA-cross=0.75, EMA-cross=0.75
+        // (weight 1.0 each) → ta_normalized =
+        //   (0.5*0.0 + 0.75*1.0 + 0.75*1.0) / 2.0 = 0.75
         // No news → sentiment_normalized=0.5.
-        // combined = 0.5833333*0.7 + 0.5*0.3 = 0.5583333.
+        // combined = 0.75*0.7 + 0.5*0.3 = 0.675.
         let val = result.unwrap();
-        let expected = (0.5 * 1.0 + 0.75 * 0.25 + 0.75 * 0.25) / 1.5 * 0.7 + 0.5 * 0.3;
+        let expected = (0.5 * 0.0 + 0.75 * 1.0 + 0.75 * 1.0) / 2.0 * 0.7 + 0.5 * 0.3;
         assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
-        // Strictly between neutral and the fully-saturated 0.738 of the strong-buy case.
-        assert!(val > 0.5 && val < 0.738);
+        // Strictly between neutral and the fully-saturated 0.85 of the strong-buy case.
+        assert!(val > 0.5 && val < 0.85);
     }
 
     #[test]
@@ -1102,7 +1126,7 @@ mod tests {
         };
         let val = TradingEngine::compute_btc_target(&damped, &[], &make_cfg()).unwrap();
         // ta_normalized = 0.75: a single sub-signal divides by its own weight
-        // (0.75*0.25 / 0.25), so family weighting cannot change a lone value.
+        // (0.75*1.0 / 1.0), so family weighting cannot change a lone value.
         // → 0.75*0.7 + 0.5*0.3 = 0.675
         assert!((val - 0.675).abs() < 1e-9, "expected ~0.675, got {}", val);
 
@@ -1115,17 +1139,19 @@ mod tests {
     }
 
     #[test]
-    fn compute_btc_target_mean_reverting_family_dominates_trend_disagreement() {
+    fn compute_btc_target_trend_family_alone_decides_disagreement() {
         // Sub-signal families point in opposite directions:
         //   trend-following  — close +1% over both SMA and EMA and a +1% MACD
         //                      histogram → all three saturate at 1.0 (bullish)
         //   mean-reverting   — RSI=90 (→0.1) and close pinned to the upper
         //                      Bollinger band, %B=100 (→0.0) (both bearish)
-        // Under the weighted mean the mean-reverting family (weight 1.0 each)
-        // must outweigh the trend family (weight 0.25 each), so the composite
-        // comes out bearish. The old unweighted mean would have produced
-        // (0.1+0.0+1.0+1.0+1.0)/5 = 0.62 → combined 0.584, i.e. bullish, so this
-        // assertion genuinely discriminates between the two aggregations.
+        // NOTE: rewritten for hypothesis `trend-only-subsignals-10m-threshold-015`
+        // (previously asserted mean-reverting dominance). With the reversion
+        // family at weight 0.0 and the trend family at 1.0, the bearish RSI/%B
+        // must have no influence at all: the composite equals the fully
+        // saturated trend value. The previous 1.0/0.25 weighting produced
+        // 0.366 (bearish) and an unweighted mean 0.584, so this assertion
+        // discriminates against both.
         let raw = IndicatorPoint {
             time: chrono::Utc::now(),
             close: Some(10_100.0),
@@ -1140,25 +1166,73 @@ mod tests {
             bb_lower: Some(9_900.0),
         };
         let val = TradingEngine::compute_btc_target(&raw, &[], &make_cfg()).unwrap();
-        // ta_normalized = (0.1*1.0 + 0.0*1.0 + 1.0*0.25 * 3) / (1.0 + 1.0 + 0.75)
-        //               = 0.85 / 2.75 = 0.309090...
-        // combined = 0.309090*0.7 + 0.5*0.3 = 0.366363...
-        let expected = (0.1 + 0.0 + 3.0 * 0.25) / 2.75 * 0.7 + 0.5 * 0.3;
+        // ta_normalized = (0.1*0.0 + 0.0*0.0 + 1.0*1.0 * 3) / (0.0 + 0.0 + 3.0)
+        //               = 1.0
+        // combined = 1.0*0.7 + 0.5*0.3 = 0.85
+        let expected = (0.1 * 0.0 + 0.0 * 0.0 + 3.0 * 1.0) / 3.0 * 0.7 + 0.5 * 0.3;
         assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
         assert!(
-            val < 0.5,
-            "mean-reverting family must dominate: expected a bearish composite, got {}",
+            val > 0.5,
+            "trend family alone must decide: expected a bullish composite, got {}",
             val
         );
     }
 
     #[test]
-    fn compute_btc_target_neutral_ta_strong_news_returns_some() {
-        // RSI=50 (neutral TA) but bullish news → Some and > 0.5
-        let raw = IndicatorPoint {
+    fn compute_btc_target_reversion_only_point_returns_none() {
+        // Regression (trend-only-subsignals-10m-threshold-015): with
+        // REVERSION_SUBSIGNAL_WEIGHT = 0.0 a partial-warmup point carrying only
+        // RSI (and/or Bollinger %B) has a zero weight sum. It must return None
+        // rather than NaN from 0/0.
+        let rsi_only = IndicatorPoint {
             time: chrono::Utc::now(),
             close: None,
-            sma: None, ema: None, rsi: Some(50.0),
+            sma: None, ema: None, rsi: Some(30.0),
+            macd_line: None, signal_line: None, histogram: None,
+            bb_upper: None, bb_middle: None, bb_lower: None,
+        };
+        assert_eq!(TradingEngine::compute_btc_target(&rsi_only, &[], &make_cfg()), None);
+
+        // RSI + %B (both reversion family) still sums to zero weight → None.
+        let reversion_only = IndicatorPoint {
+            close: Some(9_950.0),
+            bb_upper: Some(10_100.0),
+            bb_middle: Some(10_000.0),
+            bb_lower: Some(9_900.0),
+            ..rsi_only
+        };
+        assert_eq!(TradingEngine::compute_btc_target(&reversion_only, &[], &make_cfg()), None);
+    }
+
+    #[test]
+    fn compute_btc_target_trend_only_point_returns_expected_value() {
+        // Trend-only point: close +0.25% over the SMA (damped → 0.75) and
+        // ~-1.7% below the EMA (saturated → 0.0), no reversion sub-signals.
+        // ta_normalized = (0.75*1.0 + 0.0*1.0) / 2.0 = 0.375
+        // combined = 0.375*0.7 + 0.5*0.3 = 0.4125
+        let raw = IndicatorPoint {
+            time: chrono::Utc::now(),
+            close: Some(10_025.0),
+            sma: Some(10_000.0),
+            ema: Some(10_200.0),
+            rsi: None,
+            macd_line: None, signal_line: None, histogram: None,
+            bb_upper: None, bb_middle: None, bb_lower: None,
+        };
+        let val = TradingEngine::compute_btc_target(&raw, &[], &make_cfg()).unwrap();
+        let expected = (0.75 + 0.0) / 2.0 * 0.7 + 0.5 * 0.3;
+        assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
+    }
+
+    #[test]
+    fn compute_btc_target_neutral_ta_strong_news_returns_some() {
+        // RSI=50 and close exactly on the SMA (neutral TA) but bullish news →
+        // Some and > 0.5. The zero-gap SMA cross supplies the (weighted) neutral
+        // trend sub-signal, since an RSI-only point now returns None.
+        let raw = IndicatorPoint {
+            time: chrono::Utc::now(),
+            close: Some(10_000.0),
+            sma: Some(10_000.0), ema: None, rsi: Some(50.0),
             macd_line: None, signal_line: None, histogram: None,
             bb_upper: None, bb_middle: None, bb_lower: None,
         };
@@ -1169,7 +1243,7 @@ mod tests {
             published_at: None,
         }];
         let result = TradingEngine::compute_btc_target(&raw, &news, &make_cfg());
-        // ta_normalized=0.5 (neutral RSI). sentiment_normalized=(0.8+1.0)/2=0.9.
+        // ta_normalized=0.5 (zero-gap SMA cross). sentiment_normalized=(0.8+1.0)/2=0.9.
         // combined = 0.5*0.7 + 0.9*0.3 = 0.62.
         let val = result.unwrap();
         assert!((val - 0.62).abs() < 1e-9, "expected ~0.62, got {}", val);

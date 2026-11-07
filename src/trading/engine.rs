@@ -256,6 +256,14 @@ impl TradingEngine {
     ///   ta_normalized    = Σ(value * weight) / Σ(weight)  ∈ [0.0, 1.0]
     ///   sentiment_norm   = (avg_sentiment + 1.0) / 2.0  ∈ [0.0, 1.0]
     ///   combined         = ta_normalized * ta_weight + sentiment_norm * sentiment_weight
+    ///
+    /// NOTE: hypothesis constant-mix-50-rebalance-10m-threshold-010 — this is a
+    /// timing-null probe. After the warmup check (still `None` when no
+    /// sub-signal is available) `ta_normalized` is pinned to the constant 0.5
+    /// and the weighted mean above is ignored, so with no news the target is a
+    /// fixed 50% BTC constant mix. It measures whether the TA timing adds any
+    /// value over a drift-band rebalanced 50/50 mix. Sentiment combination and
+    /// the downstream zone mapping are unchanged.
     pub(crate) fn compute_btc_target(
         raw: &IndicatorPoint,
         news_scores: &[SentimentScore],
@@ -362,8 +370,18 @@ impl TradingEngine {
         // positive and the vec is non-empty) keeps the result in [0.0, 1.0] and
         // makes a partial warmup point reduce to exactly its available signals.
         let weight_sum: f64 = sub_signals.iter().map(|(_, w)| w).sum();
-        let ta_normalized =
+        // NOTE: hypothesis `constant-mix-50-rebalance-10m-threshold-010`. The
+        // weighted mean is still computed (and the sub-signal formulas above are
+        // left untouched) but deliberately ignored for the return value, so the
+        // diff is a pure timing-null probe; the leading underscore silences the
+        // unused-variable warning instead of deleting the aggregation.
+        let _weighted_ta_normalized =
             sub_signals.iter().map(|(v, w)| v * w).sum::<f64>() / weight_sum;
+        // Constant neutral TA: with no news the combined value becomes
+        // 0.5*ta_weight + 0.5*sentiment_weight = 0.5, which apply_zone maps to a
+        // fixed 50% BTC target, so the engine only trades on price drift
+        // exceeding `allocation_threshold`.
+        let ta_normalized = 0.5;
 
         // Average news sentiment: [-1.0, 1.0] → normalize to [0.0, 1.0]
         // Empty cache (Ollama unavailable or not yet run) → neutral 0.0
@@ -1033,11 +1051,11 @@ mod tests {
         // (10100-10000)/10000 = +1.0% relative, past the 0.5% saturation band
         // → sub_signal=1.0 (trend-following, weight 0.25).
         // → ta_normalized = (0.8*1.0 + 1.0*0.25) / 1.25 = 0.84.
-        // No news → sentiment_normalized=0.5. combined = 0.84*0.7 + 0.5*0.3 = 0.738.
+        // That weighted mean (0.84) is now ignored: under the timing-null probe
+        // (constant-mix-50-rebalance-10m-threshold-010) ta_normalized is pinned
+        // to 0.5. No news → sentiment_normalized=0.5 → combined = 0.5.
         let val = result.unwrap();
-        let expected = (0.8 * 1.0 + 1.0 * 0.25) / 1.25 * 0.7 + 0.5 * 0.3;
-        assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
-        assert!(val > 0.5);
+        assert!((val - 0.5).abs() < 1e-9, "expected constant 0.5, got {}", val);
     }
 
     #[test]
@@ -1055,11 +1073,10 @@ mod tests {
         // RSI sub_signal=0.2 (weight 1.0). SMA-cross: (9900-10000)/10000 = -1.0%
         // relative, past the 0.5% saturation band → sub_signal=0.0 (weight 0.25).
         // → ta_normalized = (0.2*1.0 + 0.0*0.25) / 1.25 = 0.16.
-        // No news → sentiment_normalized=0.5. combined = 0.16*0.7 + 0.5*0.3 = 0.262.
+        // That weighted mean (0.16) is now ignored: ta_normalized is pinned to
+        // 0.5 by the timing-null probe. No news → combined = 0.5.
         let val = result.unwrap();
-        let expected = (0.2 * 1.0 + 0.0 * 0.25) / 1.25 * 0.7 + 0.5 * 0.3;
-        assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
-        assert!(val < 0.5);
+        assert!((val - 0.5).abs() < 1e-9, "expected constant 0.5, got {}", val);
     }
 
     #[test]
@@ -1080,13 +1097,10 @@ mod tests {
         // RSI sub_signal=0.5 (weight 1.0), SMA-cross=0.75, EMA-cross=0.75
         // (weight 0.25 each) → ta_normalized =
         //   (0.5*1.0 + 0.75*0.25 + 0.75*0.25) / 1.5 = 0.5833333...
-        // No news → sentiment_normalized=0.5.
-        // combined = 0.5833333*0.7 + 0.5*0.3 = 0.5583333.
+        // That weighted mean is now ignored: ta_normalized is pinned to 0.5 by
+        // the timing-null probe. No news → combined = 0.5.
         let val = result.unwrap();
-        let expected = (0.5 * 1.0 + 0.75 * 0.25 + 0.75 * 0.25) / 1.5 * 0.7 + 0.5 * 0.3;
-        assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
-        // Strictly between neutral and the fully-saturated 0.738 of the strong-buy case.
-        assert!(val > 0.5 && val < 0.738);
+        assert!((val - 0.5).abs() < 1e-9, "expected constant 0.5, got {}", val);
     }
 
     #[test]
@@ -1101,17 +1115,17 @@ mod tests {
             bb_upper: None, bb_middle: Some(10_000.0), bb_lower: None,
         };
         let val = TradingEngine::compute_btc_target(&damped, &[], &make_cfg()).unwrap();
-        // ta_normalized = 0.75: a single sub-signal divides by its own weight
-        // (0.75*0.25 / 0.25), so family weighting cannot change a lone value.
-        // → 0.75*0.7 + 0.5*0.3 = 0.675
-        assert!((val - 0.675).abs() < 1e-9, "expected ~0.675, got {}", val);
+        // The lone damped sub-signal (0.75) still counts as data for the warmup
+        // check, but ta_normalized is pinned to 0.5 → combined = 0.5.
+        assert!((val - 0.5).abs() < 1e-9, "expected constant 0.5, got {}", val);
 
         // Without bb_middle the sub-signal falls back to the sign-based step
         // mapping (positive histogram → 1.0) instead of being dropped.
         let fallback = IndicatorPoint { bb_middle: None, ..damped };
         let val = TradingEngine::compute_btc_target(&fallback, &[], &make_cfg()).unwrap();
-        // ta_normalized = 1.0 → 1.0*0.7 + 0.5*0.3 = 0.85
-        assert!((val - 0.85).abs() < 1e-9, "expected ~0.85, got {}", val);
+        // Fallback step sub-signal (1.0) is present, so not warmup; the
+        // returned value is still the constant 0.5.
+        assert!((val - 0.5).abs() < 1e-9, "expected constant 0.5, got {}", val);
     }
 
     #[test]
@@ -1142,12 +1156,12 @@ mod tests {
         let val = TradingEngine::compute_btc_target(&raw, &[], &make_cfg()).unwrap();
         // ta_normalized = (0.1*1.0 + 0.0*1.0 + 1.0*0.25 * 3) / (1.0 + 1.0 + 0.75)
         //               = 0.85 / 2.75 = 0.309090...
-        // combined = 0.309090*0.7 + 0.5*0.3 = 0.366363...
-        let expected = (0.1 + 0.0 + 3.0 * 0.25) / 2.75 * 0.7 + 0.5 * 0.3;
-        assert!((val - expected).abs() < 1e-9, "expected ~{}, got {}", expected, val);
+        // Under the timing-null probe (constant-mix-50-rebalance-10m-threshold-010)
+        // that bearish weighted mean is ignored and ta_normalized is pinned to
+        // 0.5, so neither family can move the target: combined = 0.5.
         assert!(
-            val < 0.5,
-            "mean-reverting family must dominate: expected a bearish composite, got {}",
+            (val - 0.5).abs() < 1e-9,
+            "timing-null probe: expected constant 0.5 regardless of family disagreement, got {}",
             val
         );
     }
@@ -1174,6 +1188,52 @@ mod tests {
         let val = result.unwrap();
         assert!((val - 0.62).abs() < 1e-9, "expected ~0.62, got {}", val);
         assert!(val > 0.5);
+    }
+
+    #[test]
+    fn compute_btc_target_constant_mix_probe_warmup_none_else_half() {
+        // Regression for hypothesis constant-mix-50-rebalance-10m-threshold-010:
+        // warmup (no sub-signal derivable) must still return None, and every
+        // non-empty IndicatorPoint must return exactly 0.5 when there is no news,
+        // however extreme its indicators are.
+        let empty = IndicatorPoint {
+            time: chrono::Utc::now(),
+            close: None,
+            sma: None, ema: None, rsi: None,
+            macd_line: None, signal_line: None, histogram: None,
+            bb_upper: None, bb_middle: None, bb_lower: None,
+        };
+        assert_eq!(TradingEngine::compute_btc_target(&empty, &[], &make_cfg()), None);
+
+        // close alone yields no sub-signal either (needs a reference line) → None.
+        let close_only = IndicatorPoint { close: Some(10_000.0), ..empty.clone() };
+        assert_eq!(TradingEngine::compute_btc_target(&close_only, &[], &make_cfg()), None);
+
+        let cases = [
+            IndicatorPoint { rsi: Some(0.0), ..empty.clone() },
+            IndicatorPoint { rsi: Some(100.0), ..empty.clone() },
+            IndicatorPoint { close: Some(20_000.0), sma: Some(10_000.0), ..empty.clone() },
+            IndicatorPoint { close: Some(5_000.0), ema: Some(10_000.0), ..empty.clone() },
+            IndicatorPoint { histogram: Some(-500.0), ..empty.clone() },
+            IndicatorPoint {
+                time: chrono::Utc::now(),
+                close: Some(9_000.0),
+                sma: Some(10_000.0),
+                ema: Some(10_000.0),
+                rsi: Some(5.0),
+                macd_line: Some(-10.0),
+                signal_line: Some(5.0),
+                histogram: Some(-15.0),
+                bb_upper: Some(11_000.0),
+                bb_middle: Some(10_000.0),
+                bb_lower: Some(9_500.0),
+            },
+        ];
+        for raw in &cases {
+            let val = TradingEngine::compute_btc_target(raw, &[], &make_cfg())
+                .expect("non-empty IndicatorPoint must not be treated as warmup");
+            assert!((val - 0.5).abs() < 1e-12, "expected constant 0.5, got {}", val);
+        }
     }
 
     #[tokio::test]

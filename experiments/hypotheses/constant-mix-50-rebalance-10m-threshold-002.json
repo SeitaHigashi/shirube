@@ -1,0 +1,44 @@
+{
+  "name": "constant-mix-50-rebalance-10m-threshold-002",
+  "kind": "algorithm",
+  "rationale": "Timing-null probe with a band that actually fires (2026-11-07 lead #3). constant-mix-50-rebalance-10m-threshold-010 made 1 trade at every capital because a 0.10 drift band around 50% needs a ~+50%/-33% BTC move, so it measured nothing. With allocation_threshold 0.02 the band fires on roughly a 4-8% price move, so this is a genuine constant-mix rebalancer at 500k/5M. Comparing it with the trend-only and equal-weight references answers whether the TA signal adds timing value beyond a pure drift rebalance. At 50k the lot floor (~25% of the account) makes a 0.02 threshold inert, so a 50k result equal to the static mix is expected and is not evidence; the 500k diagnostics carry the information.",
+  "trading_config": {
+    "allocation_threshold": 0.02,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 600
+  },
+  "code_change_summary": "In TradingEngine::compute_btc_target (src/trading/engine.rs), keep the existing sub-signal collection and the `if sub_signals.is_empty() { return None; }` warmup check, then replace the TA aggregate with a constant: set ta_normalized = 0.5 (ignore the weighted mean). Keep the sentiment combination unchanged, so with no news the combined value is 0.5*ta_weight + 0.5*sentiment_weight = 0.5, which apply_zone with hold_jpy_below 0.1 / hold_btc_above 0.9 maps to a 0.5 BTC target. Add a `/// NOTE: hypothesis constant-mix-50-rebalance-10m-threshold-010` doc comment explaining this is a timing-null probe. Update compute_btc_target_* unit tests whose expected values change (they will now expect 0.5 when no news), rewriting rather than deleting them, and add one regression test asserting warmup still returns None and any non-empty IndicatorPoint returns 0.5 with no news. Also run the trend-only-subsignals-10m-threshold-015 code (0d2c192) and the equal-weight-10m-threshold-015 reference (bc00fab) at 500k on the same window, each at normal costs and at --fee-pct 0 --slippage-pct 0, as unregistered references.",
+  "constraints": [
+    "This hypothesis modifies the body of TradingEngine::compute_btc_target. This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST NOT change TradingEngine::compute_btc_target's signature (its parameter list or return type) -- only its body.",
+    "The only body change is an early return of a constant after the warmup check: compute_btc_target must still return None during warmup (sub_signals empty), so the warmup semantics and the zone mapping downstream are unchanged. Sub-signal formulas and constants are left in place (they become unused for the return value; silence any dead-code warning rather than deleting them).",
+    "MUST pass `cargo test`, including the compute_btc_target_* unit tests in src/trading/engine.rs -- update their expected values if the new weight legitimately changes them (do not weaken or delete a test just to make it pass).",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff touches compute_btc_target's body, so the reviewer gives it the scrutiny an allocation-formula change deserves.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or anything on the live order-submission path."
+  ],
+  "paper_reference": {
+    "title": "Rebalancing premium in cryptocurrencies (summary of Willenbrock 2021 and follow-up estimates)",
+    "authors": "Quantpedia research team; underlying work by S. Willenbrock",
+    "venue_year": "Quantpedia strategy note / blog, 2021-2022",
+    "url": "https://quantpedia.com/strategies/rebalancing-premium-in-cryptocurrencies/",
+    "key_claim": "Periodically rebalancing a fixed-weight crypto portfolio earns a significant rebalancing premium (higher cumulative return and lower volatility than buy-and-hold) because crypto returns are highly volatile and partly mean-reverting.",
+    "pros": "Same asset class; a 50/50 BTC/cash constant mix is the simplest form of the effect, needs no signal, and trades only on drift, so its turnover (and fee drag, the largest identified component of shirube's deficit) is minimal. It is also the cleanest null against which to measure whether shirube's TA timing adds anything.",
+    "cons": "The evidence is a multi-coin portfolio (the premium comes partly from cross-asset dispersion, which a BTC/JPY-only mix lacks), measured on 2018-2021 daily/monthly data, mostly without fees; seen via summary rather than the full paper. On a 14-day window a drift band of 10% may barely trigger, so the result may sit very close to the static mix by construction."
+  }
+}

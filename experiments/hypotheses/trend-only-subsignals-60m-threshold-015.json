@@ -1,0 +1,44 @@
+{
+  "name": "trend-only-subsignals-60m-threshold-015",
+  "kind": "algorithm",
+  "rationale": "Cost-side hypothesis required by the warning rule (500k static-mix deficit negative for 23 consecutive recorded runs). On 2026-11-07 trend-only-subsignals-10m-threshold-015 showed the largest gross timing value on record (+2.98 pp zero-cost excess vs static mix at 500k, against +0.71 for the equal-weight reference) but traded 201 times at 500k, so costs took ~7.1 pp. This keeps the identical trend-only weights and threshold 0.15 and only raises rebalance spacing 600s -> 3600s, isolating whether the gross trend value survives one-sixth the decision cadence. Score on total_fees_jpy and excess_return_vs_static_mix_pct at 500k as well as the 50k promotion rule. Literature: Zarattini/Pagani/Barbon argue trend signals keep their value under cost-reducing portfolio construction.",
+  "trading_config": {
+    "allocation_threshold": 0.15,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 3600
+  },
+  "code_change_summary": "In TradingEngine::compute_btc_target (src/trading/engine.rs), set TREND_SUBSIGNAL_WEIGHT from 0.25 to 1.0 and REVERSION_SUBSIGNAL_WEIGHT from 1.0 to 0.0. After computing weight_sum, return None if weight_sum <= 0.0 (only reversion sub-signals present during partial warmup) so the result is never NaN. Update both constants' doc comments and add a NOTE naming this hypothesis. Update compute_btc_target_* unit tests' expected values where they legitimately change (rewrite, never delete, tests asserting reversion dominance) and add a regression test that an RSI-only IndicatorPoint returns None and a trend-only point returns the expected value. Run the trend-only-subsignals-10m-threshold-015 code (experiment/trend-only-subsignals-10m-threshold-015, 0d2c192) on the same window at all three capitals as an unregistered reference, plus both it and this variant at --fee-pct 0 --slippage-pct 0 at 500k to separate gross timing value from cost.",
+  "constraints": [
+    "This hypothesis modifies the body of TradingEngine::compute_btc_target. This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST NOT change TradingEngine::compute_btc_target's signature (its parameter list or return type) -- only its body.",
+    "MUST NOT change any individual sub-signal's own formula or the aggregation expression; exactly two numeric constants change (TREND 0.25 -> 1.0 and REVERSION 1.0 -> 0.0). Because REVERSION becomes 0.0 the weighted-mean denominator can be zero when only RSI/%B are present (partial warmup): handle that by returning None when weight_sum <= 0.0, and document it.",
+    "MUST pass `cargo test`, including the compute_btc_target_* unit tests in src/trading/engine.rs -- update their expected values if the new weight legitimately changes them (do not weaken or delete a test just to make it pass).",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff touches compute_btc_target's body, so the reviewer gives it the scrutiny an allocation-formula change deserves.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or anything on the live order-submission path."
+  ],
+  "paper_reference": {
+    "title": "Catching Crypto Trends: A Tactical Approach for Bitcoin and Altcoins",
+    "authors": "Carlo Zarattini, Alberto Pagani, Andrea Barbon",
+    "venue_year": "SSRN working paper / Concretum Group, 2025",
+    "url": "https://concretumgroup.com/catching-crypto-trends-a-tactical-approach-for-bitcoin-and-altcoins/",
+    "key_claim": "An ensemble of trend (Donchian) models with a portfolio-construction step designed to cut trading costs while preserving the trend signal earns a net-of-fees Sharpe above 1.5 on liquid crypto.",
+    "pros": "Same asset class and the same diagnosis shirube's 2026-11-07 run reached: trend signals carry gross timing value that naive rebalancing gives away in costs. Supports keeping the trend family and attacking turnover rather than the signal.",
+    "cons": "Daily bars on a 20-coin rotational universe, not 1-minute BTC/JPY; only the summary page was readable, so the exact cost-reduction method, fees and sample period are unknown; the reported Sharpe was not out-of-sample against shirube's window."
+  }
+}

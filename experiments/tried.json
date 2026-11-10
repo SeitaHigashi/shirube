@@ -1098,5 +1098,35 @@
     "sharpe_absolute_delta": 12.6166,
     "report_path": "experiments/reports/2026-11-07.md",
     "note": "REJECT on trade count (13 vs 157, 8%) despite Sharpe -15.95 -> -3.33, DD 11.00 -> 4.02; 50k excess vs static mix +0.36pp/+0.39 Sharpe. 500k net -0.95pp vs static mix (ref -0.15pp); zero-cost 500k +1.05pp (ref +0.71pp). Bigger dose adds gross timing but fees eat it. Branch experiment/equal-weight-10m-threshold-015-full-ta-weight (f39d31b) pushed for human review (touches compute_btc_target body; removes news from live composite)."
+  },
+  {
+    "name": "trend-only-subsignals-60m-threshold-015",
+    "content_hash": "55420ad3ababcafd13bdd3fc9b482ec978db1973c37f20194cd047248be87404",
+    "tried_at": "2026-11-10T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -3.371,
+    "report_path": "experiments/reports/2026-11-10.md",
+    "note": "REJECT: 50k Sharpe -5.81 -> -9.18, DD 4.79 -> 7.28 (baseline made only 3 trades at 50k this window; variant 40). 500k: 87 trades vs 209 for the 10m trend-only ref, fees 10,761 vs 17,183 JPY, net excess vs static mix -2.23pp (ref -4.97pp, dev baseline -13.44pp); zero-cost excess +2.06pp (ref +2.29pp) -> hourly spacing keeps ~90% of gross timing value at ~60% of fees, still net negative. Branch experiment/trend-only-subsignals-60m-threshold-015 (7d353d3) pushed for human review (touches compute_btc_target body)."
+  },
+  {
+    "name": "trend-only-subsignals-10m-threshold-025",
+    "content_hash": "2eb5d2ecb56f15e1054f5172a9e7c171ac955995c9af6ab14f0c0df6a7c2a3f4",
+    "tried_at": "2026-11-10T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -4.7874,
+    "report_path": "experiments/reports/2026-11-10.md",
+    "note": "REJECT: 50k Sharpe -5.81 -> -10.60, DD 4.79 -> 8.83; 83 trades (not degenerate, orders_below_min 2). 500k: 77 trades, fees 11,054 JPY, net excess -2.43pp; zero-cost +1.63pp. Threshold dose is weaker than spacing dose at keeping gross value. Branch experiment/trend-only-subsignals-10m-threshold-025 (61131e6) pushed for human review (touches compute_btc_target body)."
+  },
+  {
+    "name": "constant-mix-50-rebalance-10m-threshold-002",
+    "content_hash": "7c37a6b5477ff3b2dca09c7df894e172cbc5ed0d676e42db707b8282ea0a99cc",
+    "tried_at": "2026-11-10T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -0.2115,
+    "report_path": "experiments/reports/2026-11-10.md",
+    "note": "NOT A MEASUREMENT: band never fired at 50k or 500k (1 trade, 37 orders_below_min), 2 trades at 5M. A 2% drift on a 50/50 mix needs ~8.3% price move, and the lot floor (2.5% at 500k) raises the effective band to ~10.5%; window max move was smaller. Timing-null question remains open. Branch experiment/constant-mix-50-rebalance-10m-threshold-002 (3fc3a58) pushed (touches compute_btc_target body)."
   }
 ]

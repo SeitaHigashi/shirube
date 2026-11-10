@@ -234,7 +234,9 @@ impl TradingEngine {
     /// - trend-following family (SMA cross, EMA cross, MACD histogram) — weight
     ///   `TREND_SUBSIGNAL_WEIGHT` = 1.0
     ///
-    /// NOTE: hypothesis `trend-only-subsignals-10m-threshold-015`. Raising the
+    /// NOTE: hypotheses `trend-only-subsignals-10m-threshold-015` and
+    /// `trend-only-subsignals-10m-threshold-025` (identical code change; they
+    /// differ only in `allocation_threshold`, 0.15 vs 0.25). Raising the
     /// trend weight from 0.25 to 1.0 (equal weighting) improved the 500k
     /// return by ~12-13.5pp over the reversion-dominated mix on four
     /// consecutive windows, so this variant removes the mean-reversion family
@@ -290,9 +292,9 @@ impl TradingEngine {
 
         /// Aggregation weight of the mean-reverting sub-signals (RSI, Bollinger %B).
         ///
-        /// NOTE: hypothesis `trend-only-subsignals-10m-threshold-015` sets this
-        /// to 0.0, removing the mean-reversion family from the composite. It
-        /// was 1.0 under `mean-reversion-weighted-subsignals` (lag-1 hourly
+        /// NOTE: hypotheses `trend-only-subsignals-10m-threshold-015` and
+        /// `trend-only-subsignals-10m-threshold-025` set this to 0.0, removing
+        /// the mean-reversion family from the composite. It was 1.0 under `mean-reversion-weighted-subsignals` (lag-1 hourly
         /// return autocorrelation -0.028), but the equal-weight experiments
         /// showed the reversion-dominated mix is where return is lost. The
         /// sub-signals are still pushed (formulas unchanged) so the weighted-
@@ -302,11 +304,11 @@ impl TradingEngine {
         /// Aggregation weight of the trend-following sub-signals (SMA cross,
         /// EMA cross, MACD histogram).
         ///
-        /// NOTE: hypothesis `trend-only-subsignals-10m-threshold-015` raises
-        /// this from 0.25 to 1.0, making the trend family the sole driver of
-        /// the TA composite. The earlier `trend-weighted-subsignals` variant
+        /// NOTE: hypotheses `trend-only-subsignals-10m-threshold-015` and
+        /// `trend-only-subsignals-10m-threshold-025` raise this from 0.25 to
+        /// 1.0, making the trend family the sole driver of the TA composite. The earlier `trend-weighted-subsignals` variant
         /// (trend 1.0 / reversion 0.25) was rejected, but at 60s spacing and
-        /// allocation_threshold 0.1 — never on top of 600s / 0.15.
+        /// allocation_threshold 0.1 — never on top of 600s / 0.15 or 0.25.
         const TREND_SUBSIGNAL_WEIGHT: f64 = 1.0;
 
         // (sub-signal value ∈ [0.0, 1.0], family weight) pairs. Combined below

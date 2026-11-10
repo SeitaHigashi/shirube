@@ -257,8 +257,10 @@ impl TradingEngine {
     ///   sentiment_norm   = (avg_sentiment + 1.0) / 2.0  ∈ [0.0, 1.0]
     ///   combined         = ta_normalized * ta_weight + sentiment_norm * sentiment_weight
     ///
-    /// NOTE: hypothesis constant-mix-50-rebalance-10m-threshold-010 — this is a
-    /// timing-null probe. After the warmup check (still `None` when no
+    /// NOTE: hypotheses constant-mix-50-rebalance-10m-threshold-010 and
+    /// constant-mix-50-rebalance-10m-threshold-002 (same code, the latter run
+    /// with allocation_threshold 0.02 so the drift band actually fires) — this
+    /// is a timing-null probe. After the warmup check (still `None` when no
     /// sub-signal is available) `ta_normalized` is pinned to the constant 0.5
     /// and the weighted mean above is ignored, so with no news the target is a
     /// fixed 50% BTC constant mix. It measures whether the TA timing adds any
@@ -370,7 +372,8 @@ impl TradingEngine {
         // positive and the vec is non-empty) keeps the result in [0.0, 1.0] and
         // makes a partial warmup point reduce to exactly its available signals.
         let weight_sum: f64 = sub_signals.iter().map(|(_, w)| w).sum();
-        // NOTE: hypothesis `constant-mix-50-rebalance-10m-threshold-010`. The
+        // NOTE: hypotheses `constant-mix-50-rebalance-10m-threshold-010` and
+        // `constant-mix-50-rebalance-10m-threshold-002` (identical code). The
         // weighted mean is still computed (and the sub-signal formulas above are
         // left untouched) but deliberately ignored for the return value, so the
         // diff is a pure timing-null probe; the leading underscore silences the
@@ -1192,7 +1195,8 @@ mod tests {
 
     #[test]
     fn compute_btc_target_constant_mix_probe_warmup_none_else_half() {
-        // Regression for hypothesis constant-mix-50-rebalance-10m-threshold-010:
+        // Regression for hypotheses constant-mix-50-rebalance-10m-threshold-010
+        // and constant-mix-50-rebalance-10m-threshold-002 (identical code):
         // warmup (no sub-signal derivable) must still return None, and every
         // non-empty IndicatorPoint must return exactly 0.5 when there is no news,
         // however extreme its indicators are.

@@ -1,0 +1,45 @@
+{
+  "name": "trend-only-subsignals-60m-threshold-015-trade-to-band-edge",
+  "kind": "algorithm",
+  "rationale": "Cost-side hypothesis required by the warning rule (500k static-mix deficit negative for 24 consecutive recorded runs). On 2026-11-10 trend-only-subsignals-60m-threshold-015 kept ~90% of trend-only's gross timing value (+2.06 pp zero-cost excess vs static mix at 500k) but costs still took ~4.3 pp (87 trades, 10,761 JPY fees), so turnover must fall by more than half again without losing the gross edge. Trading only back to the no-trade band edge (instead of all the way to the target) is the proportional-cost optimum in no-trade-band theory and cut fees on the equal-weight variant on 2026-11-01 (364 vs ~2,900 JPY at 500k) — but it was never combined with the trend-only weights that actually carry gross value. This keeps the 60m trend-only config exactly and adds band-edge sizing.",
+  "trading_config": {
+    "allocation_threshold": 0.15,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 3600
+  },
+  "code_change_summary": "Two changes, both on this hypothesis's worktree branch. (1) In TradingEngine::compute_btc_target (src/trading/engine.rs), set TREND_SUBSIGNAL_WEIGHT from 0.25 to 1.0 and REVERSION_SUBSIGNAL_WEIGHT from 1.0 to 0.0; after computing weight_sum, return None if weight_sum <= 0.0 (identical to experiment/trend-only-subsignals-60m-threshold-015, 7d353d3 — cherry-picking its compute_btc_target change is fine). (2) Add TradingEngine::band_edge_delta(delta, threshold) -> delta - sign(delta)*threshold and use it to size the order (not the gate) wherever a rebalance fires: in Simulator::run (src/backtest/simulator.rs) and in both rebalance paths in src/trading/engine.rs, exactly as experiment/equal-weight-10m-threshold-015-trade-to-band-edge (1964109) did; cherry-picking its band_edge_delta helper, call-sites and tests is fine but do NOT take its weight change (equal-weight). Update tests whose expected values legitimately change (rewrite, never delete) and add regression tests for band_edge_delta and for an RSI-only IndicatorPoint returning None. Also run 7d353d3 (trend-only 60m without band edge) on the same window at 500k, and both it and this variant at --fee-pct 0 --slippage-pct 0 at 500k, as unregistered references, to separate gross timing value from cost.",
+  "constraints": [
+    "This hypothesis modifies the body of TradingEngine::compute_btc_target. This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST NOT change TradingEngine::compute_btc_target's signature (its parameter list or return type) -- only its body.",
+    "Inside compute_btc_target exactly two numeric constants change (TREND 0.25 -> 1.0, REVERSION 1.0 -> 0.0) plus the weight_sum <= 0.0 -> None guard; no sub-signal formula changes.",
+    "The band-edge change alters only the size of an order that already passes the `delta.abs() >= allocation_threshold` gate; the gate itself, allocation_delta_to_order and the min-order-size check are unchanged. This touches the live rebalance path in src/trading/engine.rs, so a promoted PR must flag that it changes live order sizing.",
+    "MUST pass `cargo test`, including the compute_btc_target_* unit tests in src/trading/engine.rs -- update their expected values if the new weight legitimately changes them (do not weaken or delete a test just to make it pass).",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff touches compute_btc_target's body, so the reviewer gives it the scrutiny an allocation-formula change deserves.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or the auto-updater."
+  ],
+  "paper_reference": {
+    "title": "Optimal Rebalancing Frequencies for Multidimensional Portfolios",
+    "authors": "Ibrahim Ekren, Ren Liu, Johannes Muhle-Karbe",
+    "venue_year": "arXiv:1510.05097 (Mathematics and Financial Economics), 2015/2017",
+    "url": "https://arxiv.org/abs/1510.05097",
+    "key_claim": "Under small proportional transaction costs, explicit formulas give the welfare loss of time-based rebalancing; in a trend-following (truncated Kim-Omberg) setting, no-trade-region rebalancing outperforms fixed-frequency rebalancing.",
+    "pros": "shirube's costs are proportional (commission + slippage) and its target is a trend signal after 2026-11-07; the paper says spacing alone (what 60m did) leaves welfare on the table versus a no-trade region that trades to its boundary.",
+    "cons": "Monte Carlo on diffusions with small costs, not 1-minute BTC/JPY; only the abstract and a search summary were read; shirube's lot floor makes the effective band capital-dependent, which the theory does not model."
+  }
+}

@@ -1128,5 +1128,35 @@
     "sharpe_absolute_delta": -0.2115,
     "report_path": "experiments/reports/2026-11-10.md",
     "note": "NOT A MEASUREMENT: band never fired at 50k or 500k (1 trade, 37 orders_below_min), 2 trades at 5M. A 2% drift on a 50/50 mix needs ~8.3% price move, and the lot floor (2.5% at 500k) raises the effective band to ~10.5%; window max move was smaller. Timing-null question remains open. Branch experiment/constant-mix-50-rebalance-10m-threshold-002 (3fc3a58) pushed (touches compute_btc_target body)."
+  },
+  {
+    "name": "trend-only-subsignals-60m-threshold-015-trade-to-band-edge",
+    "content_hash": "d5076ff07d8c50f1bcf5e44df961dc371be09e702f8914b4ff138fbcc9df2553",
+    "tried_at": "2026-11-13T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -2.2429,
+    "note": "50k: 7 vs 1 trades, DD 8.46->7.80. 500k: -2.08 pp vs static mix (ref trend-only 60m without band edge: -4.27); band edge cut 500k turnover ~2/3 but zero-cost excess -0.62 pp (ref -0.05). Gross trend edge absent this window. Branch experiment/trend-only-subsignals-60m-threshold-015-trade-to-band-edge (7cae463) pushed (touches compute_btc_target body and live rebalance sizing).",
+    "report_path": "experiments/reports/2026-11-13.md"
+  },
+  {
+    "name": "trend-only-subsignals-120m-threshold-015",
+    "content_hash": "3bbcb3aeca191cbc18b61f9e26ac5be0109475b07d2bcd8a9f178d875c8c9620",
+    "tried_at": "2026-11-13T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -3.2667,
+    "note": "50k: 31 vs 1 trades, DD +0.38 pp. 500k: -1.96 pp vs static mix, zero-cost +0.76 pp (60m same window: -4.27 net, -0.05 zero-cost). Branch experiment/trend-only-subsignals-120m-threshold-015 (2eebab4) pushed (touches compute_btc_target body).",
+    "report_path": "experiments/reports/2026-11-13.md"
+  },
+  {
+    "name": "constant-mix-50-rebalance-10m-threshold-0005",
+    "content_hash": "a8fb9748f5334bf70889599f483af496d1658462b0db4588c7414aedc8f0a244",
+    "tried_at": "2026-11-13T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -0.0014,
+    "note": "NOT A MEASUREMENT at 50k (1 trade, 855 orders_below_min; same as baseline 1 trade) and 500k (2 trades). At 5M fired 14 trades: -0.032 pp / -0.0004 Sharpe vs static mix, zero-cost -0.011 pp. Rebalancing premium ~0 this window. Branch experiment/constant-mix-50-rebalance-10m-threshold-0005 (7fcffc4) pushed (touches compute_btc_target body).",
+    "report_path": "experiments/reports/2026-11-13.md"
   }
 ]

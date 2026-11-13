@@ -234,11 +234,12 @@ impl TradingEngine {
     /// - trend-following family (SMA cross, EMA cross, MACD histogram) — weight
     ///   `TREND_SUBSIGNAL_WEIGHT` = 1.0
     ///
-    /// NOTE: hypotheses `trend-only-subsignals-10m-threshold-015` and
-    /// `trend-only-subsignals-60m-threshold-015` (identical weights; the 60m
-    /// variant only raises rebalance spacing to 3600s via TradingConfig to
-    /// test whether the trend family's gross timing value survives a
-    /// one-sixth decision cadence). Raising the
+    /// NOTE: hypotheses `trend-only-subsignals-10m-threshold-015`,
+    /// `trend-only-subsignals-60m-threshold-015` and
+    /// `trend-only-subsignals-120m-threshold-015` (identical weights; the 60m
+    /// and 120m variants only raise rebalance spacing to 3600s / 7200s via
+    /// TradingConfig to test how the trend family's gross timing value and
+    /// cost scale with decision cadence). Raising the
     /// trend weight from 0.25 to 1.0 (equal weighting) improved the 500k
     /// return by ~12-13.5pp over the reversion-dominated mix on four
     /// consecutive windows, so this variant removes the mean-reversion family
@@ -294,8 +295,9 @@ impl TradingEngine {
 
         /// Aggregation weight of the mean-reverting sub-signals (RSI, Bollinger %B).
         ///
-        /// NOTE: hypotheses `trend-only-subsignals-10m-threshold-015` and
-        /// `trend-only-subsignals-60m-threshold-015` set this to 0.0, removing the mean-reversion family from the composite. It
+        /// NOTE: hypotheses `trend-only-subsignals-10m-threshold-015`,
+        /// `trend-only-subsignals-60m-threshold-015` and
+        /// `trend-only-subsignals-120m-threshold-015` set this to 0.0, removing the mean-reversion family from the composite. It
         /// was 1.0 under `mean-reversion-weighted-subsignals` (lag-1 hourly
         /// return autocorrelation -0.028), but the equal-weight experiments
         /// showed the reversion-dominated mix is where return is lost. The
@@ -306,8 +308,9 @@ impl TradingEngine {
         /// Aggregation weight of the trend-following sub-signals (SMA cross,
         /// EMA cross, MACD histogram).
         ///
-        /// NOTE: hypotheses `trend-only-subsignals-10m-threshold-015` and
-        /// `trend-only-subsignals-60m-threshold-015` raise this from 0.25 to 1.0, making the trend family the sole driver of
+        /// NOTE: hypotheses `trend-only-subsignals-10m-threshold-015`,
+        /// `trend-only-subsignals-60m-threshold-015` and
+        /// `trend-only-subsignals-120m-threshold-015` raise this from 0.25 to 1.0, making the trend family the sole driver of
         /// the TA composite. The earlier `trend-weighted-subsignals` variant
         /// (trend 1.0 / reversion 0.25) was rejected, but at 60s spacing and
         /// allocation_threshold 0.1 — never on top of 600s / 0.15.
@@ -1149,7 +1152,7 @@ mod tests {
         //                      histogram → all three saturate at 1.0 (bullish)
         //   mean-reverting   — RSI=90 (→0.1) and close pinned to the upper
         //                      Bollinger band, %B=100 (→0.0) (both bearish)
-        // NOTE: rewritten for hypotheses `trend-only-subsignals-10m-threshold-015` / `-60m-threshold-015`
+        // NOTE: rewritten for hypotheses `trend-only-subsignals-10m-threshold-015` / `-60m-` / `-120m-threshold-015`
         // (previously asserted mean-reverting dominance). With the reversion
         // family at weight 0.0 and the trend family at 1.0, the bearish RSI/%B
         // must have no influence at all: the composite equals the fully
@@ -1184,7 +1187,7 @@ mod tests {
 
     #[test]
     fn compute_btc_target_reversion_only_point_returns_none() {
-        // Regression (trend-only-subsignals-10m/60m-threshold-015): with
+        // Regression (trend-only-subsignals-10m/60m/120m-threshold-015): with
         // REVERSION_SUBSIGNAL_WEIGHT = 0.0 a partial-warmup point carrying only
         // RSI (and/or Bollinger %B) has a zero weight sum. It must return None
         // rather than NaN from 0/0.

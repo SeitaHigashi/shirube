@@ -238,7 +238,10 @@ impl TradingEngine {
     /// `trend-only-subsignals-60m-threshold-015` (identical weights; the 60m
     /// variant only raises rebalance spacing to 3600s via TradingConfig to
     /// test whether the trend family's gross timing value survives a
-    /// one-sixth decision cadence). Raising the
+    /// one-sixth decision cadence). Hypothesis
+    /// `trend-only-subsignals-60m-threshold-015-trade-to-band-edge` reuses
+    /// these exact weights and only changes order sizing (see
+    /// `band_edge_delta`). Raising the
     /// trend weight from 0.25 to 1.0 (equal weighting) improved the 500k
     /// return by ~12-13.5pp over the reversion-dominated mix on four
     /// consecutive windows, so this variant removes the mean-reversion family
@@ -597,8 +600,11 @@ impl TradingEngine {
             if delta.abs() < allocation_threshold {
                 None
             } else {
+                // Trade only back to the edge of the no-trade band, not all
+                // the way to the target (see `band_edge_delta`). The gate
+                // above is unchanged; only the order size shrinks.
                 Self::allocation_delta_to_order(
-                    delta,
+                    Self::band_edge_delta(delta, allocation_threshold),
                     total_value,
                     btc_price,
                     &self.product_code,
@@ -674,7 +680,16 @@ impl TradingEngine {
             if delta.abs() < allocation_threshold {
                 None
             } else {
-                Self::allocation_delta_to_order(delta, total_value, btc_price, &self.product_code, min_order_size)
+                // Trade only back to the edge of the no-trade band, not all
+                // the way to the target (see `band_edge_delta`). The gate
+                // above is unchanged; only the order size shrinks.
+                Self::allocation_delta_to_order(
+                    Self::band_edge_delta(delta, allocation_threshold),
+                    total_value,
+                    btc_price,
+                    &self.product_code,
+                    min_order_size,
+                )
             }
         };
 
@@ -728,6 +743,35 @@ impl TradingEngine {
         }
 
         Ok(())
+    }
+
+    /// Shrink a rebalance delta so the order trades only back to the edge of
+    /// the no-trade band instead of all the way to the target.
+    ///
+    /// Formula: `band_edge = delta - sign(delta) * threshold`, where `delta`
+    /// is `target_pct - current_alloc` (range [-1.0, 1.0]) and `threshold` is
+    /// `allocation_threshold` (>= 0). Returns `0.0` when `|delta| <= threshold`
+    /// (already inside or exactly on the band edge), so the result always has
+    /// the same sign as `delta` and magnitude `max(|delta| - threshold, 0)`.
+    /// A threshold of 0 returns `delta` unchanged.
+    ///
+    /// NOTE: hypothesis `trend-only-subsignals-60m-threshold-015-trade-to-band-edge`
+    /// (helper first introduced by `equal-weight-10m-threshold-015-trade-to-band-edge`).
+    /// Under proportional costs (fee + slippage) no-trade-region theory says
+    /// the optimal rebalance stops at the band boundary rather than the target
+    /// (Ekren, Liu & Muhle-Karbe, arXiv:1510.05097), so a target hovering near
+    /// the band edge no longer pays a full round trip each time. Shared by the
+    /// live engine (`handle_indicator`, `handle_rebalance`) and
+    /// `backtest::Simulator::run` so the backtest exercises exactly the live
+    /// sizing rule. The caller still applies the `|delta| < threshold` gate
+    /// itself; this only resizes the order.
+    pub(crate) fn band_edge_delta(delta: f64, threshold: f64) -> f64 {
+        let excess = delta.abs() - threshold;
+        if excess <= 0.0 {
+            0.0
+        } else {
+            delta.signum() * excess
+        }
     }
 
     /// Convert a signed allocation delta into a market `OrderRequest`.
@@ -1009,6 +1053,38 @@ mod tests {
 
     fn make_cfg() -> TradingConfig {
         TradingConfig::default()
+    }
+
+    // Regression tests for `band_edge_delta`
+    // (hypothesis `trend-only-subsignals-60m-threshold-015-trade-to-band-edge`).
+
+    #[test]
+    fn band_edge_delta_positive_trades_to_upper_band_edge() {
+        // delta +0.40 with a 0.15 band -> buy only the 0.25 excess.
+        let v = TradingEngine::band_edge_delta(0.40, 0.15);
+        assert!((v - 0.25).abs() < 1e-12, "got {}", v);
+    }
+
+    #[test]
+    fn band_edge_delta_negative_trades_to_lower_band_edge() {
+        // delta -0.40 with a 0.15 band -> sell only the 0.25 excess.
+        let v = TradingEngine::band_edge_delta(-0.40, 0.15);
+        assert!((v + 0.25).abs() < 1e-12, "got {}", v);
+    }
+
+    #[test]
+    fn band_edge_delta_at_or_inside_threshold_is_zero() {
+        assert_eq!(TradingEngine::band_edge_delta(0.15, 0.15), 0.0);
+        assert_eq!(TradingEngine::band_edge_delta(-0.15, 0.15), 0.0);
+        assert_eq!(TradingEngine::band_edge_delta(0.05, 0.15), 0.0);
+        assert_eq!(TradingEngine::band_edge_delta(-0.05, 0.15), 0.0);
+        assert_eq!(TradingEngine::band_edge_delta(0.0, 0.15), 0.0);
+    }
+
+    #[test]
+    fn band_edge_delta_zero_threshold_is_unchanged() {
+        assert_eq!(TradingEngine::band_edge_delta(0.37, 0.0), 0.37);
+        assert_eq!(TradingEngine::band_edge_delta(-0.37, 0.0), -0.37);
     }
 
     #[test]

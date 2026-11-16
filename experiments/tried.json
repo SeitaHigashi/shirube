@@ -1158,5 +1158,35 @@
     "sharpe_absolute_delta": -0.0014,
     "note": "NOT A MEASUREMENT at 50k (1 trade, 855 orders_below_min; same as baseline 1 trade) and 500k (2 trades). At 5M fired 14 trades: -0.032 pp / -0.0004 Sharpe vs static mix, zero-cost -0.011 pp. Rebalancing premium ~0 this window. Branch experiment/constant-mix-50-rebalance-10m-threshold-0005 (7fcffc4) pushed (touches compute_btc_target body).",
     "report_path": "experiments/reports/2026-11-13.md"
+  },
+  {
+    "name": "trend-only-subsignals-360m-threshold-015",
+    "content_hash": "0e324dcd28902e73960a591a0b9775726a7366a59d43f5cdb37b6f12f9c4e870",
+    "tried_at": "2026-11-16T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -0.556,
+    "note": "50k: 15 vs 83 trades (ratio 0.18), Sharpe -13.07 vs -12.52, DD -4.68pp. 500k: -3.06pp vs static mix (fees 4,771 vs 120m's 10,182 JPY); zero-cost -1.44pp. Early window 2026-08-10..24 @500k zero-cost +0.145pp (only trend-family run > static mix gross). Branch experiment/trend-only-subsignals-360m-threshold-015 (e849716) pushed (touches compute_btc_target body).",
+    "report_path": "experiments/reports/2026-11-16.md"
+  },
+  {
+    "name": "trend-only-subsignals-120m-band-edge-lot-roundup",
+    "content_hash": "bd6127d14b287fbff715c396d85d4cccf24b52aa711dbe2bf2bf357eec77e8dd",
+    "tried_at": "2026-11-16T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 1.376,
+    "note": "NEAR MISS: cleared Sharpe (+1.38 abs) and DD (-3.46pp) at 50k but failed trade count 40/83 = 0.482 < 0.5 (2 trades short). Best of run at every capital: 500k -1.71pp, 5M -1.29pp vs static mix; zero-cost 500k -0.40pp. Round-up fired 32/40 trades at 50k. Branch experiment/trend-only-subsignals-120m-band-edge-lot-roundup (66a11ec) pushed (touches compute_btc_target body AND live order sizing).",
+    "report_path": "experiments/reports/2026-11-16.md"
+  },
+  {
+    "name": "trend-only-subsignals-120m-slow-trend-periods",
+    "content_hash": "9be60bd08d03380f8bef55e62fffec432d2508908a30215cf0b7ea81c14e71a9",
+    "tried_at": "2026-11-16T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -0.274,
+    "note": "50k: 40 vs 83 trades, Sharpe -12.79 vs -12.52. Warmup 450. Beats plain 120m at 500k by +1.58pp net / +1.44pp zero-cost but still -4.06pp vs static mix (zero-cost -0.47pp). Branch experiment/trend-only-subsignals-120m-slow-trend-periods (37a4e22) pushed (touches compute_btc_target body).",
+    "report_path": "experiments/reports/2026-11-16.md"
   }
 ]

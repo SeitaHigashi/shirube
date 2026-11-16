@@ -1,0 +1,36 @@
+{
+  "name": "trend-only-subsignals-120m-band-edge-lot-roundup",
+  "kind": "algorithm",
+  "rationale": "Cost-side (warning rule), 2026-11-13 lead #2. 120m spacing had the best gross and net trend-only numbers on 2026-11-13, and band-edge sizing cut 500k fees ~60% at 60m (11.0k -> 4.3k JPY). But at 50k band-edge shrank 102 gate-passing rebalances under the 0.001 BTC lot floor, so it stopped trading there. This combines 120m spacing with band-edge sizing plus a lot round-up: when the gate fires and the full delta clears min_order_size but the band-edge size does not, order exactly min_order_size instead of nothing.",
+  "trading_config": {
+    "allocation_threshold": 0.15,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 7200
+  },
+  "code_change_summary": "In TradingEngine::compute_btc_target (src/trading/engine.rs), set TREND_SUBSIGNAL_WEIGHT from 0.25 to 1.0 and REVERSION_SUBSIGNAL_WEIGHT from 1.0 to 0.0, and return None if weight_sum <= 0.0 -- identical to experiment/trend-only-subsignals-120m-threshold-015 (2eebab4); cherry-picking that branch's compute_btc_target commits is fine. Update the doc-comment NOTE to name this hypothesis. Update compute_btc_target_* tests' expected values where they legitimately change (rewrite, never delete) and keep the RSI-only -> None regression test. Then cherry-pick the band_edge_delta helper and its call-sites from experiment/trend-only-subsignals-60m-threshold-015-trade-to-band-edge (7cae463: handle_indicator, handle_rebalance and Simulator::run) but NOT its weight change (already applied). Add a lot round-up in all three call-sites via one shared pub(crate) helper on TradingEngine: if allocation_delta_to_order(band_edge_delta(..)) returns None but allocation_delta_to_order(delta, ..) (the full delta) returns Some, emit an order of exactly min_order_size in delta's direction (never more than the full-delta size). Add regression tests: band-edge shrink; round-up fires when band-edge < min <= full; no order when full < min. Also run the 120m config without band edge (2eebab4) at 500k and both at --fee-pct 0 --slippage-pct 0 at 500k as unregistered references.",
+  "constraints": [
+    "This hypothesis modifies the body of TradingEngine::compute_btc_target. This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST NOT change TradingEngine::compute_btc_target's signature (its parameter list or return type) -- only its body.",
+    "MUST NOT change any individual sub-signal's own formula or the aggregation expression; exactly two numeric constants change (TREND 0.25 -> 1.0 and REVERSION 1.0 -> 0.0). Because REVERSION becomes 0.0 the weighted-mean denominator can be zero when only RSI/%B are present (partial warmup): handle that by returning None when weight_sum <= 0.0, and document it.",
+    "MUST pass `cargo test`, including the compute_btc_target_* unit tests in src/trading/engine.rs -- update their expected values if the new weight legitimately changes them (do not weaken or delete a test just to make it pass).",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff touches compute_btc_target's body, so the reviewer gives it the scrutiny an allocation-formula change deserves.",
+    "The band-edge and round-up changes alter only the size of an order that already passes the `delta.abs() >= allocation_threshold` gate; the gate itself and allocation_delta_to_order are unchanged. This touches the live rebalance path in src/trading/engine.rs, so a promoted PR must flag that it changes live order sizing.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or the auto-updater."
+  ]
+}

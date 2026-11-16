@@ -1,0 +1,44 @@
+{
+  "name": "trend-only-subsignals-360m-threshold-015",
+  "kind": "algorithm",
+  "rationale": "Cost-side (warning rule: 500k static-mix deficit negative for 25+ consecutive runs), literature-motivated. On 2026-11-13 the trend-only spacing dose-response at 500k was 60m: 95 trades / 10,997 JPY fees / -4.27 pp net excess; 120m: 60 trades / 7,561 JPY / -1.96 pp net and the best gross (+0.76 pp zero-cost). Costs are still ~2.7 pp at 120m, so this tests the next dose, 21600s (6h), the frequency Bui & Nguyen (arXiv:2602.11708) found to balance turnover against signal capture for crypto trend-following. Identical trend-only code and threshold 0.15; only rebalance_interval_secs changes. Score on excess_return_vs_static_mix_pct and total_fees_jpy at 500k as well as the 50k promotion rule.",
+  "trading_config": {
+    "allocation_threshold": 0.15,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 21600
+  },
+  "code_change_summary": "In TradingEngine::compute_btc_target (src/trading/engine.rs), set TREND_SUBSIGNAL_WEIGHT from 0.25 to 1.0 and REVERSION_SUBSIGNAL_WEIGHT from 1.0 to 0.0, and return None if weight_sum <= 0.0 -- identical to experiment/trend-only-subsignals-120m-threshold-015 (2eebab4); cherry-picking that branch's compute_btc_target commits is fine. Update the doc-comment NOTE to name this hypothesis. Update compute_btc_target_* tests' expected values where they legitimately change (rewrite, never delete) and keep the RSI-only -> None regression test. Additionally, as unregistered diagnostics: (a) run this variant and the 120m config (rebalance_interval_secs 7200) at --fee-pct 0 --slippage-pct 0 at 500k on the holdout window; (b) run the dev baseline, the 120m config and this variant at 500k on the earliest 14 days of the DB (--from 2026-08-10T00:00:00Z --to 2026-08-24T00:00:00Z) to check whether the trend family's gross edge reproduces on an independent window (2026-11-13 lead #3).",
+  "constraints": [
+    "This hypothesis modifies the body of TradingEngine::compute_btc_target. This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST NOT change TradingEngine::compute_btc_target's signature (its parameter list or return type) -- only its body.",
+    "MUST NOT change any individual sub-signal's own formula or the aggregation expression; exactly two numeric constants change (TREND 0.25 -> 1.0 and REVERSION 1.0 -> 0.0). Because REVERSION becomes 0.0 the weighted-mean denominator can be zero when only RSI/%B are present (partial warmup): handle that by returning None when weight_sum <= 0.0, and document it.",
+    "MUST pass `cargo test`, including the compute_btc_target_* unit tests in src/trading/engine.rs -- update their expected values if the new weight legitimately changes them (do not weaken or delete a test just to make it pass).",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff touches compute_btc_target's body, so the reviewer gives it the scrutiny an allocation-formula change deserves.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or anything on the live order-submission path."
+  ],
+  "paper_reference": {
+    "title": "Systematic Trend-Following with Adaptive Portfolio Construction: Enhancing Risk-Adjusted Alpha in Cryptocurrency Markets",
+    "authors": "Duc Bui, Thanh Nguyen",
+    "venue_year": "arXiv:2602.11708, 2026",
+    "url": "https://arxiv.org/abs/2602.11708",
+    "key_claim": "Across H1/H4/H6/H8/H12/D1 bars on Binance perpetuals, net-of-cost Sharpe of a momentum trend system peaks at H6 (2.41 vs 1.54 at H1): faster bars lose to turnover cost, slower bars miss short-lived momentum.",
+    "pros": "Same asset class and the same cost-vs-signal trade-off shirube's spacing dose-response is tracing (60m -> 120m improved net excess at 500k); gives a concrete next dose rather than an arbitrary one.",
+    "cons": "Perpetual swaps with long/short, ATR trailing stops and monthly re-optimised parameters, not a long-only spot allocation driven by 1-minute-bar indicators; 4 bps fees vs shirube's ~6.6 bps + 10 bps slippage at 500k; H6 alignment with funding intervals has no analogue on spot BTC/JPY; in-sample grid search."
+  }
+}

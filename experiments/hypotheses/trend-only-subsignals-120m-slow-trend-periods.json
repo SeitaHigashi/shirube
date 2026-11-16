@@ -1,0 +1,35 @@
+{
+  "name": "trend-only-subsignals-120m-slow-trend-periods",
+  "kind": "algorithm",
+  "rationale": "Internal pattern. Trend-only's gross edge has been window-dependent (+2.98 pp at 10m on 2026-11-07, +2.06 pp at 60m on 2026-11-10, -0.05 pp at 60m and +0.76 pp at 120m on 2026-11-13). The trend sub-signals use sma 200 / ema 100 / MACD 52-104-18 one-minute bars (1.7-3.3 h horizons), which turn over faster than a 2h rebalance cadence, so each decision samples a trend reading that is mostly noise relative to the holding period. Doubling every trend period (sma 400, ema 200, MACD 104/208/36) matches the trend horizon to the 120m cadence. Prior 'trend-family-beyond-5h-horizons' tested longer horizons only under the old reversion-dominated weights, never with trend-only weights.",
+  "trading_config": {
+    "allocation_threshold": 0.15,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 400,
+    "ema_period": 200,
+    "rsi_period": 42,
+    "macd_fast": 104,
+    "macd_slow": 208,
+    "macd_signal": 36,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 7200
+  },
+  "code_change_summary": "In TradingEngine::compute_btc_target (src/trading/engine.rs), set TREND_SUBSIGNAL_WEIGHT from 0.25 to 1.0 and REVERSION_SUBSIGNAL_WEIGHT from 1.0 to 0.0, and return None if weight_sum <= 0.0 -- identical to experiment/trend-only-subsignals-120m-threshold-015 (2eebab4); cherry-picking that branch's compute_btc_target commits is fine. Update the doc-comment NOTE to name this hypothesis. Update compute_btc_target_* tests' expected values where they legitimately change (rewrite, never delete) and keep the RSI-only -> None regression test. Run with --warmup-candles 450 (not 300) for this variant at all three capitals since sma_period is 400, and state that in the report; also run the plain 120m config (2eebab4 weights, default periods) at 500k as an unregistered reference.",
+  "constraints": [
+    "This hypothesis modifies the body of TradingEngine::compute_btc_target. This change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main.",
+    "MUST NOT change TradingEngine::compute_btc_target's signature (its parameter list or return type) -- only its body.",
+    "MUST NOT change any individual sub-signal's own formula or the aggregation expression; exactly two numeric constants change (TREND 0.25 -> 1.0 and REVERSION 1.0 -> 0.0). Because REVERSION becomes 0.0 the weighted-mean denominator can be zero when only RSI/%B are present (partial warmup): handle that by returning None when weight_sum <= 0.0, and document it.",
+    "MUST pass `cargo test`, including the compute_btc_target_* unit tests in src/trading/engine.rs -- update their expected values if the new weight legitimately changes them (do not weaken or delete a test just to make it pass).",
+    "A promoted change still becomes its own PR against dev (per the pipeline's step 6) and is never merged automatically -- a human reviews it like any other algorithm hypothesis. Flag explicitly in the PR description that this diff touches compute_btc_target's body, so the reviewer gives it the scrutiny an allocation-formula change deserves.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or anything on the live order-submission path."
+  ]
+}

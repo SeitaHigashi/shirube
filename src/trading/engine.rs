@@ -242,7 +242,11 @@ impl TradingEngine {
     /// cost scale with decision cadence). Hypothesis
     /// `trend-only-subsignals-120m-band-edge-lot-roundup` reuses these exact
     /// weights at 7200s spacing and only changes order sizing (see
-    /// `band_edge_delta` and `band_edge_order`). Raising the
+    /// `band_edge_delta` and `band_edge_order`). Hypothesis
+    /// `trend-only-subsignals-120m-slow-trend-band-edge-lot-roundup` keeps
+    /// these weights and that sizing rule unchanged; only its TradingConfig
+    /// differs (slower trend periods: sma 400 / ema 200 / macd 104-208-36).
+    /// Raising the
     /// trend weight from 0.25 to 1.0 (equal weighting) improved the 500k
     /// return by ~12-13.5pp over the reversion-dominated mix on four
     /// consecutive windows, so this variant removes the mean-reversion family
@@ -300,7 +304,10 @@ impl TradingEngine {
         ///
         /// NOTE: hypotheses `trend-only-subsignals-10m-threshold-015`,
         /// `trend-only-subsignals-60m-threshold-015` and
-        /// `trend-only-subsignals-120m-threshold-015` set this to 0.0, removing the mean-reversion family from the composite. It
+        /// `trend-only-subsignals-120m-threshold-015` (and the band-edge
+        /// variants `trend-only-subsignals-120m-band-edge-lot-roundup` /
+        /// `trend-only-subsignals-120m-slow-trend-band-edge-lot-roundup`)
+        /// set this to 0.0, removing the mean-reversion family from the composite. It
         /// was 1.0 under `mean-reversion-weighted-subsignals` (lag-1 hourly
         /// return autocorrelation -0.028), but the equal-weight experiments
         /// showed the reversion-dominated mix is where return is lost. The
@@ -313,7 +320,10 @@ impl TradingEngine {
         ///
         /// NOTE: hypotheses `trend-only-subsignals-10m-threshold-015`,
         /// `trend-only-subsignals-60m-threshold-015` and
-        /// `trend-only-subsignals-120m-threshold-015` raise this from 0.25 to 1.0, making the trend family the sole driver of
+        /// `trend-only-subsignals-120m-threshold-015` (and the band-edge
+        /// variants `trend-only-subsignals-120m-band-edge-lot-roundup` /
+        /// `trend-only-subsignals-120m-slow-trend-band-edge-lot-roundup`)
+        /// raise this from 0.25 to 1.0, making the trend family the sole driver of
         /// the TA composite. The earlier `trend-weighted-subsignals` variant
         /// (trend 1.0 / reversion 0.25) was rejected, but at 60s spacing and
         /// allocation_threshold 0.1 — never on top of 600s / 0.15.
@@ -762,7 +772,8 @@ impl TradingEngine {
     /// the same sign as `delta` and magnitude `max(|delta| - threshold, 0)`.
     /// A threshold of 0 returns `delta` unchanged.
     ///
-    /// NOTE: hypothesis `trend-only-subsignals-120m-band-edge-lot-roundup`
+    /// NOTE: hypotheses `trend-only-subsignals-120m-band-edge-lot-roundup` and
+    /// `trend-only-subsignals-120m-slow-trend-band-edge-lot-roundup`
     /// (helper first introduced by `equal-weight-10m-threshold-015-trade-to-band-edge`,
     /// carried over from `trend-only-subsignals-60m-threshold-015-trade-to-band-edge`).
     /// Under proportional costs (fee + slippage) no-trade-region theory says
@@ -794,7 +805,9 @@ impl TradingEngine {
     ///   since that size is itself >= `min_size`)
     /// - full-delta size < `min_size` -> `None` (dust, as before)
     ///
-    /// NOTE: hypothesis `trend-only-subsignals-120m-band-edge-lot-roundup`.
+    /// NOTE: hypotheses `trend-only-subsignals-120m-band-edge-lot-roundup` and
+    /// `trend-only-subsignals-120m-slow-trend-band-edge-lot-roundup` (the
+    /// latter reuses this helper unchanged with slower trend periods).
     /// At small capital (e.g. 50,000 JPY ~ 0.003 BTC) band-edge sizing shrank
     /// nearly every gate-passing rebalance under the 0.001 BTC lot floor, so
     /// the strategy stopped trading entirely. Rounding up to one lot keeps the

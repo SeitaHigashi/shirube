@@ -251,7 +251,8 @@ impl Simulator {
                             // Size the order to the band edge (rounded up to
                             // one lot when only the full delta clears the lot
                             // floor) via the same helper the live engine uses
-                            // (hypothesis `trend-only-subsignals-120m-band-edge-lot-roundup`).
+                            // (hypotheses `trend-only-subsignals-120m-band-edge-lot-roundup`
+                            // and `trend-only-subsignals-120m-slow-trend-band-edge-lot-roundup`).
                             let order_req = TradingEngine::band_edge_order(
                                 delta,
                                 trading_config.allocation_threshold,

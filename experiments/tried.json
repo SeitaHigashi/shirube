@@ -1188,5 +1188,35 @@
     "sharpe_absolute_delta": -0.274,
     "note": "50k: 40 vs 83 trades, Sharpe -12.79 vs -12.52. Warmup 450. Beats plain 120m at 500k by +1.58pp net / +1.44pp zero-cost but still -4.06pp vs static mix (zero-cost -0.47pp). Branch experiment/trend-only-subsignals-120m-slow-trend-periods (37a4e22) pushed (touches compute_btc_target body).",
     "report_path": "experiments/reports/2026-11-16.md"
+  },
+  {
+    "name": "trend-only-subsignals-120m-half-band-interior-rebalance",
+    "content_hash": "8670a617f869ccfe600616fe44eecbad0a40a4a7c8443d5ffa5fe8ce73db326e",
+    "tried_at": "2026-11-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -4.644,
+    "note": "50k: 52 vs 76 trades, Sharpe -17.37 vs -12.73, DD +2.77pp. 500k -13.70% (base -20.72), zero-cost excess vs static mix -3.07pp. Interior (threshold/2) sizing removed 500k top-ups but lost more gross value. Branch experiment/trend-only-subsignals-120m-half-band-interior-rebalance (feb74b8) pushed (touches compute_btc_target body + live order sizing).",
+    "report_path": "experiments/reports/2026-11-19.md"
+  },
+  {
+    "name": "trend-only-subsignals-60m-band-edge-lot-roundup",
+    "content_hash": "a58887787c0841fd80d8e6bddedc73fe58d2b6f51106a7d2ab0b696e92b30f79",
+    "tried_at": "2026-11-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -0.667,
+    "note": "50k: 59 vs 76 trades (0.78, passes), DD -0.32pp (passes), Sharpe -13.40 vs -12.73 (fails). 500k -11.41% (base -20.72), zero-cost excess -1.38pp. Branch experiment/trend-only-subsignals-60m-band-edge-lot-roundup (11b16b9) pushed (touches compute_btc_target body + live order sizing).",
+    "report_path": "experiments/reports/2026-11-19.md"
+  },
+  {
+    "name": "trend-only-subsignals-120m-slow-trend-band-edge-lot-roundup",
+    "content_hash": "650dd94d315fdce77e1cfbf6f44fdf53a6f9920a3f85d5e7a998828b053997c0",
+    "tried_at": "2026-11-19T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -0.892,
+    "note": "50k: 36 vs 76 trades (0.47, fails), Sharpe -13.62 vs -12.73 (fails), DD -1.12pp. Warmup 450. 500k -10.61% (best of run; base -20.72), zero-cost excess -1.55pp. Branch experiment/trend-only-subsignals-120m-slow-trend-band-edge-lot-roundup (13149cd) pushed (touches compute_btc_target body + live order sizing).",
+    "report_path": "experiments/reports/2026-11-19.md"
   }
 ]

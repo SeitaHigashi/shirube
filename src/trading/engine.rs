@@ -572,8 +572,13 @@ impl TradingEngine {
             if delta.abs() < allocation_threshold {
                 None
             } else {
-                Self::allocation_delta_to_order(
+                // Trade only back to the edge of the no-trade band, not all
+                // the way to the target, rounding a sub-lot band-edge order
+                // up to exactly one lot (see `band_edge_order`). The gate
+                // above is unchanged; only the order size changes.
+                Self::band_edge_order(
                     delta,
+                    allocation_threshold,
                     total_value,
                     btc_price,
                     &self.product_code,
@@ -649,7 +654,18 @@ impl TradingEngine {
             if delta.abs() < allocation_threshold {
                 None
             } else {
-                Self::allocation_delta_to_order(delta, total_value, btc_price, &self.product_code, min_order_size)
+                // Trade only back to the edge of the no-trade band, not all
+                // the way to the target, rounding a sub-lot band-edge order
+                // up to exactly one lot (see `band_edge_order`). The gate
+                // above is unchanged; only the order size changes.
+                Self::band_edge_order(
+                    delta,
+                    allocation_threshold,
+                    total_value,
+                    btc_price,
+                    &self.product_code,
+                    min_order_size,
+                )
             }
         };
 
@@ -703,6 +719,78 @@ impl TradingEngine {
         }
 
         Ok(())
+    }
+
+    /// Shrink a rebalance delta so the order trades only back to the edge of
+    /// the no-trade band instead of all the way to the target.
+    ///
+    /// Formula: `band_edge = delta - sign(delta) * threshold`, where `delta`
+    /// is `target_pct - current_alloc` (range [-1.0, 1.0]) and `threshold` is
+    /// `allocation_threshold` (>= 0). Returns `0.0` when `|delta| <= threshold`
+    /// (already inside or exactly on the band edge), so the result always has
+    /// the same sign as `delta` and magnitude `max(|delta| - threshold, 0)`.
+    /// A threshold of 0 returns `delta` unchanged.
+    ///
+    /// NOTE: hypothesis `dev-weights-60m-band-edge-lot-roundup`
+    /// (helper first introduced by `equal-weight-10m-threshold-015-trade-to-band-edge`,
+    /// carried over from `trend-only-subsignals-60m-threshold-015-trade-to-band-edge`).
+    /// Under proportional costs (fee + slippage) no-trade-region theory says
+    /// the optimal rebalance stops at the band boundary rather than the target
+    /// (Ekren, Liu & Muhle-Karbe, arXiv:1510.05097), so a target hovering near
+    /// the band edge no longer pays a full round trip each time. Shared by the
+    /// live engine (`handle_indicator`, `handle_rebalance`) and
+    /// `backtest::Simulator::run` (via `band_edge_order`) so the backtest
+    /// exercises exactly the live sizing rule. The caller still applies the
+    /// `|delta| < threshold` gate itself; this only resizes the order.
+    pub(crate) fn band_edge_delta(delta: f64, threshold: f64) -> f64 {
+        let excess = delta.abs() - threshold;
+        if excess <= 0.0 {
+            0.0
+        } else {
+            delta.signum() * excess
+        }
+    }
+
+    /// Build the market order for a rebalance that already passed the
+    /// `|delta| >= allocation_threshold` gate: size it to the band edge
+    /// (`band_edge_delta`), and if that is below the exchange lot floor while
+    /// the full delta is not, round it up to exactly `min_size`.
+    ///
+    /// Decision table (sizes from `allocation_delta_to_order`):
+    /// - band-edge size >= `min_size` -> band-edge order
+    /// - band-edge size <  `min_size` <= full-delta size -> order of exactly
+    ///   `min_size` in `delta`'s direction (never more than the full-delta size,
+    ///   since that size is itself >= `min_size`)
+    /// - full-delta size < `min_size` -> `None` (dust, as before)
+    ///
+    /// NOTE: hypothesis `dev-weights-60m-band-edge-lot-roundup`.
+    /// At small capital (e.g. 50,000 JPY ~ 0.003 BTC) band-edge sizing shrank
+    /// nearly every gate-passing rebalance under the 0.001 BTC lot floor, so
+    /// the strategy stopped trading entirely. Rounding up to one lot keeps the
+    /// cost saving of band-edge sizing at larger capital while still acting
+    /// on the signal at small capital. Shared by `handle_indicator`,
+    /// `handle_rebalance` and `backtest::Simulator::run` so live and backtest
+    /// sizing are identical. `allocation_delta_to_order` itself is unchanged.
+    pub(crate) fn band_edge_order(
+        delta: f64,
+        threshold: f64,
+        total_value: Decimal,
+        btc_price: Decimal,
+        product_code: &str,
+        min_size: Decimal,
+    ) -> Option<OrderRequest> {
+        let edge = Self::band_edge_delta(delta, threshold);
+        if let Some(req) =
+            Self::allocation_delta_to_order(edge, total_value, btc_price, product_code, min_size)
+        {
+            return Some(req);
+        }
+        // Band-edge order is dust: fall back to one lot only when the full
+        // delta would itself have cleared the lot floor.
+        let mut full =
+            Self::allocation_delta_to_order(delta, total_value, btc_price, product_code, min_size)?;
+        full.size = min_size;
+        Some(full)
     }
 
     /// Convert a signed allocation delta into a market `OrderRequest`.
@@ -984,6 +1072,82 @@ mod tests {
 
     fn make_cfg() -> TradingConfig {
         TradingConfig::default()
+    }
+
+    // Regression tests for `band_edge_delta`
+    // (hypothesis `trend-only-subsignals-60m-threshold-015-trade-to-band-edge`).
+
+    #[test]
+    fn band_edge_delta_positive_trades_to_upper_band_edge() {
+        // delta +0.40 with a 0.15 band -> buy only the 0.25 excess.
+        let v = TradingEngine::band_edge_delta(0.40, 0.15);
+        assert!((v - 0.25).abs() < 1e-12, "got {}", v);
+    }
+
+    #[test]
+    fn band_edge_delta_negative_trades_to_lower_band_edge() {
+        // delta -0.40 with a 0.15 band -> sell only the 0.25 excess.
+        let v = TradingEngine::band_edge_delta(-0.40, 0.15);
+        assert!((v + 0.25).abs() < 1e-12, "got {}", v);
+    }
+
+    #[test]
+    fn band_edge_delta_at_or_inside_threshold_is_zero() {
+        assert_eq!(TradingEngine::band_edge_delta(0.15, 0.15), 0.0);
+        assert_eq!(TradingEngine::band_edge_delta(-0.15, 0.15), 0.0);
+        assert_eq!(TradingEngine::band_edge_delta(0.05, 0.15), 0.0);
+        assert_eq!(TradingEngine::band_edge_delta(-0.05, 0.15), 0.0);
+        assert_eq!(TradingEngine::band_edge_delta(0.0, 0.15), 0.0);
+    }
+
+    #[test]
+    fn band_edge_delta_zero_threshold_is_unchanged() {
+        assert_eq!(TradingEngine::band_edge_delta(0.37, 0.0), 0.37);
+        assert_eq!(TradingEngine::band_edge_delta(-0.37, 0.0), -0.37);
+    }
+
+    // Regression tests for `band_edge_order`
+    // (hypothesis `dev-weights-60m-band-edge-lot-roundup`).
+
+    #[test]
+    fn band_edge_order_shrinks_to_band_edge_when_above_lot() {
+        // total 10,000,000 JPY, price 10,000,000 JPY/BTC -> 1 BTC of value.
+        // delta +0.40, band 0.15 -> band-edge 0.25 BTC (>= 0.001 lot).
+        let req = TradingEngine::band_edge_order(
+            0.40, 0.15, dec!(10000000), dec!(10000000), "BTC_JPY", dec!(0.001),
+        )
+        .expect("order expected");
+        assert_eq!(req.side, OrderSide::Buy);
+        assert_eq!(req.size, dec!(0.25));
+    }
+
+    #[test]
+    fn band_edge_order_rounds_up_to_lot_when_edge_below_min_but_full_above() {
+        // total 50,000 JPY, price 10,000,000 -> 0.005 BTC of value.
+        // delta -0.30: full = 0.0015 BTC (>= 0.001), band-edge (0.15) =
+        // 0.00075 BTC (< 0.001) -> round up to exactly one lot, Sell side.
+        let req = TradingEngine::band_edge_order(
+            -0.30, 0.15, dec!(50000), dec!(10000000), "BTC_JPY", dec!(0.001),
+        )
+        .expect("round-up order expected");
+        assert_eq!(req.side, OrderSide::Sell);
+        assert_eq!(req.size, dec!(0.001));
+        // Never more than the full-delta size.
+        let full = TradingEngine::allocation_delta_to_order(
+            -0.30, dec!(50000), dec!(10000000), "BTC_JPY", dec!(0.001),
+        )
+        .unwrap();
+        assert!(req.size <= full.size);
+    }
+
+    #[test]
+    fn band_edge_order_none_when_full_delta_below_min() {
+        // total 50,000 JPY, price 10,000,000 -> delta 0.16 full = 0.0008 BTC
+        // (< 0.001) -> no order even though the gate would pass.
+        assert!(TradingEngine::band_edge_order(
+            0.16, 0.15, dec!(50000), dec!(10000000), "BTC_JPY", dec!(0.001),
+        )
+        .is_none());
     }
 
     #[test]

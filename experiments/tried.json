@@ -1218,5 +1218,35 @@
     "sharpe_absolute_delta": -0.892,
     "note": "50k: 36 vs 76 trades (0.47, fails), Sharpe -13.62 vs -12.73 (fails), DD -1.12pp. Warmup 450. 500k -10.61% (best of run; base -20.72), zero-cost excess -1.55pp. Branch experiment/trend-only-subsignals-120m-slow-trend-band-edge-lot-roundup (13149cd) pushed (touches compute_btc_target body + live order sizing).",
     "report_path": "experiments/reports/2026-11-19.md"
+  },
+  {
+    "name": "dev-weights-120m-band-edge-lot-roundup",
+    "content_hash": "ed9961210c048624c8b571728ab21be4f180ba64386bc1a5ec82dd43dd153b1d",
+    "tried_at": "2026-11-22T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 4.567,
+    "note": "50k: 4 vs 118 trades (0.03, fails); Sharpe -9.79 vs -14.36 (+4.57, passes), DD -3.76pp (passes). Near-static: 7 trades at 500k (-10.27%, base -23.74), zero-cost excess -0.33pp. Branch experiment/dev-weights-120m-band-edge-lot-roundup (1de0e90) pushed (live order sizing; compute_btc_target untouched).",
+    "report_path": "experiments/reports/2026-11-22.md"
+  },
+  {
+    "name": "dev-weights-60m-band-edge-lot-roundup",
+    "content_hash": "5263b53a3df07019ef35999fb7e8a325e070c1a3e9e966e196e81e992d8c286b",
+    "tried_at": "2026-11-22T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 4.556,
+    "note": "50k: 2 vs 118 trades (0.02, fails); Sharpe -9.81 (+4.56), DD -3.76pp. 500k -10.34% with 19 trades, zero-cost excess -0.26pp. Branch experiment/dev-weights-60m-band-edge-lot-roundup (fd61687) pushed (live order sizing; compute_btc_target untouched).",
+    "report_path": "experiments/reports/2026-11-22.md"
+  },
+  {
+    "name": "dev-weights-60m-partial-adjustment-half-lot-roundup",
+    "content_hash": "2fee3406048e0105aabd6ddfe7237c008cbf6a470c25b16a1e2f90bf03fcb3c8",
+    "tried_at": "2026-11-22T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 4.358,
+    "note": "Garleanu & Pedersen 2013. 50k: 8 vs 118 trades (0.07, fails); Sharpe -10.00 (+4.36), DD -5.40pp; 51 below-min. 500k -11.42% with 40 trades, zero-cost excess -0.55pp. Branch experiment/dev-weights-60m-partial-adjustment-half-lot-roundup (3aaa8db) pushed (live order sizing; compute_btc_target untouched).",
+    "report_path": "experiments/reports/2026-11-22.md"
   }
 ]

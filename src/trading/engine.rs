@@ -63,6 +63,17 @@ pub struct TradingEngine {
     held_composite: Option<f64>,
 }
 
+
+/// Fraction of a gate-passing allocation delta that a single rebalance
+/// trades (range (0.0, 1.0]; 1.0 would be the old trade-to-target rule).
+///
+/// NOTE: hypothesis `dev-weights-60m-partial-adjustment-half-lot-roundup`.
+/// 0.5 is a heuristic partial-adjustment rate inspired by Garleanu &
+/// Pedersen (2013), not their cost-derived optimum: each rebalance closes
+/// half the gap, so a target that mean-reverts before the next check has
+/// only paid for half a round trip.
+pub(crate) const PARTIAL_ADJUSTMENT_RATE: f64 = 0.5;
+
 impl TradingEngine {
     pub fn new(
         indicator_rx: broadcast::Receiver<IndicatorOutput>,
@@ -572,7 +583,11 @@ impl TradingEngine {
             if delta.abs() < allocation_threshold {
                 None
             } else {
-                Self::allocation_delta_to_order(
+                // Trade only part of the way toward the target (half the
+                // delta), rounding a sub-lot partial order up to exactly one
+                // lot (see `partial_adjustment_order`). The gate above is
+                // unchanged; only the order size changes.
+                Self::partial_adjustment_order(
                     delta,
                     total_value,
                     btc_price,
@@ -649,7 +664,17 @@ impl TradingEngine {
             if delta.abs() < allocation_threshold {
                 None
             } else {
-                Self::allocation_delta_to_order(delta, total_value, btc_price, &self.product_code, min_order_size)
+                // Trade only part of the way toward the target (half the
+                // delta), rounding a sub-lot partial order up to exactly one
+                // lot (see `partial_adjustment_order`). The gate above is
+                // unchanged; only the order size changes.
+                Self::partial_adjustment_order(
+                    delta,
+                    total_value,
+                    btc_price,
+                    &self.product_code,
+                    min_order_size,
+                )
             }
         };
 
@@ -703,6 +728,53 @@ impl TradingEngine {
         }
 
         Ok(())
+    }
+
+    /// Build the market order for a rebalance that already passed the
+    /// `|delta| >= allocation_threshold` gate: size it to a fraction
+    /// `PARTIAL_ADJUSTMENT_RATE` of the delta, and if that is below the
+    /// exchange lot floor while the full delta is not, round it up to exactly
+    /// `min_size`.
+    ///
+    /// Formula: `partial = PARTIAL_ADJUSTMENT_RATE * delta`, where `delta` is
+    /// `target_pct - current_alloc` (range [-1.0, 1.0]); the partial delta has
+    /// the same sign as `delta` and half its magnitude.
+    ///
+    /// Decision table (sizes from `allocation_delta_to_order`):
+    /// - partial size >= `min_size` -> partial order
+    /// - partial size <  `min_size` <= full-delta size -> order of exactly
+    ///   `min_size` in `delta`'s direction (never more than the full-delta
+    ///   size, since that size is itself >= `min_size`)
+    /// - full-delta size < `min_size` -> `None` (dust, as before)
+    ///
+    /// NOTE: hypothesis `dev-weights-60m-partial-adjustment-half-lot-roundup`
+    /// (Garleanu & Pedersen 2013: with costly trading, trade only partially
+    /// toward the target each period). The lot round-up rule is the same as
+    /// `band_edge_order` on hypothesis
+    /// `trend-only-subsignals-120m-band-edge-lot-roundup`, so small-capital
+    /// accounts (e.g. 50,000 JPY ~ 0.003 BTC) still act on the signal.
+    /// Shared by `handle_indicator`, `handle_rebalance` and
+    /// `backtest::Simulator::run` so live and backtest sizing are identical.
+    /// `allocation_delta_to_order` and the threshold gate are unchanged.
+    pub(crate) fn partial_adjustment_order(
+        delta: f64,
+        total_value: Decimal,
+        btc_price: Decimal,
+        product_code: &str,
+        min_size: Decimal,
+    ) -> Option<OrderRequest> {
+        let partial = PARTIAL_ADJUSTMENT_RATE * delta;
+        if let Some(req) =
+            Self::allocation_delta_to_order(partial, total_value, btc_price, product_code, min_size)
+        {
+            return Some(req);
+        }
+        // Partial order is dust: fall back to one lot only when the full
+        // delta would itself have cleared the lot floor.
+        let mut full =
+            Self::allocation_delta_to_order(delta, total_value, btc_price, product_code, min_size)?;
+        full.size = min_size;
+        Some(full)
     }
 
     /// Convert a signed allocation delta into a market `OrderRequest`.
@@ -984,6 +1056,58 @@ mod tests {
 
     fn make_cfg() -> TradingConfig {
         TradingConfig::default()
+    }
+
+    // Regression tests for `partial_adjustment_order`
+    // (hypothesis `dev-weights-60m-partial-adjustment-half-lot-roundup`).
+
+    #[test]
+    fn partial_adjustment_order_trades_half_delta_when_above_lot() {
+        // total 10,000,000 JPY, price 10,000,000 JPY/BTC -> 1 BTC of value.
+        // delta +0.40 -> half = 0.20 -> 0.2 BTC (>= 0.001 lot), Buy.
+        let req = TradingEngine::partial_adjustment_order(
+            0.40, dec!(10000000), dec!(10000000), "BTC_JPY", dec!(0.001),
+        )
+        .expect("order expected");
+        assert_eq!(req.side, OrderSide::Buy);
+        assert_eq!(req.size, dec!(0.2));
+
+        // Sell side mirrors it: delta -0.30 -> half 0.15 -> 0.15 BTC.
+        let req = TradingEngine::partial_adjustment_order(
+            -0.30, dec!(10000000), dec!(10000000), "BTC_JPY", dec!(0.001),
+        )
+        .expect("order expected");
+        assert_eq!(req.side, OrderSide::Sell);
+        assert_eq!(req.size, dec!(0.15));
+    }
+
+    #[test]
+    fn partial_adjustment_order_rounds_up_to_lot_when_half_below_min_but_full_above() {
+        // total 50,000 JPY, price 10,000,000 -> 0.005 BTC of value.
+        // delta -0.30: full = 0.0015 BTC (>= 0.001), half (0.15) =
+        // 0.00075 BTC (< 0.001) -> round up to exactly one lot, Sell side.
+        let req = TradingEngine::partial_adjustment_order(
+            -0.30, dec!(50000), dec!(10000000), "BTC_JPY", dec!(0.001),
+        )
+        .expect("round-up order expected");
+        assert_eq!(req.side, OrderSide::Sell);
+        assert_eq!(req.size, dec!(0.001));
+        // Never more than the full-delta size.
+        let full = TradingEngine::allocation_delta_to_order(
+            -0.30, dec!(50000), dec!(10000000), "BTC_JPY", dec!(0.001),
+        )
+        .unwrap();
+        assert!(req.size <= full.size);
+    }
+
+    #[test]
+    fn partial_adjustment_order_none_when_full_delta_below_min() {
+        // total 50,000 JPY, price 10,000,000 -> delta 0.16 full = 0.0008 BTC
+        // (< 0.001) -> dust, no order even though the gate would pass.
+        assert!(TradingEngine::partial_adjustment_order(
+            0.16, dec!(50000), dec!(10000000), "BTC_JPY", dec!(0.001),
+        )
+        .is_none());
     }
 
     #[test]

@@ -248,7 +248,12 @@ impl Simulator {
                         let delta = target_pct - current_alloc;
 
                         if delta.abs() >= trading_config.allocation_threshold {
-                            let order_req = TradingEngine::allocation_delta_to_order(
+                            // Size the order to half the delta (rounded up
+                            // to one lot when only the full delta clears the
+                            // lot floor) via the same helper the live engine
+                            // uses (hypothesis
+                            // `dev-weights-60m-partial-adjustment-half-lot-roundup`).
+                            let order_req = TradingEngine::partial_adjustment_order(
                                 delta,
                                 total,
                                 mid,
@@ -927,17 +932,37 @@ mod tests {
             .await
             .unwrap();
 
-        // Zero fee/slippage in this fixture, so once the target is reached
-        // (immediately, since indicators are warm from the start of the
-        // evaluated window) the allocation stays effectively exactly 1.0 for
-        // every evaluated candle. The epsilon only absorbs the deliberate
-        // round-down-to-8dp in `allocation_delta_to_order`, far tighter than
-        // it would need to be to catch a real accounting bug.
+        // Zero fee/slippage in this fixture. Indicators are warm from the
+        // start of the evaluated window and rebalance_interval_secs = 60
+        // matches the 1m candles, so every evaluated candle runs a check.
+        // NOTE: hypothesis `dev-weights-60m-partial-adjustment-half-lot-roundup`
+        // sizes orders via `TradingEngine::partial_adjustment_order`, which
+        // trades half of each gate-passing delta toward the 1.0 target:
+        // 1. Candles 1-6: allocation halves the gap each time,
+        //    0.5, 0.75, 0.875, 0.9375, 0.96875, 0.984375.
+        // 2. Candle 7: delta = 0.015625 (>= 0.01 gate). Half of it,
+        //    0.0078125 * 1M / ~9M ~= 0.00087 BTC, is below the 0.001 BTC lot,
+        //    but the full delta (~0.0017 BTC) clears it, so the lot round-up
+        //    buys exactly 0.001 BTC (~9,000 JPY = 0.009 of equity) ->
+        //    allocation ~= 0.993375. The residual delta (~0.0066) is then
+        //    below the gate, so candle 8 does not trade.
+        // avg exposure = (0.5 + 0.75 + 0.875 + 0.9375 + 0.96875 + 0.984375
+        //                 + 2 * 0.993375) / 8 ~= 0.8753. The epsilon only
+        // absorbs the 8dp round-down and the mild price drift of the held
+        // BTC; full-to-target sizing (1.0) or a missing round-up (~0.8730)
+        // both fail it.
+        let halving: f64 = [0.5, 0.75, 0.875, 0.9375, 0.96875, 0.984375].iter().sum();
+        let expected = (halving + 2.0 * (0.984375 + 0.009)) / 8.0;
         assert!(
-            (report.avg_btc_exposure - 1.0).abs() < 1e-4,
-            "expected avg_btc_exposure ~= 1.0, got {}",
+            (report.avg_btc_exposure - expected).abs() < 1e-4,
+            "expected avg_btc_exposure ~= {}, got {}",
+            expected,
             report.avg_btc_exposure
         );
+        // Exactly seven buys: six half-delta orders and the one-lot round-up.
+        assert_eq!(report.total_trades, 7);
+        assert_eq!(report.buy_trades, 7);
+        assert_eq!(report.orders_below_min, 0);
     }
 
     /// Regression test for the most important benchmark defect: the

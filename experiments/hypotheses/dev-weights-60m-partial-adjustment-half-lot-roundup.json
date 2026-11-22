@@ -1,0 +1,44 @@
+{
+  "name": "dev-weights-60m-partial-adjustment-half-lot-roundup",
+  "kind": "algorithm",
+  "rationale": "Cost-side, literature-motivated (Garleanu & Pedersen 2013): trade partially toward the target rather than to it. Band-edge sizing trades |delta|-threshold, which is ~0 for deltas just over the gate and degenerates into one-lot top-ups at 50k; half-delta partial adjustment trades 0.5*delta, so every gate-passing rebalance is sizeable but still only half a round trip toward a target that frequently mean-reverts. Same dev weights and 60m spacing as dev-weights-60m-band-edge-lot-roundup, so the pair isolates the sizing rule.",
+  "trading_config": {
+    "allocation_threshold": 0.15,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 3600
+  },
+  "code_change_summary": "On dev (compute_btc_target unchanged), add TradingEngine::partial_adjustment_order(delta, total_value, btc_price, product_code, min_size) that sizes a gate-passing rebalance to 0.5 * delta (const PARTIAL_ADJUSTMENT_RATE: f64 = 0.5, documented) via allocation_delta_to_order, and if that is below the lot floor while the full delta is not, rounds it up to exactly min_size (same round-up rule as band_edge_order on commit 66a11ec). Switch handle_indicator, handle_rebalance and Simulator::run from allocation_delta_to_order to it, add unit tests for the helper (above-lot half order, round-up, dust None) and update the simulator avg_btc_exposure test with explained arithmetic.",
+  "constraints": [
+    "MUST NOT change TradingEngine::compute_btc_target at all (neither signature nor body): the dev sub-signal weights (REVERSION 1.0 / TREND 0.25) stay exactly as they are on dev. Do NOT cherry-pick 7aa88ce, 510ce0e or dd7a59a (the trend-only weight commits).",
+    "This touches the live rebalance path in src/trading/engine.rs (handle_indicator, handle_rebalance). The change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main -- and a promoted PR must flag explicitly that it changes live order sizing.",
+    "The sizing change alters only the size of an order that already passes the `delta.abs() >= allocation_threshold` gate; the gate itself and allocation_delta_to_order are unchanged. Live and backtest (Simulator::run) MUST use the same helper.",
+    "MUST pass `cargo test`; update expected values of tests whose behaviour legitimately changes (with a comment explaining the arithmetic), never weaken or delete a test just to make it pass.",
+    "A promoted change still becomes its own PR against dev and is never merged automatically.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or the auto-updater."
+  ],
+  "paper_reference": {
+    "title": "Dynamic Trading with Predictable Returns and Transaction Costs",
+    "authors": "Nicolae Garleanu, Lasse Heje Pedersen",
+    "venue_year": "Journal of Finance 68(6), 2013 (NBER w15205, 2009)",
+    "url": "https://www.nber.org/papers/w15205",
+    "key_claim": "With costly trading and predictable returns, the optimal policy aims in front of the target and trades only partially toward the current aim each period.",
+    "pros": "Shirube's measured problem is exactly cost dominating a weak but (dev weights, 2026-11-19) positive gross signal; partial adjustment is the canonical cost-aware execution rule and maps to one constant.",
+    "cons": "Derived under quadratic (market-impact) costs, whereas bitFlyer costs are proportional plus a lot floor, for which band-edge is the theoretical rule; evidence is on commodity futures at monthly horizon, not 1m BTC; the 0.5 rate is a heuristic, not the paper's cost-derived optimum."
+  }
+}

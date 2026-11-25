@@ -1,0 +1,35 @@
+{
+  "name": "dev-weights-15m-band-edge-lot-roundup",
+  "kind": "algorithm",
+  "rationale": "Cost-side, 2026-11-22 lead #2: intermediate between today's 1m-cadence variant and the 60m variant that kept only 2 trades at 50k. Same baseline threshold 0.10, rebalance_interval_secs 900 (96 evaluations/day vs 24 at 60m), band-edge + lot round-up sizing. Tests whether a 4x shorter spacing than 60m restores enough 50k turnover to pass MIN_TRADE_COUNT_RATIO while keeping most of the 500k cost saving.",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 900
+  },
+  "code_change_summary": "Port ONLY the order-sizing part of branch experiment/dev-weights-60m-band-edge-lot-roundup (commit fd61687) onto dev: add TradingEngine::band_edge_delta and TradingEngine::band_edge_order (band-edge sizing with lot round-up) and switch the three call-sites (handle_indicator, handle_rebalance, Simulator::run) from allocation_delta_to_order to band_edge_order, plus the matching simulator test update. Leave compute_btc_target and its weights exactly as on dev. Update doc-comment NOTEs to name this hypothesis.",
+  "constraints": [
+    "MUST NOT change TradingEngine::compute_btc_target at all (neither signature nor body): the dev sub-signal weights (REVERSION 1.0 / TREND 0.25) stay exactly as they are on dev. Do NOT cherry-pick 7aa88ce, 510ce0e or dd7a59a (the trend-only weight commits).",
+    "This touches the live rebalance path in src/trading/engine.rs (handle_indicator, handle_rebalance). The change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main -- and a promoted PR must flag explicitly that it changes live order sizing.",
+    "The sizing change alters only the size of an order that already passes the `delta.abs() >= allocation_threshold` gate; the gate itself and allocation_delta_to_order are unchanged. Live and backtest (Simulator::run) MUST use the same helper.",
+    "MUST pass `cargo test`; update expected values of tests whose behaviour legitimately changes (with a comment explaining the arithmetic), never weaken or delete a test just to make it pass.",
+    "A promoted change still becomes its own PR against dev and is never merged automatically.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or the auto-updater."
+  ]
+}

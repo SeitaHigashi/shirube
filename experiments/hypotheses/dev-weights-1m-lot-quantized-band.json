@@ -1,0 +1,44 @@
+{
+  "name": "dev-weights-1m-lot-quantized-band",
+  "kind": "algorithm",
+  "rationale": "Cost-side and literature-motivated (Martin & Schoeneborn, discrete lots + linear costs -> three-zone policy: no-trade zone flanked by zones where exactly one discrete lot is traded). 2026-11-22 found that at 50k the lot floor, not the config, decides almost everything: dev baseline logs ~6,830 orders_below_min per window, i.e. gate-passing signals that are refused because the full delta is under 0.001 BTC. This variant trades exactly one lot in those cases, but only when doing so lands inside the band (post-trade |target - alloc| < allocation_threshold), so a lot never overshoots into an immediate reversal. Baseline config otherwise unchanged (threshold 0.10, 60s).",
+  "trading_config": {
+    "allocation_threshold": 0.1,
+    "circuit_breaker_enabled": true,
+    "max_daily_drawdown": 0.05,
+    "sma_period": 200,
+    "ema_period": 100,
+    "rsi_period": 42,
+    "macd_fast": 52,
+    "macd_slow": 104,
+    "macd_signal": 18,
+    "bollinger_period": 60,
+    "bollinger_std": 2.0,
+    "ta_weight": 0.7,
+    "sentiment_weight": 0.3,
+    "zone": {
+      "range_max": 1.0,
+      "hold_jpy_below": 0.1,
+      "hold_btc_above": 0.9
+    },
+    "rebalance_interval_secs": 60
+  },
+  "code_change_summary": "Port ONLY the order-sizing part of branch experiment/dev-weights-60m-band-edge-lot-roundup (commit fd61687) onto dev: add TradingEngine::band_edge_delta and TradingEngine::band_edge_order (band-edge sizing with lot round-up) and switch the three call-sites (handle_indicator, handle_rebalance, Simulator::run) from allocation_delta_to_order to band_edge_order, plus the matching simulator test update. Leave compute_btc_target and its weights exactly as on dev. Update doc-comment NOTEs to name this hypothesis. ADDITIONALLY, in band_edge_order: when the full-delta order is dust (allocation_delta_to_order(delta, ...) returns None) but |delta| >= threshold, return an order of exactly min_size in delta's direction IF AND ONLY IF the post-trade allocation gap |delta - sign(delta) * min_size * btc_price / total_value| < threshold (the one-lot trade lands inside the no-trade band); otherwise return None as before. Add unit tests for the land-inside and overshoot-rejected cases.",
+  "constraints": [
+    "MUST NOT change TradingEngine::compute_btc_target at all (neither signature nor body): the dev sub-signal weights (REVERSION 1.0 / TREND 0.25) stay exactly as they are on dev. Do NOT cherry-pick 7aa88ce, 510ce0e or dd7a59a (the trend-only weight commits).",
+    "This touches the live rebalance path in src/trading/engine.rs (handle_indicator, handle_rebalance). The change MUST be made only on this hypothesis's own dedicated isolation: \"worktree\" branch -- never as a direct commit to dev/main -- and a promoted PR must flag explicitly that it changes live order sizing.",
+    "The sizing change alters only the size of an order that already passes the `delta.abs() >= allocation_threshold` gate; the gate itself and allocation_delta_to_order are unchanged. Live and backtest (Simulator::run) MUST use the same helper.",
+    "MUST pass `cargo test`; update expected values of tests whose behaviour legitimately changes (with a comment explaining the arithmetic), never weaken or delete a test just to make it pass.",
+    "A promoted change still becomes its own PR against dev and is never merged automatically.",
+    "MUST NOT touch src/exchange/bitflyer/*, .github/workflows/*, or the auto-updater."
+  ],
+  "paper_reference": {
+    "title": "arXiv:1103.4934 — linear costs with discrete lot trading (title not verified this run; abstract-level summary only)",
+    "authors": "Richard Martin, Torsten Schöneborn (as attributed in the search summary)",
+    "venue_year": "arXiv:1103.4934, 2011",
+    "url": "https://www.arxiv.org/pdf/1103.4934",
+    "key_claim": "With linear costs and trades restricted to discrete lots, the optimal policy is a central no-trade zone flanked by zones in which one discrete lot is traded, with the buffer width scaling with the cube root of the cost of trading one lot.",
+    "pros": "Shirube at 50k is exactly a discrete-lot problem (one 0.001 BTC lot is ~22-27% of the account), and the current rule simply refuses sub-lot rebalances (~6.8k refusals per window) instead of trading the lot.",
+    "cons": "Model is a continuous-time diffusion with a known target, not a noisy TA composite; no empirical BTC evidence; the cube-root band width is not derived for shirube's fee+slippage, so the 0.10 baseline band is reused rather than the paper's optimum; only the abstract/summary was reviewed."
+  }
+}

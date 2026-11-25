@@ -248,8 +248,13 @@ impl Simulator {
                         let delta = target_pct - current_alloc;
 
                         if delta.abs() >= trading_config.allocation_threshold {
-                            let order_req = TradingEngine::allocation_delta_to_order(
+                            // Size the order to the band edge (rounded up to
+                            // one lot when only the full delta clears the lot
+                            // floor) via the same helper the live engine uses
+                            // (hypothesis `dev-weights-1m-band-edge-lot-roundup`).
+                            let order_req = TradingEngine::band_edge_order(
                                 delta,
+                                trading_config.allocation_threshold,
                                 total,
                                 mid,
                                 &self.config.product_code,
@@ -921,23 +926,42 @@ mod tests {
             warmup_candles: 4,
         };
 
+        let threshold = trading_config.allocation_threshold;
         let db = crate::storage::db::Database::open_in_memory().await.unwrap();
         let report = Simulator::new(cfg, db)
             .run(candles, trading_config)
             .await
             .unwrap();
 
-        // Zero fee/slippage in this fixture, so once the target is reached
-        // (immediately, since indicators are warm from the start of the
-        // evaluated window) the allocation stays effectively exactly 1.0 for
-        // every evaluated candle. The epsilon only absorbs the deliberate
-        // round-down-to-8dp in `allocation_delta_to_order`, far tighter than
-        // it would need to be to catch a real accounting bug.
+        // Zero fee/slippage in this fixture. Indicators are warm from the
+        // start of the evaluated window, so the first rebalance fires at
+        // once.
+        // NOTE: hypothesis `dev-weights-1m-band-edge-lot-roundup`
+        // sizes orders via `TradingEngine::band_edge_order`:
+        // 1. The rebalance from 0.0 trades only to the band edge,
+        //    target - threshold = 0.99 (0.11 BTC at ~9M JPY/BTC of 1M JPY).
+        // 2. The residual delta is then ~= threshold (0.01), which still passes
+        //    the `delta >= threshold` gate on a later candle; its band-edge
+        //    size is ~0 (below the 0.001 BTC lot) but the full delta,
+        //    0.01 * 1M / 9M ~= 0.0011 BTC, clears the lot, so the lot
+        //    round-up buys exactly 0.001 BTC (~9,000 JPY), leaving ~1,000 JPY
+        //    of cash -> allocation ~= 0.999, below the gate thereafter.
+        // In this fixture the round-up fires on the third evaluated candle,
+        // so avg exposure = (2 * 0.99 + 6 * 0.999) / 8 = 0.99675. The epsilon
+        // only absorbs the 8dp round-down and the mild price drift of the
+        // held BTC; a full-to-target order (1.0), pure band-edge sizing
+        // without round-up (0.99) or a missing round-up all fail it.
+        let expected = (2.0 * (1.0 - threshold) + 6.0 * 0.999) / 8.0;
         assert!(
-            (report.avg_btc_exposure - 1.0).abs() < 1e-4,
-            "expected avg_btc_exposure ~= 1.0, got {}",
+            (report.avg_btc_exposure - expected).abs() < 1e-4,
+            "expected avg_btc_exposure ~= {}, got {}",
+            expected,
             report.avg_btc_exposure
         );
+        // Exactly two buys: the band-edge order and the one-lot round-up.
+        assert_eq!(report.total_trades, 2);
+        assert_eq!(report.buy_trades, 2);
+        assert_eq!(report.orders_below_min, 0);
     }
 
     /// Regression test for the most important benchmark defect: the

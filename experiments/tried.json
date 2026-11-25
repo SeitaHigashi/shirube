@@ -1248,5 +1248,35 @@
     "sharpe_absolute_delta": 4.358,
     "note": "Garleanu & Pedersen 2013. 50k: 8 vs 118 trades (0.07, fails); Sharpe -10.00 (+4.36), DD -5.40pp; 51 below-min. 500k -11.42% with 40 trades, zero-cost excess -0.55pp. Branch experiment/dev-weights-60m-partial-adjustment-half-lot-roundup (3aaa8db) pushed (live order sizing; compute_btc_target untouched).",
     "report_path": "experiments/reports/2026-11-22.md"
+  },
+  {
+    "name": "dev-weights-1m-band-edge-lot-roundup",
+    "content_hash": "5cfdc6dcd1537bf7c5c184a7b5df11ac98afe9c20bd7dfe633b62e2a1d7f59b5",
+    "tried_at": "2026-11-25T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 5.17073996882306,
+    "note": "Baseline config (thr 0.10, 60s). 50k: 13 vs 134 trades (0.10, fails); Sharpe -9.41 (+5.17), DD -3.84pp; 4876 below-min. 500k -15.75% (base -24.27) with 1166 trades, fees 13.3k vs 28.4k. Branch experiment/dev-weights-1m-band-edge-lot-roundup (58139d7) pushed (live order sizing; compute_btc_target untouched).",
+    "report_path": "experiments/reports/2026-11-25.md"
+  },
+  {
+    "name": "dev-weights-15m-band-edge-lot-roundup",
+    "content_hash": "0f4e561f65c11227775b0b4818d2a36a39481601be9fc40b0a5d26e226f6f13a",
+    "tried_at": "2026-11-25T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": 5.537586875937787,
+    "note": "thr 0.10, 900s spacing. 50k: 3 vs 134 trades (0.02, fails); Sharpe -9.04 (+5.54), DD -4.24pp; 343 below-min. 500k -12.94% (base -24.27) with 304 trades, fees 6.4k vs 28.4k. Branch experiment/dev-weights-15m-band-edge-lot-roundup (fcd880d) pushed (live order sizing; compute_btc_target untouched).",
+    "report_path": "experiments/reports/2026-11-25.md"
+  },
+  {
+    "name": "dev-weights-1m-lot-quantized-band",
+    "content_hash": "ac5d658849ac0facd53080ca87b6eeb45521dce1eb5d88f6338dd7be4f83f069",
+    "tried_at": "2026-11-25T19:00:00Z",
+    "verdict": "rejected",
+    "sharpe_improvement_pct": null,
+    "sharpe_absolute_delta": -18.22300871149569,
+    "note": "Martin & Schoeneborn arXiv:1103.4934. 50k: 618 trades (606 one-lot dust trades), Sharpe -32.80 (-18.22), DD +17.08pp, fee drag 13.2%, return -35.07%. Rule never fires at 500k/5M (results equal the 1m band-edge variant). Branch deleted.",
+    "report_path": "experiments/reports/2026-11-25.md"
   }
 ]
